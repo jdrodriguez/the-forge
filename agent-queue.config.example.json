@@ -153,6 +153,8 @@
     "modelNote": "The model every queue worker runs (fleet.sh dispatch --model).",
     "effort": "high",
     "effortNote": "The reasoning effort every queue worker runs at (low, medium, high, xhigh, max).",
+    "permissionMode": null,
+    "permissionModeNote": "The Claude Code permission mode for queue workers and the red-main responder (fleet.sh dispatch --mode). null keeps fleet.sh's default, bypassPermissions: workers run unattended, and one that stops at a permission prompt has stalled. In that mode a worker can run any command your user can, so run the queue under a user and on a machine where that is acceptable. A stricter mode (auto, acceptEdits) trades that for workers that may stop and wait.",
     "notify": true,
     "notifyNote": "macOS notifications per transition. Linux hosts rely on Slack.",
     "queueSizes": ["S", "M", "L"],

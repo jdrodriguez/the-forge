@@ -86,6 +86,19 @@ test('the hook stays off while sentryTriage.enabled is false, and on any host bu
   assert.ok(fs.existsSync(path.join(other.home, 'dispatched')));
 });
 
+test('dispatcher.permissionMode reaches fleet.sh dispatch as --mode, and unset passes no --mode', () => {
+  const logArgs = FLEET.replace('dispatch) touch', 'dispatch) printf \'%s\\n\' "$@" > "$HOME/dispatch-args"; touch');
+  for (const [mode, want] of [[null, null], ['acceptEdits', 'acceptEdits']]) {
+    const box = makeBox('dispatcher-mode', { preload: PRELOAD, fleet: logArgs,
+      dispatcher: { enabledHosts: ['host-a'], hosts: { 'host-a': HOST }, permissionMode: mode } });
+    const r = runIn(box, ['tick']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const args = fs.readFileSync(path.join(box.home, 'dispatch-args'), 'utf8').split('\n');
+    const at = args.indexOf('--mode');
+    assert.equal(at < 0 ? null : args[at + 1], want);
+  }
+});
+
 test('the real dispatcher scripts and the config loader parse', () => {
   execFileSync(process.execPath, ['--check', SRC]);
   for (const f of ['dispatcher/premerge-check.mjs', 'dispatcher/main-watch.mjs', 'dispatcher/gated-push.mjs', 'lib/config.mjs', 'inbox/merged-to-verifying.mjs']) {

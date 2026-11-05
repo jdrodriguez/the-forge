@@ -104,6 +104,7 @@ Copy this file to agent-queue.config.json (gitignored) and fill it in. Keys endi
 | `dispatcher.flakeWaitMinutes` | `90` | How long a failure on a merge commit waits for a later main commit to pass the same workflow before it pauses the queue. |
 | `dispatcher.model` | `"opus"` | The model every queue worker runs (fleet.sh dispatch --model). |
 | `dispatcher.effort` | `"high"` | The reasoning effort every queue worker runs at (low, medium, high, xhigh, max). |
+| `dispatcher.permissionMode` | `null` | The Claude Code permission mode for queue workers and the red-main responder (fleet.sh dispatch --mode). null keeps fleet.sh's default, bypassPermissions: workers run unattended, and one that stops at a permission prompt has stalled. In that mode a worker can run any command your user can, so run the queue under a user and on a machine where that is acceptable. A stricter mode (auto, acceptEdits) trades that for workers that may stop and wait. |
 | `dispatcher.notify` | `true` | macOS notifications per transition. Linux hosts rely on Slack. |
 | `dispatcher.queueSizes` | `["S","M","L"]` | Size labels the queue takes. A ready ticket with another size is sent back. |
 | `dispatcher.riskyPathPatterns` | `["^migrations/","^\\.github/","^\\.husky/","dockerfile","auth","ses...` | Matched case-insensitively against every changed path and rename source. A green PR touching one goes to the orchestrator session for review and merge (shared merge-requests/). |

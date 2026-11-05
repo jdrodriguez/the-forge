@@ -59,6 +59,9 @@ const WORKTREES = path.join(conf.repoPath ?? '', conf.worktreesDir ?? '.claude/w
 const ORCH = conf.orchestrator?.sessionName ?? 'Specdesk';
 const REPO_NAME = REPO.split('/')[1];
 const GATED_PUSH = `node ${path.join(DIR, 'gated-push.mjs')}`;
+// Workers run unattended, and one that stops at a permission prompt has stalled, so fleet.sh's default mode is
+// bypassPermissions. dispatcher.permissionMode overrides it for every worker this dispatcher starts.
+const MODE_ARGS = cfg.permissionMode ? ['--mode', cfg.permissionMode] : [];
 const branchFor = (id) => (conf.github.branchTemplate ?? 'agent/{id}').replaceAll('{id}', id.toLowerCase());
 const DRY = process.argv.includes('--dry-run');
 // `tick --dry-run --bundle` shows what bundling would do while the config still has it off.
@@ -1544,7 +1547,7 @@ async function dispatch(st, m) {
       }
       out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
         '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
-        '--no-report', '--', brief(members, branch)],
+        ...MODE_ARGS, '--no-report', '--', brief(members, branch)],
       { timeout: 180_000 }));
     } catch (e) {
       log(`${id}: claim or dispatch failed, reconciling (${errText(e)})`);
@@ -1579,7 +1582,7 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   const note = `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
     '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
-    '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+    ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
   const wasStuck = t.status === 'stuck';
   // lastOutputAt too: the spin check measures a busy worker's quiet time from it, and the old worker's last commit
   // made every replacement read as stalled on its first tick.

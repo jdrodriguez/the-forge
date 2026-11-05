@@ -171,7 +171,8 @@ async function dispatchResponder(main, diag, state) {
     return null;
   }
   const out = JSON.parse(sh(FLEET, ['dispatch', label, '--cwd', conf.workspaceCwd, '--model', W.model ?? 'opus',
-    '--name', `main-red-${main.first.headSha.slice(0, 8)}-${(state.responders?.length ?? 0) + 1}`, '--max-workers', String(W.maxWorkers ?? 12), '--no-report', '--',
+    '--name', `main-red-${main.first.headSha.slice(0, 8)}-${(state.responders?.length ?? 0) + 1}`, '--max-workers', String(W.maxWorkers ?? 12),
+    ...(conf.dispatcher?.permissionMode ? ['--mode', conf.dispatcher.permissionMode] : []), '--no-report', '--',
     brief(main, diag)], { timeout: 180_000 }));
   log(`dispatched responder ${out.label}/${out.id}`);
   return { label: out.label, id: out.id, name: out.name, at: iso() };

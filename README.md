@@ -127,6 +127,7 @@ That runs the fleet's test suite against a stub `claude`.
 ## Safety
 
 - The dispatcher never writes code. A pause is a file the dispatcher re-reads before every merge and dispatch. Two stuck tickets in a row, or a real failure on main after a merge, pause it on their own.
+- Workers run with Claude Code's `bypassPermissions` mode by default (`fleet.sh dispatch`), because they run unattended and a worker that stops at a permission prompt has stalled. In that mode a worker can run any command your user account can, and read any file it can. Run the queue under a user and on a machine where that is acceptable, keep tokens in a secrets manager or keychain where you can, and use the main-checkout guard hook (`fleet/hooks/`). `dispatcher.permissionMode` sets a stricter mode for every queue worker, at the cost of workers that may stop and wait.
 - Workers push and open PRs; only the dispatcher or the orchestrator merges. Merging deploys staging at most: production stays a step a human starts.
 - Keep tokens in the state folder or a secrets manager. The config holds IDs and names, never secrets.
 
