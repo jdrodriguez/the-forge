@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Agent Queue Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout, after Linear: a sidebar of four views beside an inset main panel. The Inbox view has the human's unread Linear
+   notifications (inbox.js); the Queue view has the worker slots over the list groups (needs you, building, ready,
+   merged); the Machines view has a card per machine plus Codex and Grok; the Worktrees view lists every machine's git
+   worktrees and their state (worktrees.js).
+   Below 900px the sidebar becomes a tab strip and the panel fills the page. */
+:root {
+  --frame: #f4f5f7; --panel: #ffffff; --raised: #ffffff; --group: #f7f7f9; --sunk: #f0f1f3; --hover: rgb(0 0 0 / 0.028); --active: rgb(0 0 0 / 0.055);
+  --line: #e9eaed; --line-2: #dddfe3; --ink: #1d1e22; --ink-2: #5d6169; --ink-3: #8f939b;
+  --accent: #5e6ad2; --accent-ink: #4f5bc7; --tint: rgb(94 106 210 / 0.08);
+  --ok: #26a46b; --run: #d39e00; --warn: #e2700f; --bad: #e0453a; --merged: #8366ee;
+  --bad-tint: rgb(224 69 58 / 0.07);
+  --m1: #8b7cf6; --m2: #13a59d; --m3: #df5f9a;
+  --shadow: 0 1px 2px rgb(16 18 24 / 0.05);
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --frame: #08090a; --panel: #0f1012; --raised: #151619; --group: #141518; --sunk: #1b1c20; --hover: rgb(255 255 255 / 0.03); --active: rgb(255 255 255 / 0.065);
+  --line: #1f2024; --line-2: #2c2d32; --ink: #e9eaec; --ink-2: #9a9ea7; --ink-3: #666a73;
+  --accent: #5e6ad2; --accent-ink: #939cf6; --tint: rgb(94 106 210 / 0.14);
+  --ok: #4cb782; --run: #f2c94c; --warn: #f2994a; --bad: #eb5757; --merged: #a48bff;
+  --bad-tint: rgb(235 87 87 / 0.09);
+  --m1: #a093ff; --m2: #3cc4b6; --m3: #f07bb3; --shadow: none; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --frame: #08090a; --panel: #0f1012; --raised: #151619; --group: #141518; --sunk: #1b1c20; --hover: rgb(255 255 255 / 0.03); --active: rgb(255 255 255 / 0.065);
+  --line: #1f2024; --line-2: #2c2d32; --ink: #e9eaec; --ink-2: #9a9ea7; --ink-3: #666a73;
+  --accent: #5e6ad2; --accent-ink: #939cf6; --tint: rgb(94 106 210 / 0.14);
+  --ok: #4cb782; --run: #f2c94c; --warn: #f2994a; --bad: #eb5757; --merged: #a48bff;
+  --bad-tint: rgb(235 87 87 / 0.09);
+  --m1: #a093ff; --m2: #3cc4b6; --m3: #f07bb3; --shadow: none; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--frame); color: var(--ink); font: 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; font-feature-settings: "cv11"; font-variant-numeric: tabular-nums; }
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.mono, code { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--ink-3); }
+
+/* Shell */
+.app { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100dvh; }
+.side { position: sticky; top: 0; height: 100dvh; overflow-y: auto; padding: 12px 10px; }
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.ws { display: flex; align-items: center; gap: 9px; padding: 4px 8px 14px; font-weight: 600; font-size: 13.5px; }
+.logo { width: 20px; height: 20px; border-radius: 5px; background: linear-gradient(135deg, #7a84f0, #5e6ad2 55%, #4a54b8); color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 600; flex: none; }
+.nav-item { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: 6px; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.nav-item:hover { background: var(--hover); color: var(--ink); text-decoration: none; }
+.nav-item .nav-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-item .count { font-size: 12px; color: var(--ink-3); font-weight: 400; }
+.nav-item .count.hot { color: #fff; background: var(--bad); border-radius: 999px; padding: 0 6px; font-weight: 500; line-height: 18px; }
+.nav-item.active { background: var(--active); color: var(--ink); }
+.nav-item.nav-sub { margin-left: 14px; }
+.nav-item.view + .nav-item.nav-sub { margin-top: 2px; }
+.nav-item.nav-sub + .nav-item.view { margin-top: 12px; }
+.nav-item .mdot { margin: 0 3px; }
+main.main { margin: 8px 8px 8px 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; height: calc(100dvh - 16px); overflow-y: auto; box-shadow: var(--shadow); }
+
+/* Header */
+header.bar { position: sticky; top: 0; z-index: 4; height: 46px; display: flex; align-items: center; gap: 14px; padding: 0 20px 0 24px; background: var(--panel); border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
+h1 { font-size: 13.5px; font-weight: 600; margin: 0; white-space: nowrap; }
+.stats { display: flex; gap: 6px; min-width: 0; overflow: hidden; }
+.stat { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 6px; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.stat b { color: var(--ink); font-weight: 500; }
+.fresh { margin-left: auto; color: var(--ink-3); font-size: 12px; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); display: inline-block; flex: none; }
+.fresh.live .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+.fresh.busy .dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+.fresh.stale .dot { background: var(--bad); }
+@keyframes pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .fresh.busy .dot { animation: none; } }
+.banner { margin: 14px 24px 0; padding: 10px 12px; border-radius: 8px; background: var(--bad-tint); color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 25%, transparent); }
+
+/* Glyphs */
+.ico { width: 14px; height: 14px; flex: none; display: inline-grid; place-items: center; color: var(--ink-2); }
+.ico svg, svg.ic { width: 14px; height: 14px; display: block; }
+.ico.run { color: var(--run); } .ico.ok { color: var(--ok); } .ico.warn { color: var(--warn); } .ico.bad { color: var(--bad); }
+.ico.free { color: var(--ink-3); } .ico.merged { color: var(--merged); } .ico.todo { color: var(--ink-2); }
+.ic .cut { stroke: var(--panel); } .ic .cutf { fill: var(--panel); }
+.mdot { width: 8px; height: 8px; border-radius: 50%; background: var(--mc); flex: none; display: inline-block; }
+
+/* Worker slots */
+.slots { padding: 16px 24px 18px; border-bottom: 1px solid var(--line); }
+.bays { display: grid; grid-template-columns: repeat(var(--n, 8), minmax(0, 1fr)); gap: 8px; }
+.bay-group-label { grid-row: 1; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 7px; font-weight: 500; padding-bottom: 1px; }
+.bay { grid-row: 2; display: flex; flex-direction: column; gap: 5px; min-width: 0; min-height: 88px; padding: 10px 11px 9px; background: var(--raised); border: 1px solid var(--line-2); border-radius: 8px; color: var(--ink); box-shadow: var(--shadow); scroll-margin-top: 60px; transition: border-color .12s, background-color .12s; }
+.bay:hover { text-decoration: none; color: var(--ink); border-color: color-mix(in srgb, var(--mc) 55%, var(--line-2)); }
+.bay .id { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 500; color: var(--ink-2); white-space: nowrap; overflow: hidden; }
+.bay .id .ids { white-space: normal; line-height: 1.3; min-width: 0; }
+.bay .id .ico { margin-top: 1px; }
+.bay .what { font-size: 12.5px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.bay .when { font-size: 11.5px; color: var(--ink-3); margin-top: auto; }
+.bay.free { background: transparent; border-style: dashed; box-shadow: none; color: var(--ink-3); flex-direction: row; justify-content: center; align-items: center; gap: 7px; font-size: 12px; }
+.bay .stag svg.ic { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; }
+.bay.free.sentry.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line-2)); }
+
+/* Groups */
+.lists { min-width: 0; }
+.group { scroll-margin-top: 46px; }
+h2.gh { position: sticky; top: 46px; z-index: 2; display: flex; align-items: center; gap: 9px; height: 38px; margin: 0; padding: 0 24px; background: var(--group); border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 500; }
+h2.gh .gcount { color: var(--ink-3); font-weight: 400; }
+.group + .group h2.gh { border-top: 1px solid var(--line); }
+.empty { padding: 14px 24px; color: var(--ink-3); }
+
+/* Rows */
+.row { display: flex; gap: 12px; padding: 11px 24px; border-bottom: 1px solid var(--line); min-width: 0; }
+.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--hover); }
+.row > .ico { margin-top: 3px; }
+.rbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.rline { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rid { color: var(--ink-3); font-weight: 500; white-space: nowrap; flex: none; }
+.rid a:hover { color: var(--ink-2); }
+.rtitle { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rmeta { display: flex; align-items: center; gap: 10px; flex: none; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.rtext { color: var(--ink-2); overflow-wrap: anywhere; }
+.rtext a, .rsub a { color: var(--accent-ink); }
+.rsub { color: var(--ink-3); font-size: 12.5px; overflow-wrap: anywhere; }
+.build { scroll-margin-top: 90px; }
+.build .rtitle { white-space: normal; }
+.build:target { background: var(--tint); box-shadow: inset 2px 0 0 var(--accent); }
+.li { align-items: center; padding-block: 0; height: 40px; }
+.li > .ico { margin-top: 0; }
+.li .rtitle { font-weight: 400; }
+.mini-host { display: inline-flex; align-items: center; gap: 6px; }
+.more-row { padding: 10px 24px; color: var(--ink-3); font-size: 12.5px; display: flex; align-items: center; gap: 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 3px 18px; margin: 0; font-size: 12px; }
+.facts div { display: flex; gap: 6px; min-width: 0; }
+.facts dt { color: var(--ink-3); }
+.facts dd { margin: 0; color: var(--ink-2); }
+.fails { font-size: 12px; color: var(--bad); overflow-wrap: anywhere; }
+.note { font-size: 12px; color: var(--ink-3); }
+
+/* Labels */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; height: 22px; line-height: 20px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--ink-2); background: transparent; }
+.chip::before { content: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--c); margin-right: 6px; vertical-align: 1px; }
+.chip.ok::before, .chip.warn::before, .chip.bad::before, .chip.run::before, .chip.host::before { content: ""; }
+.chip.ok { --c: var(--ok); } .chip.warn { --c: var(--warn); } .chip.bad { --c: var(--bad); } .chip.run { --c: var(--run); } .chip.host { --c: var(--mc); }
+.chip.engine { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--tint); }
+.chip.sentry { color: var(--ink); }
+a.chip:hover { text-decoration: none; color: var(--ink); border-color: var(--ink-3); }
+.chip svg.ic { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 5px; }
+
+/* Buttons */
+.open-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+button.open, .show-all { font: 500 12px/1 var(--sans); height: 28px; padding: 0 11px; border: 1px solid var(--line-2); background: var(--raised); color: var(--ink); border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: var(--shadow); }
+button.open:hover, .show-all:hover { background: var(--sunk); }
+button.open:disabled { opacity: .55; cursor: default; }
+button.open.primary { background: var(--accent); border-color: transparent; color: #fff; }
+button.open.primary:hover { background: color-mix(in srgb, var(--accent) 86%, #fff); }
+.open-row .msg { font-size: 12px; color: var(--ink-3); }
+details > summary { cursor: pointer; color: var(--ink-3); font-size: 12px; width: fit-content; list-style: none; display: inline-flex; align-items: center; gap: 5px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: ""; width: 5px; height: 5px; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform .12s; margin-right: 2px; }
+details[open] > summary::before { transform: rotate(45deg); }
+details > summary:hover { color: var(--ink-2); }
+code.cmd { display: block; overflow-x: auto; white-space: nowrap; margin-top: 6px; padding: 7px 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; color: var(--ink-2); user-select: all; -webkit-user-select: all; }
+pre.log { margin: 8px 0 0; max-height: 280px; overflow: auto; padding: 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 11.5px/1.55 var(--mono); color: var(--ink-2); white-space: pre; }
+
+/* Machines */
+.mview { padding: 20px 24px 28px; }
+.machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: 16px; align-items: start; }
+.mcard { background: var(--raised); border: 1px solid var(--line-2); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; box-shadow: var(--shadow); scroll-margin-top: 60px; }
+.mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; }
+.mname { font-weight: 600; }
+.mmeta { color: var(--ink-3); font-size: 12px; flex-basis: 100%; }
+.meters { display: flex; flex-direction: column; gap: 9px; }
+.meter { display: grid; grid-template-columns: 116px minmax(0, 1fr) auto; align-items: center; gap: 12px; font-size: 12px; color: var(--ink-3); }
+.meter b { color: var(--ink); font-weight: 500; text-align: right; white-space: nowrap; }
+.meter b span { color: var(--ink-3); font-weight: 400; }
+.bar { position: relative; height: 4px; background: var(--sunk); border-radius: 2px; }
+.bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+.bar i.ok { background: var(--ok); } .bar i.warn { background: var(--warn); } .bar i.bad { background: var(--bad); }
+.bar s { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink-2); text-decoration: none; }
+table.accts { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+table.accts th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 11.5px; padding: 0 8px 6px 0; border-bottom: 1px solid var(--line); }
+table.accts th.u { width: 76px; } table.accts th.r { width: 46px; }
+table.accts td { padding: 8px 8px 8px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+table.accts tr:last-child td { border-bottom: 0; padding-bottom: 0; }
+table.accts td.who { overflow-wrap: break-word; line-height: 1.35; color: var(--ink); }
+.sub { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; line-height: 1.35; }
+.use { display: flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 500; }
+.ring { width: 14px; height: 14px; flex: none; }
+.ring circle { fill: none; stroke-width: 2.2; }
+.ring .track { stroke: var(--line-2); }
+.ring .fill { stroke: var(--c, var(--accent)); }
+.ring.ok { --c: var(--ok); } .ring.warn { --c: var(--warn); } .ring.bad { --c: var(--bad); }
+
+.mnote { font-size: 12px; color: var(--warn); }
+.mwt { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-3); }
+.mwt b { color: var(--ink); font-weight: 500; white-space: nowrap; }
+.mwt .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.mwt:hover { text-decoration: none; color: var(--ink-2); }
+
+/* Worktrees (worktrees.js) */
+.wt-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 24px; border-bottom: 1px solid var(--line); }
+.wt-sum .muted { font-size: 12px; margin-left: auto; }
+.wt { padding-block: 9px; }
+.wt .rbody { gap: 5px; }
+.wt .rid { max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.wt .rtitle { font-weight: 400; }
+
+/* Inbox (inbox.js) */
+.ibar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 24px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 12px; }
+.ibar b { color: var(--ink); font-weight: 500; }
+.ibar a { margin-left: auto; color: var(--accent-ink); }
+.avatar { width: 20px; height: 20px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--av); color: #fff; font-size: 9px; font-weight: 600; letter-spacing: .02em; }
+.row > .avatar { margin-top: 1px; }
+.inb a.rtitle:hover { color: var(--ink); }
+.rsub.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.inb-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inb-actions .btn { font: 500 11.5px/1 var(--sans); height: 24px; padding: 0 9px; border: 1px solid var(--line-2); background: transparent; color: var(--ink-2); border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; }
+.inb-actions .btn:hover { background: var(--sunk); color: var(--ink); text-decoration: none; }
+.inb .rtext { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.inb-actions .msg { font-size: 12px; color: var(--ink-3); }
+.more-row a { color: var(--accent-ink); }
+
+/* Session panel (session.js): a sheet on the right, the full screen on a phone */
+dialog.sess { margin: 0 0 0 auto; padding: 0; border: 0; border-left: 1px solid var(--line-2); width: min(720px, 100vw); max-width: 100vw;
+  height: 100dvh; max-height: 100dvh; background: var(--panel); color: var(--ink); box-shadow: -12px 0 32px rgb(0 0 0 / 0.18); }
+dialog.sess[open] { display: flex; flex-direction: column; }
+dialog.sess::backdrop { background: rgb(0 0 0 / 0.32); }
+.sess-head { padding: 14px 20px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.sess-top { display: flex; gap: 10px; align-items: flex-start; }
+.sess-top h3 { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 1.4; flex: 1; min-width: 0; }
+.sess-top h3 .mono { font: 500 13px var(--sans); color: var(--ink-3); margin-right: 4px; }
+.sess-x { width: 28px; height: 28px; display: grid; place-items: center; border: 0; background: transparent; color: var(--ink-3); border-radius: 6px; cursor: pointer; flex: none; }
+.sess-x:hover { background: var(--hover); color: var(--ink); }
+.sess-x svg { width: 14px; height: 14px; }
+.sess-feed { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; overscroll-behavior: contain; }
+.sess-feed .more { align-self: center; }
+.ev { min-width: 0; }
+.ev-line { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--ink-3); }
+.ev-line time { margin-left: auto; white-space: nowrap; }
+.ev .who { font-weight: 500; color: var(--ink-2); font-size: 12px; }
+.ev .txt { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; padding: 10px 12px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line-2);
+  max-height: 16.5em; overflow: hidden; box-shadow: var(--shadow); }
+.ev .txt.clamped { cursor: pointer; -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
+.ev .txt.open { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.ev .txt code { font-size: 12px; background: var(--sunk); padding: 1px 4px; border-radius: 4px; }
+.ev.user .txt { background: var(--tint); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.ev.error .txt { background: var(--bad-tint); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 25%, transparent); font: 12px/1.5 var(--mono); }
+.ev.system .txt { color: var(--ink-2); background: var(--group); font-size: 12.5px; }
+.ev.tool { padding-left: 12px; margin-left: 5px; border-left: 1px solid var(--line-2); }
+.ev.tool .ev-line { color: var(--ink-2); font-size: 12.5px; }
+.ev.tool .tn { font: 500 11.5px var(--mono); color: var(--accent-ink); white-space: nowrap; }
+.ev.tool .tl { min-width: 0; overflow-wrap: anywhere; }
+.ev.tool .det { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 11.5px; color: var(--ink-3); margin-top: 3px; cursor: pointer; }
+.ev.tool .det.open { display: block; }
+.sess-send { padding: 12px 20px calc(14px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); }
+.sess-send[hidden] { display: none; }
+.composer { border: 1px solid var(--line-2); border-radius: 10px; background: var(--raised); box-shadow: var(--shadow); transition: border-color .12s; }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, var(--line-2)); }
+.composer textarea { display: block; font: 13.5px/1.5 var(--sans); width: 100%; resize: vertical; min-height: 64px; padding: 10px 12px 4px; border: 0; background: transparent; color: var(--ink); }
+.composer textarea:focus-visible { outline: none; }
+.sess-row { display: flex; gap: 10px; align-items: center; padding: 6px 8px 8px 12px; }
+.sess-status { flex: 1; font-size: 12px; color: var(--ink-3); }
+
+/* Narrower screens */
+@media (max-width: 1199px) {
+  .bays { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .bay-group-label, .bay { grid-row: auto; }
+}
+@media (max-width: 899px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .nav { flex-direction: row; align-items: center; gap: 4px; }
+  .side { position: sticky; top: 0; z-index: 6; height: auto; padding: 8px 12px; overflow-x: auto; scrollbar-width: none;
+    background: color-mix(in srgb, var(--frame) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .side::-webkit-scrollbar { display: none; }
+  .ws, .nav-item.desk { display: none; }
+  .nav-item { height: 30px; flex: none; }
+  .nav-item.nav-sub { margin-left: 0; }
+  .nav-item.nav-sub + .nav-item.view { margin-top: 0; }
+  main.main { margin: 0; border: 0; border-radius: 0; height: auto; overflow: visible; box-shadow: none; }
+  header.bar { position: static; height: auto; flex-wrap: wrap; padding: 14px 16px 12px; border-radius: 0; gap: 8px 12px; }
+  .stats { flex-wrap: wrap; overflow: visible; order: 3; flex-basis: 100%; }
+  .fresh { margin-left: auto; }
+  h2.gh { position: static; padding: 0 16px; }
+  .group, .mcard, .build, .bay { scroll-margin-top: 54px; }
+  .slots { padding: 14px 16px 16px; }
+  .row { padding-inline: 16px; }
+  .more-row, .empty { padding-inline: 16px; }
+  .mview { padding: 16px 16px 24px; }
+  .banner { margin-inline: 16px; }
+  .ibar, .wt-sum { padding-inline: 16px; }
+}
+@media (max-width: 600px) {
+  .rline { flex-wrap: wrap; row-gap: 4px; }
+  .need .rtitle, .inb .rtitle, .wt .rtitle, .build .rtitle { flex-basis: 100%; order: 3; white-space: normal; }
+  .wt .rid { max-width: 100%; }
+  .li { height: auto; padding-block: 10px; align-items: flex-start; }
+  .li > .ico { margin-top: 3px; }
+  .li .rbody { gap: 2px; }
+  .li .rtitle { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .li .opt { display: none; }
+  .meter { grid-template-columns: 104px minmax(0, 1fr) auto; gap: 10px; }
+  dialog.sess { width: 100vw; border-left: 0; }
+  .composer textarea { font-size: 16px; }
+}
+@media (max-width: 480px) { .bay .pfx { display: none; } .bay { padding: 8px 8px 7px; min-height: 84px; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="ws"><span class="logo" id="wsLogo" aria-hidden="true">A</span><span id="wsName">Agents</span></div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+  </aside>
+  <main class="main" id="main">
+    <header class="bar">
+      <h1 id="viewTitle">Agent queue</h1>
+      <div class="stats" id="stats"><span class="stat">Loading the queue from every machine...</span></div>
+      <div class="fresh" id="fresh"><span class="dot"></span><span id="freshText"></span></div>
+    </header>
+    <div id="banner"></div>
+    <div id="view-queue">
+      <section class="slots" aria-label="Worker slots"><div class="bays" id="bays"></div></section>
+      <div class="lists">
+        <section class="group" id="sec-needs"><h2 class="gh"><span class="ico bad" id="gNeedsIco"></span>Needs you <span class="gcount" id="cNeeds"></span></h2><div id="needs"></div></section>
+        <section class="group" id="sec-building"><h2 class="gh"><span class="ico run" id="gBuildIco"></span>Building <span class="gcount" id="cBuilding"></span></h2><div id="cards"></div></section>
+        <section class="group" id="sec-adhoc"><h2 class="gh"><span class="ico run" id="gAdhocIco"></span>Outside the queue <span class="gcount" id="cAdhoc"></span></h2><div id="adhoc"></div></section>
+        <section class="group" id="sec-ready"><h2 class="gh"><span class="ico todo" id="gReadyIco"></span>Ready queue <span class="gcount" id="cReady"></span></h2><div id="ready"></div></section>
+        <section class="group" id="sec-merged"><h2 class="gh"><span class="ico merged" id="gMergedIco"></span>Merged, last 48 hours <span class="gcount" id="cMerged"></span></h2><div id="merged"></div></section>
+      </div>
+    </div>
+    <div id="view-inbox" hidden><div id="inbox"></div></div>
+    <div class="mview" id="view-machines" hidden><div class="machines" id="machines"></div></div>
+    <div id="view-worktrees" hidden><div id="worktrees"></div></div>
+  </main>
+</div>
+<script>
+const POLL_MS = 20000;
+const MC = ['var(--m1)', 'var(--m2)', 'var(--m3)'];
+const PRI = { 1: 'Urgent', 2: 'High', 3: 'Medium', 4: 'Low' };
+// Below this width the slots wrap to 4 across, so the machine labels over them take a whole row.
+const NARROW = '(max-width: 1199px)';
+const MERGED_SHOWN = 10;
+let snap = null, lastOk = 0, failing = null, timer = null, mergedAll = false, view = null;
+const schedule = (d) => { clearTimeout(timer); timer = setTimeout(poll, d); };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const cap = (s) => String(s ?? '').replace(/^./, (c) => c.toUpperCase());
+const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// An account by its email and plan; the letter is only how the fleet and the dispatcher log refer to it.
+const acctText = (email, plan, label) => email ? `${email}${plan ? ` (${plan})` : ''}` : `account ${label}`;
+const acctOf = (m, label) => (m.accounts || []).find((a) => a.label === label) || {};
+const ms = (t) => (t ? Date.now() - Date.parse(t) : null);
+function dur(milli) {
+  if (milli == null || Number.isNaN(milli)) return 'n/a';
+  const m = Math.max(0, Math.round(milli / 60000));
+  if (m < 60) return `${m}m`;
+  const h = m / 60;
+  if (h < 24) return `${h < 10 ? h.toFixed(1) : Math.round(h)}h`;
+  return `${Math.floor(h / 24)}d ${Math.round(h % 24)}h`;
+}
+const ago = (t) => (t ? `${dur(ms(t))} ago` : 'never');
+const link = (url, text) => (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text));
+// Links in an ask's text: a GitHub PR reads as "PR #123", any other URL as itself.
+const linkify = (s) => esc(s).replace(/(\bPR )?(https:\/\/[^\s<>"']+[^\s<>"'.,;:)])/g, (all, before, u) => {
+  const pr = u.match(/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/);
+  return pr ? `<a href="${u}" target="_blank" rel="noopener">PR #${pr[1]}</a>` : `${before || ''}<a href="${u}" target="_blank" rel="noopener">${u}</a>`;
+});
+// A ticket's ID as a link, or a bundle's IDs (the lead first) joined with +: one worker and one PR carry them all.
+const ticketLinks = (t) => (t.bundle?.length ? [link(t.url, t.ticket), ...t.bundle.map((b) => link(b.url, b.id))].join(' + ') : link(t.url, t.label || t.id));
+// A bundle's other tickets, one line each, under the lead's title.
+const bundleLines = (t) => (t.bundle || []).map((b) => `<div class="rsub">With ${link(b.url, b.id)}${b.title ? `: ${esc(b.title)}` : ''}</div>`).join('');
+const machineColor = (host) => MC[Math.max(0, snap.machines.findIndex((m) => m.host === host)) % MC.length];
+
+// Status glyphs in the style of Linear's issue states, 14px, drawn in the surrounding text colour.
+const svg = (body) => `<svg class="ic" viewBox="0 0 14 14" aria-hidden="true">${body}</svg>`;
+const ICON = {
+  run: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 3.5a3.5 3.5 0 0 1 0 7z" fill="currentColor"/>'),
+  warn: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 3.5a3.5 3.5 0 1 1-3.5 3.5H7z" fill="currentColor"/>'),
+  ok: svg('<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path class="cut" d="M4.3 7.2l1.9 1.9 3.6-3.9" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
+  bad: svg('<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path class="cut" d="M7 3.9v3.5" stroke-width="1.6" stroke-linecap="round"/><circle class="cutf" cx="7" cy="9.9" r="0.95"/>'),
+  free: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="1.9 1.9"/>'),
+  todo: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5"/>'),
+  urgent: svg('<rect x="1" y="1" width="12" height="12" rx="3" fill="currentColor"/><path class="cut" d="M7 3.9v3.4" stroke-width="1.6" stroke-linecap="round"/><circle class="cutf" cx="7" cy="9.8" r="0.95"/>'),
+  inbox: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.75 8.25 3.4 2.9a1.2 1.2 0 0 1 1.15-.85h4.9a1.2 1.2 0 0 1 1.15.85l1.65 5.35v2.6a1.2 1.2 0 0 1-1.2 1.2H2.95a1.2 1.2 0 0 1-1.2-1.2z"/><path d="M1.75 8.25h3l.9 1.5h2.7l.9-1.5h3"/></g>'),
+  comment: svg('<path d="M2 3.2c0-.66.54-1.2 1.2-1.2h7.6c.66 0 1.2.54 1.2 1.2v5.1c0 .66-.54 1.2-1.2 1.2H6.2L3.5 11.8V9.5h-.3c-.66 0-1.2-.54-1.2-1.2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'),
+  list: svg('<path d="M2.5 3.5h9M2.5 7h9M2.5 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'),
+  machine: svg('<g fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.75" y="2" width="10.5" height="4.25" rx="1.2"/><rect x="1.75" y="7.75" width="10.5" height="4.25" rx="1.2"/></g><circle cx="4.1" cy="4.1" r=".8" fill="currentColor"/><circle cx="4.1" cy="9.9" r=".8" fill="currentColor"/>'),
+  pr: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.5" cy="3" r="1.5"/><circle cx="3.5" cy="11" r="1.5"/><circle cx="10.5" cy="11" r="1.5"/><path d="M3.5 4.5v5M10.5 9.5V6a2 2 0 0 0-2-2H6.5M8 2.5 6.5 4 8 5.5"/></g>'),
+  branch: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="4" cy="3" r="1.5"/><circle cx="4" cy="11" r="1.5"/><circle cx="10" cy="4.5" r="1.5"/><path d="M4 4.5v5M10 6c0 2.6-6 1.4-6 3.5"/></g>'),
+  sentry: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="4.4" y="4.6" width="5.2" height="7.2" rx="2.6"/><path d="M5.4 4.8a1.6 1.6 0 0 1 3.2 0M4.4 8H2.3M9.6 8h2.1M4.6 10.3l-1.7 1.1M9.4 10.3l1.7 1.1M4.7 5.9 3.1 4.7M9.3 5.9l1.6-1.2M7 7.2v3.4"/></g>'),
+  spark: svg('<path d="M7 1.5c.4 2.9 1.6 4.1 4.5 4.5v1C8.6 7.4 7.4 8.6 7 11.5h-1C5.6 8.6 4.4 7.4 1.5 7V6C4.4 5.6 5.6 4.4 6 1.5z" fill="currentColor" transform="translate(.5 .5)"/>'),
+};
+const ico = (name, cls = name, label = '') => `<span class="ico ${cls}"${label ? ` role="img" aria-label="${esc(label)}" title="${esc(label)}"` : ''}>${ICON[name]}</span>`;
+// Linear's priority marks: a filled square for urgent, then three bars filled to the level, dashes for none.
+function priIco(p) {
+  const label = `${PRI[p] || 'No'} priority`;
+  if (p === 1) return ico('urgent', 'warn', label);
+  const on = { 2: 3, 3: 2, 4: 1 }[p];
+  const body = on ? [0, 1, 2].map((i) => `<rect x="${1.5 + i * 4}" y="${9 - i * 3}" width="3" height="${3.5 + i * 3}" rx="1" fill="currentColor" opacity="${i < on ? 1 : 0.28}"/>`).join('')
+    : '<path d="M2.5 7h1.6M6.2 7h1.6M9.9 7h1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>';
+  return `<span class="ico" role="img" aria-label="${label}" title="${label}">${svg(body)}</span>`;
+}
+// A usage ring like Linear's cycle progress.
+function ring(pct, sev) {
+  const r = 5.5, c = 2 * Math.PI * r, p = Math.max(0, Math.min(100, pct ?? 0));
+  return `<svg class="ring ${sev}" viewBox="0 0 14 14" aria-hidden="true"><circle class="track" cx="7" cy="7" r="${r}"/>${p ? `<circle class="fill" cx="7" cy="7" r="${r}" stroke-dasharray="${(p / 100 * c).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 7 7)"/>` : ''}</svg>`;
+}
+
+// One plain read of where a live ticket stands, its severity, and the parts behind it.
+function standing(t) {
+  const pr = t.pr;
+  // A worker outside the queue that is done has finished its task; the session that started it drives what follows.
+  const ended = ['failed', 'stopped', 'gone'].includes(t.workerState) || (!t.adhoc && t.workerState === 'done');
+  if (t.adhoc && !pr && t.workerState === 'done') return { sev: 'ok', short: 'finished', long: 'The worker finished, no PR' };
+  if (t.adhoc && !t.branch && !t.blockedSince) return { sev: 'run', short: 'working', long: 'Working, no branch of its own' };
+  if (t.status === 'merge-asked') return { sev: 'warn', short: 'needs your merge', long: 'Green, waiting on your merge (touches reviewed paths)' };
+  if (t.blockedSince) return { sev: 'bad', short: 'worker blocked', long: `Worker waiting on input for ${dur(ms(t.blockedSince))}` };
+  // A green PR in main's merge queue lands once the queue's own checks pass, so it is in flight, not stalled.
+  const queued = pr?.mergeQueue;
+  if (queued) return { sev: 'ok', short: `#${pr.number} in merge queue`, long: `Green, in the merge queue (${queued.state.toLowerCase().replace(/_/g, ' ')}, position ${queued.position})` };
+  if (t.stalledSince) return { sev: 'bad', short: 'stalled', long: `Stalled since ${ago(t.stalledSince)}` };
+  if (!pr) {
+    if (ended) return { sev: 'bad', short: `worker ${t.workerState}, no PR`, long: `The worker session ${t.workerState} before opening a PR` };
+    return { sev: 'run', short: t.branchCommitAt ? 'building, pushed' : 'building, no PR', long: t.branchCommitAt ? `Building, last push ${ago(t.branchCommitAt)}, no PR yet` : 'Building, nothing pushed yet' };
+  }
+  const bits = [];
+  let sev = 'run';
+  if (pr.draft) bits.push('draft');
+  const msMap = { DIRTY: 'conflicts with main', BEHIND: 'behind main', BLOCKED: 'blocked', UNSTABLE: 'checks failing', CLEAN: 'mergeable', HAS_HOOKS: 'mergeable', UNKNOWN: 'GitHub still checking' };
+  if (pr.mergeState === 'DIRTY') sev = 'warn';
+  if (pr.ci.fail.length) sev = 'bad';
+  if (ended && sev !== 'ok') sev = 'bad';
+  const green = (t.note || '').startsWith('green');
+  if (green || reviewerWait(t)) sev = 'ok';
+  const short = pr.ci.fail.length ? `CI failing (${pr.ci.fail.length})` : pr.ci.running.length ? 'CI running' : pr.mergeState === 'DIRTY' ? 'conflicts' : reviewerWait(t) ? `waiting on ${snap.config.reviewer}` : green ? 'green' : (msMap[pr.mergeState] || pr.mergeState || 'open').toLowerCase();
+  bits.push(msMap[pr.mergeState] || pr.mergeState);
+  if (ended) bits.push(`worker ${t.workerState}`);
+  return { sev, short: `#${pr.number} ${short}`, long: bits.filter(Boolean).join(', ') };
+}
+
+// A Sentry fix that waits on the reviewer's review (reviewer.name in the config), or on a worker addressing their
+// changes (dispatcher.mjs). The dispatcher holds it, so its finished worker is expected and never an alert.
+function reviewerWait(t) {
+  const r = snap.config.reviewer;
+  return Boolean(r) && new RegExp(`^(waiting on ${reEsc(r)}|${reEsc(r)} requested changes)`).test(t.note || '');
+}
+
+function attention() {
+  const out = [];
+  const asked = new Set((snap.asks || []).map((a) => a.id));
+  for (const a of snap.asks || []) {
+    out.push({ sev: 'bad', kind: a.type, id: a.id, url: a.url, title: a.title, when: a.createdAt,
+      text: a.question, sub: [a.blockedOn && `Blocked on: ${a.blockedOn}`, a.recommend && `Recommends: ${a.recommend}`, a.from && `From ${a.from}`].filter(Boolean).join('. ') });
+  }
+  for (const t of snap.tickets.filter((x) => x.live)) {
+    const where = `${t.machine}, ${acctText(t.accountEmail, t.accountPlan, t.account)}`;
+    if (t.status === 'merge-asked' && !asked.has(t.id)) out.push({ sev: 'bad', kind: 'Merge', id: t.id, label: t.label, url: t.url, title: t.title, when: null, text: `PR #${t.prNumber} is green but touches paths you review yourself.`, href: t.pr?.url });
+    if (t.blockedSince && !asked.has(t.ticket)) out.push({ sev: 'bad', kind: 'Blocked', id: t.id, label: t.label, url: t.url, title: t.title || t.name, when: t.blockedSince, text: `The worker${t.adhoc ? ', started outside the queue,' : ''} is waiting on input in its session (${where}).`, cmd: t.attach, host: t.host });
+    if (t.stalledSince && !t.pr?.mergeQueue) out.push({ sev: 'warn', kind: 'Stalled', id: t.id, label: t.label, url: t.url, title: t.title, when: t.stalledSince, text: `Nothing has moved since ${ago(t.lastProgressAt)}.`, cmd: t.attach, host: t.host });
+    const ended = ['failed', 'done', 'stopped', 'gone'].includes(t.workerState);
+    if (ended && t.status === 'building' && !(t.note || '').startsWith('green') && !reviewerWait(t)) {
+      out.push({ sev: 'warn', kind: 'Worker ended', id: t.id, label: t.label, url: t.url, title: t.title, when: t.lastProgressAt,
+        text: `The worker session ${t.workerState === 'gone' ? 'is gone' : `shows ${t.workerState}`}, but ${t.pr ? `PR #${t.pr.number} is ${t.note || 'not green'}` : 'no PR exists'}. Nothing is driving it.`, cmd: t.attach, host: t.host });
+    }
+    if (t.effectErrors) out.push({ sev: 'warn', kind: 'Side effect', id: t.id, label: t.label, url: t.url, title: t.title, text: `${t.effectErrors} dispatcher side effect(s) failed on ${t.machine}; see its log.` });
+  }
+  const stuckIds = snap.labeledStuck ? new Set(snap.labeledStuck) : null;
+  const seen = new Set();
+  for (const t of snap.tickets.filter((x) => x.status === 'stuck').sort((a, b) => (b.stuckAt || '').localeCompare(a.stuckAt || ''))) {
+    if (seen.has(t.id) || (stuckIds && !stuckIds.has(t.id))) continue;
+    seen.add(t.id);
+    out.push({ sev: 'warn', kind: 'Stuck', id: t.id, label: t.label, url: t.url, title: t.title, when: t.stuckAt, text: t.reason || 'The dispatcher gave up on it.', sub: `To re-queue: remove ${snap.config.labels.stuck} and add ${snap.config.labels.ready}.` });
+  }
+  for (const m of snap.machines) {
+    if (!m.ok) out.push({ sev: 'bad', kind: 'Machine', title: m.name, text: `Unreachable: ${m.error}. Showing what it reported ${ago(m.fetchedAt)}.` });
+    if (m.paused) out.push({ sev: 'bad', kind: 'Paused', title: m.name, text: m.paused, sub: `Resume with: node ${m.root}/dispatcher/dispatcher.mjs resume` });
+    if (m.lastError) out.push({ sev: 'warn', kind: 'Tick error', title: m.name, text: m.lastError });
+    const noTicks = m.lastTick && ms(m.lastTick) > 45 * 60000;
+    const handOff = 'the other machines build Sentry tickets until it is back.';
+    if (noTicks) out.push({ sev: 'warn', kind: 'No ticks', title: m.name, text: `Last tick ${ago(m.lastTick)}; it should tick every ${snap.config.tickMinutes} minutes.${m.sentryWorkers ? ` Meanwhile ${handOff}` : ''}` });
+    // Ticking but stale here means the shared folder's sync is not carrying its heartbeat, so the others stop leaving it Sentry work.
+    else if (m.ok && !m.paused && sentryOff(m)) out.push({ sev: 'warn', kind: 'Sentry slot', title: m.name, text: `${cap(sentryOff(m))}, so ${handOff}` });
+    for (const l of m.signedOut) { const a = acctOf(m, l); out.push({ sev: 'warn', kind: 'Signed out', title: m.name, text: `${a.email ? acctText(a.email, a.plan) : `Account ${l}`} is signed out on ${m.name}, so it gets no work there.` }); }
+  }
+  for (const [k, v] of Object.entries(snap.errors || {})) out.push({ sev: 'warn', kind: k === 'github' ? 'GitHub' : 'Linear', title: 'Board', text: `Could not read ${k === 'github' ? 'PRs' : 'Linear'}: ${v}` });
+  return out;
+}
+
+const slotCap = () => Math.min(snap.machines.reduce((n, m) => n + (m.maxWorkers || 0), 0), snap.config.maxConcurrent);
+// Sentry slots: a machine with sentryWorkers keeps side slots for Sentry fix tickets (the config's sentry label),
+// apart from its regular maxWorkers, so the board counts them on their own: a busy one never makes a machine look
+// over-full and an idle one is never a free regular slot. While that machine's heartbeat is fresh and unpaused here, the
+// other machines leave Sentry tickets to it; once it goes stale, they build them as usual.
+const beatFresh = (m) => Boolean(m.heartbeat && !m.heartbeat.paused && ms(m.heartbeat.at) < snap.config.sentryHeartbeatMinutes * 60000);
+const sentryHost = () => snap.machines.find((m) => m.sentryWorkers > 0 && beatFresh(m));
+// Why a Sentry host's slot is offline to the other machines, or null while it is live.
+const sentryOff = (m) => (!m.sentryWorkers || beatFresh(m) ? null
+  : !m.heartbeat ? 'it has no heartbeat yet' : m.heartbeat.paused ? 'it is paused' : `its heartbeat is ${dur(ms(m.heartbeat.at))} old`);
+// The Sentry slots in one line: idle, busy or offline for one slot, a count for more.
+function sentrySlots(live) {
+  const total = snap.machines.reduce((n, m) => n + (m.sentryWorkers || 0), 0);
+  const used = live.filter((t) => t.sentry).length;
+  if (!total) return null;
+  return { total, used, text: total === 1 ? `Sentry slot ${used ? 'busy' : sentryHost() ? 'idle' : 'offline'}` : `${used} of ${total} Sentry slots busy` };
+}
+const sentryChip = (t) => (t.sentry ? `<span class="chip sentry" title="In ${esc(t.machine)}'s Sentry slot, apart from its regular slots">${ICON.sentry}Sentry</span>` : '');
+const mergedTickets = () => {
+  const seen = new Set();
+  return snap.tickets.filter((t) => t.status === 'merged').sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).filter((t) => !seen.has(t.id) && seen.add(t.id));
+};
+
+// Worktree states (worktree-state.mjs) in the order the Worktrees view lists them: a label, the words after a count on
+// a chip, and the words after a count in a sentence.
+const WT_STATE = { active: ['In use', 'in use', 'in use'], open: ['PR open', 'PR open', 'with an open PR'], local: ['Not pushed', 'not pushed', 'not pushed'],
+  closed: ['PR closed', 'PR closed', 'with a closed PR'], merged: ['Merged', 'merged', 'merged'], nopr: ['No PR', 'no PR', 'with no PR'],
+  missing: ['Folder missing', 'folder missing', 'with no folder'] };
+const wtOf = (host) => (snap.worktrees?.machines || []).find((m) => m.host === host);
+const wtCounts = (rows) => Object.keys(WT_STATE).map((s) => [s, rows.filter((r) => r.state === s).length]).filter(([, n]) => n);
+// A machine card's line about its worktrees, linking to that machine in the Worktrees view.
+function wtLine(host) {
+  const w = wtOf(host);
+  if (!w?.rows) return '';
+  const parts = wtCounts(w.rows).map(([s, n]) => `${n} ${WT_STATE[s][2]}`).join(', ');
+  return `<a class="mwt" href="#worktrees/${encodeURIComponent(host)}" data-go>${ico('branch', 'todo')}<b>${w.rows.length} worktree${w.rows.length === 1 ? '' : 's'}</b><span class="t">${esc(parts)}</span></a>`;
+}
+
+// The sidebar: the Inbox view, the Queue view with its groups, the Machines view with each machine, then the Worktrees
+// view with each machine's count. On a phone it becomes a strip of Inbox, the Queue's groups, Machines and Worktrees.
+// Inbox counts the mentions, replies and review requests.
+function renderNav(live, adhoc, slotted, needs, merged) {
+  const hot = needs.some((n) => n.sev === 'bad');
+  const item = (href, icon, text, count, cls, attrs) => `<a class="nav-item ${cls}" href="${href}" ${attrs}>${icon}<span class="nav-t">${esc(text)}</span>${count != null ? `<span class="count${cls.includes('hot') ? ' hot' : ''}">${count}</span>` : ''}</a>`;
+  const viewItem = (v, href, icon, text, count = null, hot = false) => item(href, icon, text, count, `view${v === 'queue' ? ' desk' : ''}${view === v ? ' active' : ''}${hot ? ' hot' : ''}`, `data-go data-view="${v}"`);
+  const wtMachines = (snap.worktrees?.machines || []).filter((m) => m.rows);
+  const aimed = (snap.inbox?.forYou ?? []).filter((n) => n.kind !== 'assigned').length;
+  const plusSentry = (list) => { const n = list.filter((t) => t.sentry).length; return n ? ` +${n}` : ''; };
+  $('nav').innerHTML = viewItem('inbox', '#inbox', ico('inbox', 'todo'), 'Inbox', aimed || null, aimed > 0)
+    + viewItem('queue', '#queue', ico('list', 'todo'), 'Queue')
+    + item('#sec-needs', ico('urgent', hot ? 'bad' : needs.length ? 'warn' : 'free'), 'Needs you', needs.length, `nav-sub${hot ? ' hot' : ''}`, 'data-jump')
+    + item('#sec-building', ico('run'), 'Building', `${live.filter((t) => !t.sentry).length}/${slotCap()}${plusSentry(live)}`, 'nav-sub', 'data-jump')
+    + item('#sec-adhoc', ico('run'), 'Outside the queue', adhoc.length, 'nav-sub', 'data-jump')
+    + item('#sec-ready', ico('todo'), 'Ready queue', snap.ready ? snap.ready.length : '?', 'nav-sub', 'data-jump')
+    + item('#sec-merged', ico('ok', 'merged'), 'Merged', merged.length, 'nav-sub', 'data-jump')
+    + viewItem('machines', '#machines', ico('machine', 'todo'), 'Machines')
+    + snap.machines.map((m) => {
+      const mine = slotted.filter((t) => t.host === m.host);
+      const off = !m.ok || m.paused;
+      return item(`#machines/${encodeURIComponent(m.host)}`, `<span class="mdot" style="--mc:${off ? 'var(--bad)' : machineColor(m.host)}"></span>`, m.name,
+        m.maxWorkers ? `${mine.filter((t) => !t.sentry).length}/${m.maxWorkers}${plusSentry(mine)}` : (off ? (m.ok ? 'paused' : 'down') : 'idle'), 'nav-sub desk', 'data-go');
+    }).join('')
+    + ((snap.services || []).length ? item('#machines/services', ico('spark', 'todo'), 'Codex and Grok', null, 'nav-sub desk', 'data-go') : '')
+    + viewItem('worktrees', '#worktrees', ico('branch', 'todo'), 'Worktrees', wtMachines.length ? wtMachines.reduce((n, m) => n + m.rows.length, 0) : null)
+    + wtMachines.map((m) => item(`#worktrees/${encodeURIComponent(m.host)}`, `<span class="mdot" style="--mc:${machineColor(m.host)}"></span>`, m.name, m.rows.length, 'nav-sub desk', 'data-go')).join('');
+}
+
+function renderStats(live, adhoc, needs) {
+  const paused = snap.machines.filter((m) => m.paused).length;
+  const hot = needs.some((n) => n.sev === 'bad');
+  const sentry = sentrySlots(live);
+  $('stats').innerHTML = [
+    `<span class="stat">${ico('run')}<span><b>${live.filter((t) => !t.sentry).length}</b> of ${slotCap()} building</span></span>`,
+    sentry ? `<span class="stat">${ico('sentry', sentry.used ? 'run' : 'todo')}<span>${esc(sentry.text)}</span></span>` : '',
+    adhoc.length ? `<span class="stat">${ico('run')}<span><b>${adhoc.length}</b> outside the queue</span></span>` : '',
+    `<span class="stat">${ico('todo')}<span><b>${snap.ready ? snap.ready.length : '?'}</b> ready</span></span>`,
+    `<span class="stat">${ico('urgent', hot ? 'bad' : needs.length ? 'warn' : 'free')}<span><b>${needs.length}</b> need${needs.length === 1 ? 's' : ''} you</span></span>`,
+    paused ? `<span class="stat">${ico('bad')}<span><b>${paused}</b> paused</span></span>` : '',
+  ].join('');
+}
+
+function renderBays(live) {
+  let col = 1, html = '';
+  snap.machines.forEach((m) => {
+    const mine = live.filter((t) => t.host === m.host);
+    const regular = mine.filter((t) => !t.sentry), sentry = mine.filter((t) => t.sentry);
+    const n = Math.max(m.maxWorkers || 0, regular.length);
+    // The Sentry slots sit after the regular ones in the machine's group and are counted apart in its label.
+    const k = Math.max(m.sentryWorkers || 0, sentry.length);
+    if (!n && !k) return;
+    const mc = machineColor(m.host);
+    const off = sentryOff(m);
+    const sentryLabel = k ? `, Sentry ${sentry.length ? (k > 1 ? `${sentry.length}/${k}` : 'busy') : off ? 'offline' : 'idle'}` : '';
+    html += `<div class="bay-group-label" style="--mc:${mc};grid-column:${col} / span ${n + k}"><span class="mdot"></span>${esc(m.name)} <span class="muted">${regular.length}/${m.maxWorkers}${sentryLabel}</span></div>`;
+    const bay = (t) => {
+      const s = standing(t);
+      return `<a class="bay" href="#${esc(t.id)}" style="--mc:${mc}"><span class="id">${ico(s.sev, s.sev, s.long)}<span class="ids">${esc(t.label || t.id).replace(/\b([A-Z]+-)(?=\d)/g, '<span class="pfx">$1</span>')}</span></span>
+        <span class="what" title="${esc(t.title || t.name)}">${esc(cap(t.adhoc ? `outside the queue, ${s.short}` : s.short))}</span><span class="when">${t.sentry ? `<span class="stag" role="img" aria-label="Sentry slot" title="In the Sentry slot">${ICON.sentry}</span>` : ''}${dur(ms(t.dispatchedAt))} in, moved ${dur(ms(t.lastProgressAt))} ago</span></a>`;
+    };
+    for (let i = 0; i < n; i++) html += regular[i] ? bay(regular[i]) : `<div class="bay free" style="--mc:${mc}">${ico('free')}Free</div>`;
+    for (let i = 0; i < k; i++) {
+      html += sentry[i] ? bay(sentry[i]) : `<div class="bay free sentry${off ? ' off' : ''}" style="--mc:${mc}" title="${esc(off ? `Offline to the other machines (${off}), so they build Sentry tickets themselves` : 'Kept for Sentry fix tickets; regular work never takes it')}">${ico('sentry', off ? 'warn' : 'free')}Sentry ${off ? 'offline' : 'idle'}</div>`;
+    }
+    col += n + k;
+  });
+  $('bays').innerHTML = html;
+  $('bays').style.setProperty('--n', col - 1 || 8);
+  if (matchMedia(NARROW).matches) $('bays').querySelectorAll('.bay-group-label').forEach((el) => { el.style.gridColumn = '1 / -1'; });
+}
+
+function renderNeeds(needs) {
+  $('cNeeds').textContent = needs.length;
+  $('gNeedsIco').className = `ico ${needs.some((n) => n.sev === 'bad') ? 'bad' : needs.length ? 'warn' : 'free'}`;
+  if (!needs.length) { $('needs').innerHTML = '<div class="empty">Nothing is waiting on you.</div>'; return; }
+  $('needs').innerHTML = needs.map((n) => `<div class="row need">
+    ${ico('urgent', n.sev === 'warn' ? 'warn' : 'bad', n.sev === 'warn' ? 'Worth a look' : 'Needs you')}
+    <div class="rbody">
+      <div class="rline"><span class="chip">${esc(cap(n.kind))}</span>${n.id ? `<span class="rid">${link(n.url, n.label || n.id)}</span>` : ''}<span class="rtitle" title="${esc(n.title || '')}">${esc(n.title || '')}</span>${n.when ? `<span class="rmeta">${ago(n.when)}</span>` : ''}</div>
+      <div class="rtext">${linkify(n.text)}${n.href ? ` ${link(n.href, 'Open PR')}` : ''}</div>
+      ${n.sub ? `<div class="rsub">${linkify(n.sub)}</div>` : ''}
+      ${n.cmd ? openSession(n.id, n.cmd) : ''}
+    </div></div>`).join('');
+}
+// View session opens the history and message panel (session.js). The board server builds the attach command (with
+// ssh for a worker on another machine), and Open in terminal asks it to open that in iTerm on this Mac.
+const openSession = (id, cmd) => `<div class="open-row"><button class="open primary view" data-id="${esc(id)}">View session</button><button class="open" data-id="${esc(id)}">Open in terminal</button><span class="msg"></span></div>
+  <details><summary>Command</summary><code class="cmd">${esc(cmd)}</code></details>`;
+
+function workerChip(t) {
+  const cls = { busy: 'run', working: 'run', idle: 'warn', blocked: 'bad', failed: 'bad', done: 'warn', stopped: 'warn', gone: 'bad' }[t.workerState] || '';
+  return `<span class="chip ${cls}">worker ${esc(t.workerState)}</span>`;
+}
+
+function renderCards(live) {
+  const sentry = live.filter((t) => t.sentry).length;
+  $('cBuilding').textContent = `${live.length - sentry} of ${slotCap()}${sentry ? `, plus ${sentry} Sentry` : ''}`;
+  if (!live.length) { $('cards').innerHTML = '<div class="empty">No workers are building right now.</div>'; return; }
+  $('cards').innerHTML = live.map(cardHtml).join('');
+}
+
+// Fleet workers another session started with fleet.sh dispatch, outside the queue's slots.
+function renderAdhoc(adhoc) {
+  $('cAdhoc').textContent = adhoc.length;
+  if (!adhoc.length) { $('adhoc').innerHTML = '<div class="empty">No other fleet workers are running.</div>'; return; }
+  $('adhoc').innerHTML = adhoc.map(cardHtml).join('');
+}
+
+function cardHtml(t) {
+  const s = standing(t), pr = t.pr;
+  const ci = pr ? (pr.ci.fail.length ? `<span class="chip bad">${pr.ci.fail.length} failing</span>` : '') + (pr.ci.running.length ? `<span class="chip run">${pr.ci.running.length} running</span>` : '') + `<span class="chip ${pr.ci.fail.length ? '' : 'ok'}">${pr.ci.pass} passed</span>` : '';
+  // review is null when the config names no review check.
+  const review = pr && pr.review ? `<span class="chip ${{ pass: 'ok', fail: 'bad', running: 'run' }[pr.review] || ''}">review ${pr.review === 'missing' ? 'not started' : pr.review}</span>` : '';
+  const threads = pr && pr.openThreads ? `<span class="chip warn">${pr.openThreads} open thread${pr.openThreads > 1 ? 's' : ''}</span>` : '';
+  // A worker outside the queue may have no ticket; its session name then stands in for the title.
+  const title = t.title || (t.adhoc && !t.ticket ? t.name : '');
+  const named = t.adhoc && t.ticket && t.name ? `<span class="chip mono" title="worker session name">${esc(t.name)}</span>` : '';
+  return `<article class="row build" id="${esc(t.id)}" style="--mc:${machineColor(t.host)}">
+    ${ico(s.sev, s.sev, s.long)}
+    <div class="rbody">
+      <div class="rline"><span class="rid">${ticketLinks(t)}</span><span class="rtitle">${esc(title || '')}</span></div>
+      ${bundleLines(t)}
+      <div class="chips">${t.engine ? `<span class="chip engine" title="${esc(t.engine)} writes the code, a Claude worker drives and reviews">built by ${esc(t.engine)}</span>` : ''}<span class="chip host">${esc(t.machine)}</span>${sentryChip(t)}<span class="chip" title="fleet account ${esc(t.account)}">${esc(acctText(t.accountEmail, t.accountPlan, t.account))}</span>${workerChip(t)}${named}<span class="chip ${s.sev}" title="${esc(s.long)}">${esc(s.long)}</span>${t.waiting ? '<span class="chip warn">waiting on your answer</span>' : ''}</div>
+      ${pr ? `<div class="chips"><a class="chip" href="${esc(pr.url)}" target="_blank" rel="noopener">${ICON.pr}PR #${pr.number}</a>${pr.mergeQueue ? `<span class="chip ok">merge queue, position ${pr.mergeQueue.position}</span>` : ''}${ci}${review}${threads}</div>` : ''}
+      ${pr && pr.ci.fail.length ? `<div class="fails">Failing: ${esc(pr.ci.fail.slice(0, 4).join('; '))}${pr.ci.fail.length > 4 ? '; ...' : ''}</div>` : ''}
+      <dl class="facts">
+        <div><dt>Running</dt><dd>${dur(ms(t.dispatchedAt))}</dd></div>
+        <div><dt>${t.adhoc ? 'Last activity' : 'Last progress'}</dt><dd>${ago(t.lastProgressAt)}</dd></div>
+        <div><dt>Last push</dt><dd>${ago(pr ? pr.lastCommitAt : t.branchCommitAt)}</dd></div>
+        <div><dt>Worker</dt><dd class="mono">${esc(t.workerId || 'n/a')}</dd></div>
+      </dl>
+      ${t.note ? `<div class="note">Dispatcher: ${esc(t.note)}</div>` : ''}
+      ${t.attach ? openSession(t.id, t.attach) : ''}
+    </div>
+  </article>`;
+}
+
+// One row: label, bar (with the limit marked), then the value and its limit in muted text. A count with no limit (pct
+// null) has no bar.
+function meter(label, value, limit, pct, limitPct, sev) {
+  if (pct == null) return `<div class="meter"><span>${esc(label)}</span><span></span><b>${esc(value)}</b></div>`;
+  return `<div class="meter"><span>${esc(label)}</span>
+    <div class="bar"><i class="${sev}" style="width:${Math.max(0, Math.min(100, pct))}%"></i>${limitPct != null ? `<s style="left:calc(${Math.min(100, limitPct)}% - 1px)"></s>` : ''}</div>
+    <b>${esc(value)} <span>${esc(limit)}</span></b></div>`;
+}
+// A machine card's Sentry slot row: idle, offline, or the ticket in it.
+function sentryMeter(m, inSentry) {
+  const k = Math.max(m.sentryWorkers, inSentry.length);
+  const what = inSentry.length ? inSentry.map(ticketLinks).join(', ') : sentryOff(m) ? 'offline' : 'idle';
+  return `<div class="meter"><span>Sentry slot${k > 1 ? 's' : ''}</span><div class="bar"><i class="ok" style="width:${(inSentry.length / k) * 100}%"></i></div><b>${what}${k > 1 ? ` <span>${inSentry.length} of ${k}</span>` : ''}</b></div>`;
+}
+function usageCell(w, floor, showReset = false) {
+  if (!w) return '<span class="sub">no limit</span>';
+  const left = 100 - (w.used ?? 0);
+  const sev = left < floor ? 'bad' : left < floor + 20 ? 'warn' : 'ok';
+  const reset = showReset && w.resetsAt ? `<span class="sub">resets in ${dur(-ms(w.resetsAt))}</span>` : '';
+  return `<span class="use">${ring(w.used, sev)}${w.used ?? '?'}%</span>${reset}`;
+}
+const email = (e) => esc(e).replace('@', '@<wbr>');
+// Codex and Grok are read on every machine and shown once per account, with the machines signed in to it.
+function servicesCard(floor) {
+  const rows = snap.services || [];
+  if (!rows.length) return '';
+  const extra = (s) => [s.credits != null ? `${s.credits.toLocaleString()} credits` : '', s.freeResets ? `${s.freeResets} free reset${s.freeResets > 1 ? 's' : ''}` : '',
+    s.onDemand ? `pay as you go: ${s.onDemand.used} of ${s.onDemand.cap}` : '', s.limited ? `limit hit (${s.limited})` : ''].filter(Boolean).join(', ');
+  const who = (s) => `<td class="who">${s.account ? email(s.account) : esc(s.name)}<span class="sub">${esc([s.account ? s.name : '', s.plan, `on ${s.machines.join(', ')}`].filter(Boolean).join(' '))}${extra(s) ? `<br>${esc(extra(s))}` : ''}</span></td>`;
+  const body = rows.map((s) => s.error
+    ? `<tr>${who(s)}<td colspan="3" class="muted">${/authenticat|log ?in|sign/i.test(s.error) ? '<span class="chip bad">signed out</span> ' : ''}${esc(s.error)}</td></tr>`
+    : `<tr>${who(s)}<td>${usageCell(s.fiveHour, floor, true)}</td><td>${usageCell(s.weekly ?? s.period, floor, true)}</td><td class="muted">${dur(ms(s.at))}</td></tr>`).join('');
+  return `<div class="mcard" id="m-services" style="--mc:var(--ink-3)"><div class="mhead">${ico('spark', 'todo')}<span class="mname">Codex and Grok</span><span class="mmeta">Plan usage, read hourly</span></div>
+    <table class="accts"><thead><tr><th>Account</th><th class="u">5-hour</th><th class="u">Weekly</th><th class="r">Read</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function renderMachines(live) {
+  const floor = snap.config.headroomFloorPercent;
+  $('machines').innerHTML = snap.machines.map((m) => {
+    const here = live.filter((t) => t.host === m.host);
+    const mine = here.filter((t) => !t.sentry).length;
+    const inSentry = here.filter((t) => t.sentry);
+    const off = sentryOff(m);
+    const loadPerCore = m.load ? m.load.avg5 / m.load.cores : null;
+    const state = !m.ok ? '<span class="chip bad">unreachable</span>' : m.paused ? '<span class="chip bad">paused</span>' : m.enabled === false ? '<span class="chip warn">not enabled</span>' : '<span class="chip ok">ticking</span>';
+    const next = m.lastTick ? Date.parse(m.lastTick) + snap.config.tickMinutes * 60000 - Date.now() : null;
+    const name = (a) => `<td class="who">${a.email ? email(a.email) : `account ${esc(a.label)}`}<span class="sub">${a.plan ? `${esc(a.plan)}, ` : ''}account ${esc(a.label)}${a.signedIn === false ? ' <span class="chip bad">signed out</span>' : ''}</span></td>`;
+    const accts = (m.accounts || []).map((a) => a.error
+      ? `<tr>${name(a)}<td colspan="3" class="muted">${esc(a.error)}</td></tr>`
+      : `<tr>${name(a)}<td>${usageCell(a.fiveHour, floor)}</td><td>${usageCell(a.weekly, floor)}</td><td class="muted">${a.usageAt ? dur(ms(a.usageAt)) : 'n/a'}${a.otherSessions ? `<span class="sub">${a.otherSessions} other</span>` : ''}</td></tr>`).join('');
+    return `<div class="mcard" id="m-${esc(m.host)}" style="--mc:${machineColor(m.host)}">
+      <div class="mhead"><span class="mdot"></span><span class="mname">${esc(m.name)}</span>${state}${m.sentryWorkers ? `<span class="chip">${m.maxWorkers} regular + ${m.sentryWorkers} Sentry</span>` : ''}<span class="mmeta">Last tick ${ago(m.lastTick)}${next != null && m.ok && !m.paused ? `, next ${next > 0 ? `in about ${dur(next)}` : 'due now'}` : ''}</span></div>
+      <div class="meters">
+        ${meter(m.sentryWorkers ? 'Regular slots' : 'Workers', mine, `of ${m.maxWorkers}`, (mine / (m.maxWorkers || 1)) * 100, null, mine >= m.maxWorkers ? 'warn' : 'ok')}
+        ${m.sentryWorkers || inSentry.length ? sentryMeter(m, inSentry) : ''}
+        ${meter('Heartbeat', m.heartbeat ? `${dur(ms(m.heartbeat.at))} old${m.heartbeat.paused ? ', paused' : ''}` : 'none yet', '', null)}
+        ${m.maxDispatchesPerDay ? meter('Dispatched in 24h', m.dispatchedToday, `of ${m.maxDispatchesPerDay}`, (m.dispatchedToday / m.maxDispatchesPerDay) * 100, null, m.dispatchedToday >= m.maxDispatchesPerDay ? 'warn' : 'ok') : meter('Dispatched in 24h', m.dispatchedToday, '', null)}
+        ${loadPerCore != null ? meter('Load per core', loadPerCore.toFixed(2), `limit ${m.load.maxPerCore}`, (loadPerCore / (m.load.maxPerCore * 1.5)) * 100, 100 / 1.5, loadPerCore > m.load.maxPerCore ? 'bad' : 'ok') : ''}
+        ${m.memFreePercent != null ? meter('Memory free', `${m.memFreePercent}%`, `floor ${m.minMemFreePercent}%`, m.memFreePercent, m.minMemFreePercent, m.memFreePercent < m.minMemFreePercent ? 'bad' : 'ok') : ''}
+      </div>
+      ${off ? `<div class="mnote">Sentry slot offline: ${esc(off)}, so the other machines build Sentry tickets.</div>` : ''}
+      ${wtLine(m.host)}
+      <table class="accts"><thead><tr><th>Account</th><th class="u">5-hour</th><th class="u">Weekly</th><th class="r">Saved</th></tr></thead><tbody>${accts}</tbody></table>
+      <details><summary>Dispatcher log</summary><pre class="log">${esc((m.log || []).join('\n'))}</pre></details>
+    </div>`;
+  }).join('') + servicesCard(floor);
+}
+
+function renderReady() {
+  $('cReady').textContent = snap.ready ? snap.ready.length : '';
+  if (!snap.ready) { $('ready').innerHTML = '<div class="empty">Linear did not answer; the ready list is unknown.</div>'; return; }
+  if (!snap.ready.length) { $('ready').innerHTML = `<div class="empty">Nothing is labeled ${esc(snap.config.labels.ready)}.</div>`; return; }
+  const top = snap.ready.slice(0, 12);
+  // A Sentry ticket waiting for a live Sentry slot is queued for that slot; the other machines skip it on purpose.
+  const host = sentryHost(), offline = snap.machines.find((m) => m.sentryWorkers > 0 && sentryOff(m));
+  const labeled = `Labeled ${snap.config.labels.sentry}.`;
+  const sentry = (r) => (!r.sentry ? '' : `<span class="chip sentry" title="${esc(host ? `${labeled} The other machines leave it to ${host.name}'s Sentry slot.`
+    : offline ? `${labeled} ${offline.name}'s Sentry slot is offline, so any machine can build it.` : labeled)}">${ICON.sentry}${host ? `<span class="opt">for ${esc(host.name)}'s </span>Sentry<span class="opt"> slot</span>` : 'Sentry'}</span>`);
+  $('ready').innerHTML = top.map((r) => `<div class="row li">${priIco(r.priority)}<div class="rbody"><div class="rline"><span class="rid">${link(r.url, r.id)}</span><span class="rtitle" title="${esc(r.title)}">${esc(r.title)}</span>
+    <span class="rmeta">${sentry(r)}${r.waitingOn ? `<span class="chip warn opt" title="Waiting on ${esc(r.waitingOn)}">waiting on ${esc(r.waitingOn)}</span>` : ''}<span>${dur(ms(r.createdAt))}</span></span></div></div></div>`).join('')
+    + (snap.ready.length > top.length ? `<div class="more-row">and ${snap.ready.length - top.length} more</div>` : '');
+}
+
+function renderMerged(merged) {
+  $('cMerged').textContent = merged.length;
+  if (!merged.length) { $('merged').innerHTML = '<div class="empty">Nothing merged in the last 48 hours.</div>'; return; }
+  const shown = mergedAll ? merged : merged.slice(0, MERGED_SHOWN);
+  $('merged').innerHTML = shown.map((t) => `<div class="row li">${ico('ok', 'merged', 'Merged')}<div class="rbody"><div class="rline"><span class="rid">${ticketLinks(t)}</span><span class="rtitle" title="${esc(t.title || '')}">${esc(t.title || '')}</span>
+    <span class="rmeta">${sentryChip(t)}${t.linearState ? `<span class="chip opt">${esc(t.linearState)}</span>` : ''}${t.prUrl ? `<span class="opt">${link(t.prUrl, `PR #${t.prUrl.split('/').pop()}`)}</span>` : ''}<span class="mini-host opt" style="--mc:${machineColor(t.host)}"><span class="mdot"></span>${esc(t.machine)}</span><span>${ago(t.mergedAt)}</span></span></div></div></div>`).join('')
+    + (merged.length > MERGED_SHOWN ? `<div class="more-row"><button class="show-all merged-all" type="button">${mergedAll ? 'Show the latest 10' : `Show all ${merged.length}`}</button></div>` : '');
+}
+
+function render() {
+  if (!snap) return;
+  const ws = snap.config.repo ? `${snap.config.repo} agents` : 'Agents';
+  $('wsName').textContent = ws;
+  $('wsLogo').textContent = ws[0].toUpperCase();
+  const order = (t) => snap.machines.findIndex((m) => m.host === t.host);
+  const byStart = (a, b) => order(a) - order(b) || (a.dispatchedAt || '').localeCompare(b.dispatchedAt || '');
+  const live = snap.tickets.filter((t) => t.live && !t.adhoc).sort(byStart);
+  const adhoc = snap.tickets.filter((t) => t.adhoc).sort(byStart);
+  const needs = attention();
+  const merged = mergedTickets();
+  // The dispatcher counts a working worker outside the queue against its machine's slots, so the slots show it too.
+  const slotted = [...live, ...adhoc.filter((t) => t.takesSlot)];
+  renderNav(live, adhoc, slotted, needs, merged);
+  renderStats(live, adhoc, needs);
+  renderBays(slotted);
+  renderNeeds(needs);
+  renderCards(live);
+  renderAdhoc(adhoc);
+  renderMachines(slotted);
+  renderReady();
+  renderMerged(merged);
+  freshness();
+}
+// The group headers carry fixed glyphs.
+$('gBuildIco').innerHTML = ICON.run;
+$('gAdhocIco').innerHTML = ICON.run;
+$('gReadyIco').innerHTML = ICON.todo;
+$('gMergedIco').innerHTML = ICON.ok;
+$('gNeedsIco').innerHTML = ICON.urgent;
+
+function freshness() {
+  const el = $('fresh');
+  if (failing && Date.now() - lastOk > 90000) {
+    el.className = 'fresh stale';
+    $('freshText').textContent = `Board unreachable, showing data from ${snap ? ago(snap.generatedAt) : 'never'}`;
+    return;
+  }
+  el.className = `fresh ${snap?.refreshing ? 'busy' : 'live'}`;
+  $('freshText').textContent = snap ? `Data from ${ago(snap.generatedAt)}${snap.refreshing ? ', refreshing' : ''}` : '';
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/snapshot', { cache: 'no-store' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    const next = await res.json();
+    const same = snap && next.generatedAt === snap.generatedAt;
+    const first = !snap;
+    snap = next; lastOk = Date.now(); failing = null;
+    $('banner').innerHTML = '';
+    same ? freshness() : render();
+    // A link to one machine's card can only scroll once the cards exist.
+    if (first) applyView();
+    // A snapshot the server was still refreshing is worth a quicker second look.
+    schedule(snap.refreshing ? 5000 : POLL_MS);
+  } catch (e) {
+    failing = e.message;
+    if (!snap) $('banner').innerHTML = `<div class="banner">The board could not load: ${esc(e.message)}</div>`;
+    freshness();
+    schedule(POLL_MS);
+  }
+}
+setInterval(freshness, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(0); });
+
+// The Clipboard API needs a secure context, and a plain http:// address on a tailnet is not one, so fall back to execCommand. The
+// API can also refuse a write (an unfocused page), which falls back the same way.
+function copyText(text) {
+  const legacy = () => {
+    const ta = Object.assign(document.createElement('textarea'), { value: text });
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  };
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).catch(legacy); return true; }
+  return legacy();
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('button.open');
+  if (!b || !b.closest('.open-row') || b.classList.contains('view')) return;
+  const msg = b.nextElementSibling;
+  b.disabled = true;
+  msg.textContent = 'Opening...';
+  try {
+    const r = await fetch(`/api/open?id=${encodeURIComponent(b.dataset.id)}`, { method: 'POST', headers: { 'X-Board': 'open' } });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) msg.textContent = 'Opened in iTerm';
+    else if (r.status === 409 && body.cmd) msg.textContent = copyText(body.cmd) ? `This board runs on ${snap.machines.find((m) => m.host === snap.servedBy)?.name ?? snap.servedBy}, so the ssh command is copied: paste it in a terminal` : body.cmd;
+
+    else msg.textContent = body.error || `Could not open it (${r.status})`;
+  } catch (err) {
+    msg.textContent = `Could not open it: ${err.message}`;
+  }
+  b.disabled = false;
+});
+// The view comes from the URL: #inbox is the Inbox, #machines (or #machines/<host> for one machine's card) is Machines,
+// #worktrees (or #worktrees/<host>) is Worktrees, and anything else (a ticket anchor, the session panel's #session=) is
+// the Queue.
+const VIEWS = { queue: 'Agent queue', inbox: 'Inbox', machines: 'Machines', worktrees: 'Worktrees' };
+const TARGET = { machines: 'm', worktrees: 'wt' };
+function applyView(fromClick = false) {
+  const [name, target] = location.hash.slice(1).split('/');
+  const next = Object.hasOwn(VIEWS, name) ? name : 'queue';
+  const switched = next !== view;
+  view = next;
+  for (const v of Object.keys(VIEWS)) $(`view-${v}`).hidden = view !== v;
+  $('viewTitle').textContent = VIEWS[view];
+  document.querySelectorAll('.nav-item.view').forEach((el) => el.classList.toggle('active', el.dataset.view === view));
+  // On a phone the sidebar is a strip that scrolls sideways; keep the open view's tab in sight.
+  const strip = document.querySelector('.side'), tab = document.querySelector('.nav-item.view.active');
+  if (tab && strip.scrollWidth > strip.clientWidth) strip.scrollLeft = tab.offsetLeft - 12;
+  const card = TARGET[view] && target && $(`${TARGET[view]}-${decodeURIComponent(target)}`);
+  if (card) card.scrollIntoView({ block: 'start' });
+  else if (switched || fromClick) { $('main').scrollTop = 0; window.scrollTo(0, 0); }
+}
+window.addEventListener('popstate', () => applyView());
+document.addEventListener('click', (e) => {
+  const go = e.target.closest('a[data-go]');
+  if (go && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+    e.preventDefault();
+    history.pushState(null, '', go.getAttribute('href'));
+    applyView(true);
+  }
+  // A group link scrolls to its group, switching back to the Queue first, without leaving the group in the URL.
+  const jump = e.target.closest('a[data-jump]');
+  if (jump) {
+    e.preventDefault();
+    if (view !== 'queue') { history.pushState(null, '', '#queue'); applyView(); }
+    $(jump.getAttribute('href').slice(1))?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+  }
+  if (e.target.closest('.merged-all')) { mergedAll = !mergedAll; renderMerged(mergedTickets()); }
+});
+matchMedia(NARROW).addEventListener('change', render);
+// The page is rebuilt from a fresh snapshot on load, so an old scroll position would land somewhere arbitrary.
+history.scrollRestoration = 'manual';
+applyView();
+poll();
+</script>
+<script src="/session.js"></script>
+<script src="/inbox.js"></script>
+<script src="/worktrees.js"></script>
+</body>
+</html>

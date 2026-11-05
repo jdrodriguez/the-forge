@@ -1,0 +1,14 @@
+# Your real config. Copy agent-queue.config.example.json to start one.
+agent-queue.config.json
+
+# Runtime state, in case paths.stateDir or paths.sharedDir point inside the checkout.
+state.json
+state.json.bak
+*.log
+heartbeats/
+bundles/
+merge-requests/
+main-state.json
+
+node_modules/
+.DS_Store

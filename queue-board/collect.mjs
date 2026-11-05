@@ -1,0 +1,186 @@
+#!/usr/bin/env node
+// collect.mjs: prints this machine's agent-queue state as one JSON object, for board.mjs to read over SSH.
+// Read-only and local: the dispatcher's state file and log, the fleet's session list, each account's saved plan
+// usage, and the machine's load. It makes no network calls and never refreshes usage, so it can't crowd the
+// dispatcher's own usage checks. It reads this machine's own config, so it finds this machine's paths.stateDir.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { loadConfig, ROOT, HOME } from '../lib/config.mjs';
+
+const cfg = loadConfig();
+const dc = cfg.dispatcher ?? {};
+const LOCAL = cfg.paths.stateDir;
+const FLEET = path.join(ROOT, 'fleet/fleet.sh');
+const HOST = os.hostname().split('.')[0];
+const LIVE = ['building', 'merge-asked', 'claiming'];
+// The fleet account whose config dir is ~/.claude; every other account lives in ~/.claude-<label>.
+const PRIMARY = cfg.fleet?.primaryAccount ?? 'a';
+const TEAM = cfg.linear?.team;
+process.env.PATH = [path.join(HOME, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH].join(':');
+
+const hostCfg = dc.hosts?.[HOST] ?? {};
+const errors = [];
+const readText = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
+
+let state = null;
+try {
+  const raw = readText(path.join(LOCAL, 'state.json'));
+  state = raw ? JSON.parse(raw) : null;
+} catch (e) {
+  errors.push(`state.json: ${e.message}`);
+}
+
+const log = (readText(path.join(LOCAL, 'dispatcher.log')) ?? '').trimEnd().split('\n').slice(-120);
+
+// The workers the queue's tickets point at, every other live background worker (adhoc), and a count of the account's
+// other running sessions.
+let workers = [];
+let adhoc = [];
+let others = {};
+try {
+  const all = JSON.parse(execFileSync(FLEET, ['ps', '--json', '--all'], { encoding: 'utf8', timeout: 45_000, stdio: ['ignore', 'pipe', 'pipe'] }));
+  const wanted = new Set(Object.values(state?.tickets ?? {}).filter((t) => LIVE.includes(t.status) && t.workerId).map((t) => `${t.account}/${t.workerId}`));
+  workers = all.filter((w) => wanted.has(`${w.label}/${w.id}`)).map((w) => ({ label: w.label, id: w.id, name: w.name, state: w.status || w.state || 'unknown' }));
+  for (const w of all) {
+    if (wanted.has(`${w.label}/${w.id}`) || !['busy', 'working', 'blocked'].includes(w.status || w.state)) continue;
+    others[w.label] = (others[w.label] ?? 0) + 1;
+  }
+  adhoc = adhocWorkers(all);
+} catch (e) {
+  errors.push(`fleet ps: ${String(e.stderr || e.message).trim().slice(0, 200)}`);
+}
+
+// A background worker some session started with fleet.sh dispatch outside the queue, such as a rush ticket. Any
+// worker a queue ticket ever pointed at is the queue's. A row with no process is left over from a restart and is
+// skipped, and a finished worker drops off a day after its last activity.
+function adhocWorkers(all) {
+  const queued = new Set(Object.values(state?.tickets ?? {}).filter((t) => t.workerId).map((t) => `${t.account}/${t.workerId}`));
+  const rows = all.filter((w) => w.kind === 'background' && w.pid && /^[0-9a-f]{8}$/.test(w.id ?? '') && !queued.has(`${w.label}/${w.id}`));
+  const ticketRe = new RegExp(`\\b${TEAM}-(\\d+)\\b`, 'i');
+  const ticketOf = (s) => (s?.match(ticketRe) ? `${TEAM}-${s.match(ticketRe)[1]}` : null);
+  return rows.flatMap((w) => {
+    const dir = acctDir(w.label);
+    let reg = {};
+    try { reg = JSON.parse(fs.readFileSync(path.join(dir, 'sessions', `${w.pid}.json`), 'utf8')); } catch {}
+    const lastActivity = transcriptTime(dir, w.sessionId) ?? reg.updatedAt ?? null;
+    const st = w.status || w.state || 'unknown';
+    if (['idle', 'done'].includes(st) && lastActivity && Date.now() - lastActivity > 24 * 3.6e6) return [];
+    const ticket = ticketOf(w.name);
+    const branch = branchIn(w.cwd) ?? (ticket ? worktreeBranch(ticket) : null);
+    return [{
+      label: w.label,
+      id: w.id,
+      name: w.name ?? null,
+      state: st,
+      cwd: w.cwd ?? null,
+      branch,
+      ticket: ticketOf(branch) ?? ticket,
+      startedAt: reg.startedAt ? new Date(reg.startedAt).toISOString() : null,
+      lastActivityAt: lastActivity ? new Date(lastActivity).toISOString() : null,
+      stateSince: reg.statusUpdatedAt ? new Date(reg.statusUpdatedAt).toISOString() : null,
+      // The dispatcher's own test for a worker that takes one of this machine's slots (outsideWorkers).
+      takesSlot: !['idle', 'done'].includes(w.state || w.status),
+    }];
+  });
+}
+
+function acctDir(label) {
+  return path.join(HOME, label === PRIMARY ? '.claude' : `.claude-${label}`);
+}
+// When the session's transcript last changed, as epoch ms.
+function transcriptTime(dir, sessionId) {
+  if (!sessionId) return null;
+  const root = path.join(dir, 'projects');
+  let best = null;
+  for (const d of fs.existsSync(root) ? fs.readdirSync(root) : []) {
+    try { best = Math.max(best ?? 0, fs.statSync(path.join(root, d, `${sessionId}.jsonl`)).mtimeMs); } catch {}
+  }
+  return best;
+}
+function git(cwd, args) {
+  try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; }
+}
+// The branch checked out where the worker runs, unless that is the main checkout.
+function branchIn(cwd) {
+  const b = cwd ? git(cwd, ['branch', '--show-current']) : null;
+  return b && !['main', 'master'].includes(b) ? b : null;
+}
+// A worker started in the workspace folder makes its own worktree, so look for the newest one on its ticket's branch.
+function worktreeBranch(ticket) {
+  if (!cfg.repoPath) return null;
+  const out = git(cfg.repoPath, ['worktree', 'list', '--porcelain']);
+  if (!out) return null;
+  const re = new RegExp(`\\b${ticket}\\b`, 'i');
+  const hits = out.split('\n\n').flatMap((block) => {
+    const dir = block.match(/^worktree (.+)$/m)?.[1];
+    const b = block.match(/^branch refs\/heads\/(.+)$/m)?.[1];
+    if (!dir || !b || !re.test(b)) return [];
+    try { return [{ b, at: fs.statSync(dir).mtimeMs }]; } catch { return []; }
+  });
+  return hits.sort((x, y) => y.at - x.at)[0]?.b ?? null;
+}
+
+// Each account's email, plan and the usage it saved the last time something ran 'claude -p /usage'. Only those fields
+// and the account id are read from .claude.json; the file also holds sign-in details.
+const PLANS = { claude_max: 'Max', claude_team: 'Team', claude_pro: 'Pro', claude_enterprise: 'Enterprise' };
+function labels() {
+  const found = fs.readdirSync(HOME).filter((d) => /^\.claude-[a-z]$/.test(d)).map((d) => d.slice(-1));
+  if (fs.existsSync(path.join(HOME, '.claude.json'))) found.unshift(PRIMARY);
+  return hostCfg.accounts ? found.filter((l) => hostCfg.accounts.includes(l)) : found;
+}
+const accounts = labels().map((label) => {
+  const file = label === PRIMARY ? path.join(HOME, '.claude.json') : path.join(HOME, `.claude-${label}`, '.claude.json');
+  try {
+    const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const me = j.oauthAccount?.accountUuid ?? null;
+    const s = j.cachedUsageUtilization;
+    const mine = s && !(s.accountUuid && me && s.accountUuid !== me);
+    const win = (w) => (w ? { used: w.utilization ?? null, resetsAt: w.resets_at ?? null } : null);
+    return {
+      label,
+      email: j.oauthAccount?.emailAddress ?? null,
+      plan: PLANS[j.oauthAccount?.organizationType] ?? j.oauthAccount?.organizationType ?? null,
+      signedIn: Boolean(j.oauthAccount),
+      usageAt: mine ? new Date(s.fetchedAtMs).toISOString() : null,
+      fiveHour: mine ? win(s.utilization?.five_hour) : null,
+      weekly: mine ? win(s.utilization?.seven_day) : null,
+      otherSessions: others[label] ?? 0,
+    };
+  } catch (e) {
+    return { label, error: e.code === 'ENOENT' ? 'not signed in here' : e.message };
+  }
+});
+
+function memFree() {
+  try {
+    if (process.platform === 'darwin') return Number(execFileSync('sysctl', ['-n', 'kern.memorystatus_level'], { encoding: 'utf8' }).trim());
+    const info = fs.readFileSync('/proc/meminfo', 'utf8');
+    const kb = (key) => Number(info.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'))[1]);
+    return Math.round((kb('MemAvailable') / kb('MemTotal')) * 100);
+  } catch {
+    return null;
+  }
+}
+
+const paused = readText(path.join(LOCAL, 'PAUSED'));
+console.log(JSON.stringify({
+  host: HOST,
+  now: new Date().toISOString(),
+  enabled: (dc.enabledHosts ?? []).includes(HOST),
+  paused: paused ? paused.trim() : null,
+  maxWorkers: hostCfg.maxWorkers ?? dc.workerCap,
+  sentryWorkers: hostCfg.sentryWorkers ?? 0,
+  maxDispatchesPerDay: dc.maxDispatchesPerDay,
+  load: { cores: os.cpus().length, avg5: os.loadavg()[1], maxPerCore: hostCfg.maxLoadPerCore ?? dc.maxLoadPerCore },
+  memFreePercent: memFree(),
+  minMemFreePercent: hostCfg.minMemoryFreePercent ?? dc.minMemoryFreePercent,
+
+  state,
+  workers,
+  adhoc,
+  accounts,
+  log,
+  errors,
+}));

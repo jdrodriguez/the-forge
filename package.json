@@ -1,0 +1,14 @@
+{
+  "name": "agent-queue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A spec desk and an agent queue: Linear tickets built into pull requests by Claude Code workers across several accounts and machines.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test lib/test/*.test.mjs dispatcher/test/*.test.mjs inbox/test/*.test.mjs learning/test/*.test.mjs",
+    "test:fleet": "bash fleet/test-fleet.sh"
+  }
+}

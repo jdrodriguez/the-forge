@@ -1,0 +1,1782 @@
+#!/usr/bin/env node
+// dispatcher.mjs: the agent queue. A launchd job (or systemd timer) runs `tick` every 20 minutes. Each tick:
+//   1. checks main's CI on every commit it merged in the last day, and pauses itself on a failure;
+//   2. advances the tickets this machine dispatched: merges a PR that is green at a checked commit, sends a
+//      risky one (migrations, workflows, auth, billing and the like) to the orchestrator for review, marks one
+//      stuck when its worker has ended and nothing moves;
+//   3. tells the human's inbox when a worker sits blocked, waiting on input in its session;
+//   4. claims Linear tickets labeled ready and hands each to a fleet worker, within the caps, bundling up to
+//      bundle.maxTickets linked same-project tickets into one worker and one PR (config `dispatcher.bundle`);
+//   5. on sentryTriage.host, starts a Sentry triage run when sentryTriage.enabled (a module you supply).
+// Workers drive their own PRs to green (worker-brief.md). The dispatcher never writes code, and a tick makes no
+// model calls: it reads Linear, GitHub and the fleet's session list. Each transition (started, PR opened, merged,
+// needs a merge review, blocked, stuck, paused) shows a macOS notification, and `summary` prints the session-start line.
+//
+// Usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ENG-123 | redispatch ENG-123 | test-notify | pause [reason] | resume
+// Config: agent-queue.config.json at the repo root (lib/config.mjs). State, log and the PAUSED flag (per machine):
+// paths.stateDir. Files every machine reads (heartbeats, bundles, merge requests, main's state): paths.sharedDir.
+// Linear is the shared truth: ready -> building -> Verifying or stuck.
+//
+// Safety rules this file keeps: a pause is a file, re-read before every merge and dispatch, so a running tick
+// can never undo it; a transition is written to state before its side effects, so a failed comment or inbox
+// call is logged once, never repeated every tick; a claim is journaled before Linear is touched, and an
+// interrupted claim is reconciled against `fleet.sh ps` before anything is retried.
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { loadConfig, linearKey, ROOT } from '../lib/config.mjs';
+
+const HOME = os.homedir();
+const DIR = path.dirname(fileURLToPath(import.meta.url));
+const conf = loadConfig();
+const cfg = conf.dispatcher;
+const LOCAL = conf.paths.stateDir;
+const SHARED = conf.paths.sharedDir;
+const STATE = path.join(LOCAL, 'state.json');
+const PAUSED = path.join(LOCAL, 'PAUSED');
+const STREAK_RESET = path.join(LOCAL, 'STREAK_RESET');
+const LOG = path.join(LOCAL, 'dispatcher.log');
+const LOCK = path.join(LOCAL, 'tick.lock');
+const SLACK = conf.slack?.webhookFile ?? path.join(LOCAL, 'slack-webhook');
+const SLACK_BOT = conf.slack?.botTokenFile ?? path.join(LOCAL, 'slack-bot-token'); // the queue's Slack bot (chat:write), used only for the reviewer DM
+const FLEET = path.join(ROOT, 'fleet/fleet.sh');
+const ASK = path.join(ROOT, 'inbox/ask-human.sh');
+const HUMAN = conf.human?.name ?? 'the human';
+const REPO = conf.github.repo;
+const BASE = conf.github.baseBranch ?? 'main';
+const REVIEW_CHECK = conf.github.reviewCheck ?? null;
+const LINEAR_WS = conf.linear.workspace;
+const TEAM = conf.linear.team;
+const L = { ready: 'agent-ready', building: 'agent-building', stuck: 'agent-stuck', needsHuman: 'needs-human',
+  sentry: 'sentry-triaged', mechanical: 'sentry-mechanical', judgment: 'sentry-human-review', ...(conf.linear.labels ?? {}) };
+const STATES = { inProgress: 'In Progress', verifying: 'Verifying', ...(conf.linear.states ?? {}) };
+const SIZE_GROUP = conf.linear.sizeLabelGroup ?? 'Size';
+const PRIMARY = conf.fleet?.primaryAccount ?? 'a';
+const WORKSPACE = conf.workspaceCwd;
+const WORKTREES = path.join(conf.repoPath ?? '', conf.worktreesDir ?? '.claude/worktrees');
+const ORCH = conf.orchestrator?.sessionName ?? 'Specdesk';
+const REPO_NAME = REPO.split('/')[1];
+const GATED_PUSH = `node ${path.join(DIR, 'gated-push.mjs')}`;
+const branchFor = (id) => (conf.github.branchTemplate ?? 'agent/{id}').replaceAll('{id}', id.toLowerCase());
+const DRY = process.argv.includes('--dry-run');
+// `tick --dry-run --bundle` shows what bundling would do while the config still has it off.
+const FORCE_BUNDLE = DRY && process.argv.includes('--bundle');
+const HOST = os.hostname().split('.')[0];
+const LIVE = ['building', 'merge-asked'];
+const CLOSED_STATES = ['completed', 'canceled', 'duplicate'];
+const RISKY = (cfg.riskyPathPatterns ?? []).map((rx) => new RegExp(rx, 'i'));
+const hostCfg = cfg.hosts?.[HOST] ?? {}; // this machine's limits: maxWorkers, accounts, maxLoadPerCore, minMemoryFreePercent
+
+fs.mkdirSync(LOCAL, { recursive: true });
+
+const iso = () => new Date().toISOString();
+const hoursSince = (t) => (Date.now() - Date.parse(t)) / 3.6e6;
+function log(msg) {
+  const line = `${iso()} ${DRY ? '[dry-run] ' : ''}${msg}`;
+  console.log(line);
+  if (!DRY) fs.appendFileSync(LOG, `${line}\n`);
+}
+const run = (cmd, args, opts = {}) =>
+  execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000, cwd: HOME, ...opts }).trim();
+const errText = (e) => String(e?.stderr || e?.message || e).trim().slice(0, 400);
+
+// --- external systems -------------------------------------------------------------------------------
+
+let lkey;
+async function gql(query, variables = {}) {
+  // The environment first: over SSH a secrets manager may not reach the keychain, so a remote run passes the key in.
+  lkey ??= linearKey(conf);
+  const res = await fetch('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: { Authorization: lkey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = await res.json();
+  if (body.errors) throw new Error(`Linear: ${body.errors[0].message}`);
+  return body.data;
+}
+
+let ghToken;
+function gh(args) {
+  ghToken ??= run('gh', ['auth', 'token', '--hostname', 'github.com', '--user', conf.github.user]);
+  return run('gh', args, { env: { ...process.env, GH_TOKEN: ghToken } });
+}
+
+const addLabel = (i, l) => gql('mutation($i:String!,$l:String!){ issueAddLabel(id:$i, labelId:$l){ success } }', { i, l });
+const removeLabel = (i, l) => gql('mutation($i:String!,$l:String!){ issueRemoveLabel(id:$i, labelId:$l){ success } }', { i, l });
+const setState = (i, s) => gql('mutation($i:String!,$s:String!){ issueUpdate(id:$i, input:{stateId:$s}){ success } }', { i, s });
+const comment = (i, b) => gql('mutation($i:String!,$b:String!){ commentCreate(input:{issueId:$i, body:$b}){ success } }', { i, b });
+const issueId = async (identifier) => (await gql('query($id:String!){ issue(id:$id){ id } }', { id: identifier })).issue.id;
+
+function askHuman(ticket, type, ask, recommend, fallback) {
+  run(ASK, ['ask', ...(ticket ? [ticket] : []), '--type', type, '--ask', ask, '--recommend', recommend,
+    '--default', fallback, '--from', `agent dispatcher on ${HOST}`]);
+}
+
+// A macOS notification per transition, so the human sees the queue move without asking. A Linux host has no desktop
+// to show one on and relies on Slack. Progress events (started, PR opened, merged) also post to the queue's private
+// Slack channel through the webhook in slack.webhookFile; questions reach that channel through ask-human.sh.
+// Best effort: never throws.
+async function notify(subtitle, text, { id = null, link = null, progress = false } = {}) {
+  if (DRY || cfg.notify === false) return;
+  if (process.platform === 'darwin') {
+    try {
+      run('osascript', ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title "Agent queue" subtitle (item 1 of argv)',
+        '-e', 'end run', subtitle, text], { timeout: 10_000 });
+    } catch (e) {
+      log(`could not show a notification (${errText(e)})`);
+    }
+  }
+  if (!progress || !fs.existsSync(SLACK)) return;
+  const links = [id && `<https://linear.app/${LINEAR_WS}/issue/${id}|ticket>`, link && `<${link}|PR>`].filter(Boolean);
+  try {
+    const res = await fetch(fs.readFileSync(SLACK, 'utf8').trim(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: `*${subtitle}*: ${text}${links.length ? `  ${links.join(' · ')}` : ''}` }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 100)}`);
+  } catch (e) {
+    log(`could not post to Slack (${errText(e)})`);
+  }
+}
+
+// The command that opens a worker's session, for the blocked-worker ask. Fleet account a is the default config dir.
+const attachCmd = (t) => `${t.account === 'a' ? 'env -u CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=~/.claude-${t.account}`} claude attach ${t.workerId}`;
+
+// Side effects after a transition is recorded: each runs once, a failure is logged and kept on the ticket.
+async function effects(t, id, steps) {
+  for (const [what, fn] of steps) {
+    if (DRY) {
+      log(`would ${what}`);
+      continue;
+    }
+    try {
+      await fn();
+    } catch (e) {
+      (t.effectErrors ??= []).push(`${iso()} ${what}: ${errText(e)}`);
+      log(`${id}: could not ${what} (${errText(e)})`);
+    }
+  }
+}
+
+// m.label is keyed by role (ready, building, stuck), so the Linear label names can be anything in the config.
+async function teamMeta() {
+  const roles = ['ready', 'building', 'stuck'];
+  const d = await gql(`query($team:String!,$names:[String!]){
+    teams(filter:{key:{eq:$team}}){ nodes{ id states{ nodes{ id name } } } }
+    issueLabels(filter:{name:{in:$names}}){ nodes{ id name } } }`, { team: TEAM, names: roles.map((r) => L[r]) });
+  const team = d.teams.nodes[0];
+  const stateId = (name) => team.states.nodes.find((s) => s.name === name)?.id;
+  const byName = Object.fromEntries(d.issueLabels.nodes.map((l) => [l.name, l.id]));
+  const label = Object.fromEntries(roles.map((r) => [r, byName[L[r]]]));
+  for (const r of roles) if (!label[r]) throw new Error(`Linear label ${L[r]} is missing`);
+  return { inProgress: stateId(STATES.inProgress), verifying: stateId(STATES.verifying), label };
+}
+
+const labeled = async (label) => (await gql(`query($team:String!,$label:String!){ issues(first:100, filter:{team:{key:{eq:$team}},
+  labels:{name:{eq:$label}}, state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`,
+{ team: TEAM, label })).issues.nodes.map((n) => n.identifier);
+const building = () => labeled(L.building);
+
+// Progress decides whether a ticket needs the human, never elapsed time: a worker may take as long as the work takes.
+// Progress is a new commit on the branch, any PR activity, or the worker's session being busy.
+const ACTIVE = ['busy', 'working'];
+function workerState(workers, t) {
+  if (!workers || !workers.some((w) => w.label === t.account)) return 'unknown'; // that account's list didn't come back
+  const w = workers.find((x) => x.label === t.account && x.id === t.workerId);
+  return w ? w.status || w.state || 'unknown' : 'gone';
+}
+function trackProgress(t, sha, prUpdatedAt, state) {
+  const moved = (sha && sha !== t.lastSha) || (prUpdatedAt && prUpdatedAt !== t.lastPrUpdatedAt);
+  if (sha) t.lastSha = sha;
+  if (prUpdatedAt) t.lastPrUpdatedAt = prUpdatedAt;
+  if (moved) t.lastOutputAt = iso();
+  if (moved || ACTIVE.includes(state)) t.lastProgressAt = iso();
+  t.lastOutputAt ??= t.dispatchedAt;
+  t.lastProgressAt ??= t.dispatchedAt;
+}
+function branchSha(t) {
+  try {
+    return gh(['api', `repos/${REPO}/branches/${encodeURIComponent(t.branch)}`, '--jq', '.commit.sha']) || null;
+  } catch {
+    return null; // not pushed yet
+  }
+}
+
+const fleetWorkers = () => JSON.parse(run(FLEET, ['ps', '--json', '--all'], { timeout: 60_000 }));
+const fleetWorker = (name) => fleetWorkers().find((w) => w.name === name) ?? null;
+
+// Working fleet workers on this machine that no queue ticket points at, such as a rush ticket another session dispatched.
+// They share the machine with the queue, so they take its maxWorkers slots too. A row with no
+// process is a session left over from a restart, and an idle or done one has finished its turn.
+function outsideWorkers(st) {
+  const ours = new Set(Object.values(st.tickets).filter((t) => t.workerId).map((t) => `${t.account}/${t.workerId}`));
+  return fleetWorkers().filter((w) => w.kind === 'background' && w.pid && !['idle', 'done'].includes(w.state || w.status)
+    && !ours.has(`${w.label}/${w.id}`)).length;
+}
+
+// --- state, lock, pause ------------------------------------------------------------------------------
+
+function loadState() {
+  for (const file of [STATE, `${STATE}.bak`]) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      if (e.code === 'ENOENT') continue;
+      throw new Error(`${file} is unreadable (${e.message}); fix or remove it by hand`);
+    }
+  }
+  return { tickets: {}, dispatches: [], stuckStreak: 0, fresh: true };
+}
+function saveState(st) {
+  if (DRY) return;
+  delete st.fresh;
+  if (fs.existsSync(STATE)) fs.copyFileSync(STATE, `${STATE}.bak`);
+  fs.writeFileSync(`${STATE}.tmp`, `${JSON.stringify(st, null, 2)}\n`);
+  fs.renameSync(`${STATE}.tmp`, STATE);
+}
+
+const isPaused = () => fs.existsSync(PAUSED);
+const pauseReason = () => (isPaused() ? fs.readFileSync(PAUSED, 'utf8').trim() : null);
+
+function takeLock() {
+  try {
+    fs.mkdirSync(LOCK);
+    return true;
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    if (Date.now() - fs.statSync(LOCK).mtimeMs < 30 * 60_000) return false;
+    fs.rmdirSync(LOCK);
+    fs.mkdirSync(LOCK);
+    return true;
+  }
+}
+
+// The pause is written first, then the human is told. A failed notice is retried at the start of every tick.
+async function trip(st, reason) {
+  log(`circuit breaker: ${reason}`);
+  if (DRY) return;
+  if (!isPaused()) fs.writeFileSync(PAUSED, `${iso()} ${reason}\n`);
+  st.pendingNotice = reason;
+  saveState(st);
+  await notify('Queue paused', reason);
+  await sendPendingNotice(st);
+}
+async function sendPendingNotice(st) {
+  if (!st.pendingNotice || DRY) return;
+  try {
+    askHuman(null, 'blocked', `The agent dispatcher paused itself: ${st.pendingNotice}`,
+      `Check the cause, then run: node ${path.join(DIR, 'dispatcher.mjs')} resume`,
+      'it stays paused, so no new dispatches and no merges');
+    delete st.pendingNotice;
+    saveState(st);
+  } catch (e) {
+    log(`could not reach the inbox about the pause, will retry next tick (${errText(e)})`);
+  }
+}
+
+// The inbox's upkeep, once per tick (ask-human.sh sweep): post open asks that haven't reached Slack, and clear
+// the needs-human label from answered ones, so a reply in the Slack thread closes the item without anyone touching Linear.
+function inboxSweep() {
+  if (DRY) return log('would sweep the inbox');
+  try {
+    for (const line of run(ASK, ['sweep'], { timeout: 180_000 }).split('\n').filter(Boolean)) log(`inbox: ${line}`);
+  } catch (e) {
+    log(`inbox sweep failed (${errText(e)})`);
+  }
+}
+
+// --- 1. the merged commits' CI on main --------------------------------------------------------------
+
+// Whether a later push to main that contains `sha` passed the named workflow. Errors read as "no", so a failure to
+// check never hides a real break.
+function laterGreenRun(workflow, sha) {
+  try {
+    const runs = JSON.parse(gh(['run', 'list', '--repo', REPO, '--branch', BASE, '--workflow', workflow, '--event', 'push',
+      '--json', 'headSha,status,conclusion', '--limit', '15']));
+    return runs.some((r) => r.headSha !== sha && r.status === 'completed' && r.conclusion === 'success'
+      && ['ahead', 'identical'].includes(gh(['api', `repos/${REPO}/compare/${sha}...${r.headSha}`, '--jq', '.status']).trim()));
+  } catch {
+    return false;
+  }
+}
+
+async function checkMerged(st) {
+  for (const [id, t] of Object.entries(st.tickets)) {
+    if (t.status !== 'merged' || t.ciChecked || !t.mergedSha) continue;
+    let runs;
+    try {
+      // Only the runs the merge's push started. A nightly job that lands on this commit, or a manual run (a production
+      // promote that refused a SHA, say), says nothing about the merge, and both had paused the queue.
+      runs = JSON.parse(gh(['run', 'list', '--repo', REPO, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100']))
+        .filter((r) => r.event === 'push');
+    } catch (e) {
+      log(`${id}: could not read main's runs (${errText(e)})`);
+      continue;
+    }
+    const failed = runs.filter((r) => r.status === 'completed' && ['failure', 'timed_out', 'startup_failure'].includes(r.conclusion));
+    if (failed.length) {
+      // A flaky test fails one commit and passes the next (an e2e test did on one merge), and
+      // pausing the whole queue for it costs hours. So a failure counts only once no later main commit containing
+      // this merge has passed the same workflow, and only after waiting up to flakeWaitMinutes for one to run.
+      const recovered = failed.every((r) => laterGreenRun(r.name, t.mergedSha));
+      if (recovered) {
+        log(`${id}: ${failed.map((r) => r.name).join(', ')} failed on the merge commit but passed on a later main commit that contains it, so it was flaky; not pausing`);
+        t.ciChecked = true;
+      } else if (hoursSince(t.mergedAt) * 60 < (cfg.flakeWaitMinutes ?? 90)) {
+        log(`${id}: ${failed.map((r) => r.name).join(', ')} failed on the merge commit; waiting for a later main commit to show whether it is flaky`);
+      } else {
+        await trip(st, `checks failed on main after merging ${id}: ${failed.map((r) => r.name).join(', ')} (${t.pr})`);
+        t.ciChecked = true;
+      }
+    } else if ((runs.length && runs.every((r) => r.status === 'completed')) || hoursSince(t.mergedAt) > 6) {
+      t.ciChecked = true;
+    }
+    saveState(st);
+  }
+}
+
+// --- 2. advance the tickets this machine dispatched -------------------------------------------------
+
+// The PR is found once by branch, checked to be this repo into main, and pinned by number after that. A reopened ticket
+// reuses its branch name, so only a PR opened after this claim counts: a reopened ticket's old merged PR once read as
+// the rebuild's PR and the ticket went to Verifying 20 minutes into the build.
+function findPr(t, id) {
+  if (!t.prNumber) {
+    const list = JSON.parse(gh(['pr', 'list', '--repo', REPO, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']));
+    const since = Date.parse(t.claimedAt ?? t.dispatchedAt ?? 0);
+    const mine = list.filter((p) => p.baseRefName === BASE && !p.isCrossRepository && Date.parse(p.createdAt) >= since);
+    if (mine.length > 1) throw new Error(`${mine.length} PRs on ${t.branch}; pin one by setting prNumber in state.json`);
+    if (!mine.length) return null;
+    t.prNumber = mine[0].number;
+  }
+  const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json',
+    'number,url,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
+  if (pr.headRefName !== t.branch || pr.baseRefName !== BASE) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${BASE} (${id})`);
+  return pr;
+}
+
+// Green means GitHub calls it mergeable, the AI review check (github.reviewCheck) passed, and no review thread is open.
+function greenReason(pr) {
+  if (pr.isDraft) return 'draft';
+  if (!['CLEAN', 'HAS_HOOKS'].includes(pr.mergeStateStatus)) return `merge state ${pr.mergeStateStatus}`;
+  if (REVIEW_CHECK) {
+    const review = (pr.statusCheckRollup ?? []).find((c) => (c.name ?? c.context) === REVIEW_CHECK);
+    if (!review || (review.conclusion ?? review.state) !== 'SUCCESS') return `${REVIEW_CHECK} not passed`;
+  }
+  const [owner, name] = REPO.split('/');
+  const threads = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']));
+  const rt = threads.data.repository.pullRequest.reviewThreads;
+  if (rt.totalCount > rt.nodes.length) return 'more than 100 review threads';
+  const open = rt.nodes.filter((n) => !n.isResolved).length;
+  return open ? `${open} unresolved review thread(s)` : null;
+}
+
+// Every changed path and rename source, paginated. A count short of changedFiles is treated as risky.
+// The PR's entry in the base branch's merge queue, or null when it is not queued (or the queue cannot be read).
+function queueEntry(number) {
+  try {
+    const [owner, name] = REPO.split('/');
+    const out = gh(['api', 'graphql', '-f', `query=query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${Number(number)}){mergeQueueEntry{state position}}}}`,
+      '--jq', '.data.repository.pullRequest.mergeQueueEntry']);
+    return out && out !== 'null' ? JSON.parse(out) : null;
+  } catch {
+    return null;
+  }
+}
+
+function riskyPaths(pr) {
+  const out = gh(['api', `repos/${REPO}/pulls/${pr.number}/files`, '--paginate', '--jq', '.[] | "\\(.filename)\\t\\(.previous_filename // "")"']);
+  const rows = out ? out.split('\n') : [];
+  const paths = rows.flatMap((r) => r.split('\t')).filter(Boolean);
+  if (rows.length < pr.changedFiles) return [`(only ${rows.length} of ${pr.changedFiles} files could be read)`];
+  return [...new Set(paths.filter((p) => RISKY.some((rx) => rx.test(p))))];
+}
+
+const MERGE_REQUESTS = path.join(SHARED, 'merge-requests');
+function requestMerge(id, pr, risky) {
+  if (DRY) return log(`would request the orchestrator's merge of ${id}`);
+  fs.mkdirSync(MERGE_REQUESTS, { recursive: true });
+  fs.writeFileSync(path.join(MERGE_REQUESTS, `${id}.json`), `${JSON.stringify({
+    id, pr: pr.number, url: pr.url, head: pr.headRefOid, risky, host: HOST, at: iso(),
+  }, null, 2)}\n`);
+}
+const clearMergeRequest = (id) => fs.rmSync(path.join(MERGE_REQUESTS, `${id}.json`), { force: true });
+
+// Sentry fix tickets (Sentry triage labels them linear.labels.sentry) get their own worker slots on a host that
+// offers hosts.<name>.sentryWorkers, apart from its maxWorkers: a side worker for Sentry work that never takes a
+// regular slot and sits idle when there is none. Every machine writes a heartbeat to the synced
+// heartbeats folder each tick. While a Sentry host's heartbeat is fresh and unpaused, the other machines leave Sentry
+// tickets to it; when it is offline or paused, they build them as usual, so a fix never waits on one machine.
+const HEARTBEATS = path.join(SHARED, 'heartbeats');
+const isSentry = (issue) => issue.labels.nodes.some((l) => l.name === L.sentry);
+function writeHeartbeat() {
+  if (DRY) return;
+  fs.mkdirSync(HEARTBEATS, { recursive: true });
+  fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify({ host: HOST, at: iso(), paused: isPaused() })}\n`);
+}
+function liveSentryHost() {
+  for (const host of cfg.enabledHosts) {
+    if (host === HOST || !(cfg.hosts?.[host]?.sentryWorkers > 0)) continue;
+    try {
+      const beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
+      if (!beat.paused && hoursSince(beat.at) * 60 < (cfg.sentryHeartbeatMinutes ?? 45)) return host;
+    } catch {
+      // No heartbeat yet reads as offline.
+    }
+  }
+  return null;
+}
+
+// A bundle is a lead ticket plus companions that ride on the lead's worker, branch and PR (every
+// extra PR costs CI runs and a review round). The lead's state entry carries `bundle`; each companion's carries
+// `bundledInto` and the status 'bundled', which no loop advances on its own: the lead settles it. Each machine writes
+// its live bundles to the synced bundles folder, so every machine counts a bundle as one worker against maxConcurrent.
+const BUNDLES = path.join(SHARED, 'bundles');
+function writeBundle(lead, companions) {
+  if (DRY) return;
+  fs.mkdirSync(BUNDLES, { recursive: true });
+  fs.writeFileSync(path.join(BUNDLES, `${lead}.json`), `${JSON.stringify({ lead, companions, host: HOST, at: iso() })}\n`);
+}
+const clearBundle = (lead) => !DRY && fs.rmSync(path.join(BUNDLES, `${lead}.json`), { force: true });
+function bundledCompanions() {
+  let files = [];
+  try {
+    files = fs.readdirSync(BUNDLES).filter((f) => f.endsWith('.json'));
+  } catch {
+    return new Set();
+  }
+  return new Set(files.flatMap((f) => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(BUNDLES, f), 'utf8')).companions ?? [];
+    } catch {
+      return [];
+    }
+  }));
+}
+const sizeOf = (issue) => issue.labels.nodes.find((l) => l.parent?.name === SIZE_GROUP)?.name;
+// Specdesk marks a ticket sliced thin on purpose with "Ships alone: <reason>" in its decisions; it never bundles.
+const shipsAlone = (issue) => /^\s*[*-]?\s*\**Ships alone\b/im.test(issue.description ?? '');
+const openBlockers = (issue) => issue.inverseRelations.nodes.filter((r) => r.type === 'blocks'
+  && !CLOSED_STATES.includes(r.issue.state.type) && r.issue.state.name !== 'Verifying');
+
+// Two tickets belong together when they share a parent ticket or are linked to each other directly (blocks, related).
+// A shared project alone is not enough: a broad project holds unrelated work, and project-only bundling once would
+// have put an admin tool's edits into an unrelated messaging PR.
+const linkedIds = (issue) => [
+  ...(issue.relations?.nodes ?? []).map((r) => r.relatedIssue?.identifier),
+  ...(issue.inverseRelations?.nodes ?? []).map((r) => r.issue?.identifier),
+].filter(Boolean);
+const linked = (a, b) => (a.parent?.identifier && a.parent.identifier === b.parent?.identifier)
+  || linkedIds(a).includes(b.identifier) || linkedIds(b).includes(a.identifier);
+
+// The companions a lead takes: other ready tickets in its project, linked to the lead or to a companion already taken,
+// of a bundle size, not marked Ships alone, with no open blocker outside the bundle, in queue order, up to
+// bundle.maxTickets in all.
+function pickCompanions(lead, ready, taken) {
+  const b = cfg.bundle ?? {};
+  const sizes = b.sizes ?? ['S', 'M'];
+  if (!(b.enabled || FORCE_BUNDLE) || !lead.project?.id || !sizes.includes(sizeOf(lead)) || shipsAlone(lead)) return [];
+  const picked = [];
+  for (const c of ready) {
+    if (picked.length >= (b.maxTickets ?? 3) - 1) break;
+    if (c === lead || taken.has(c.identifier) || c.project?.id !== lead.project.id || !sizes.includes(sizeOf(c)) || shipsAlone(c)) continue;
+    if (![lead, ...picked].some((x) => linked(c, x)) || isSentry(c) !== isSentry(lead)) continue;
+    const inBundle = new Set([lead.identifier, ...picked.map((p) => p.identifier)]);
+    if (openBlockers(c).some((r) => !inBundle.has(r.issue.identifier))) continue;
+    picked.push(c);
+  }
+  return picked;
+}
+
+// A bundle's companions follow their lead: to Verifying when it merges, to agent-stuck when it is stuck, and out of
+// the queue when its PR is closed under review.
+async function settleCompanions(st, m, id, t, how, { pr = null, reason = '' } = {}) {
+  if (!t.bundle?.length) return;
+  clearBundle(id);
+  for (const cid of t.bundle) {
+    const c = st.tickets[cid];
+    if (c?.status !== 'bundled') continue;
+    let ciid;
+    try {
+      ciid = await issueId(cid);
+    } catch (e) {
+      log(`${cid}: could not look up the ticket to settle it with ${id}, trying next tick (${errText(e)})`);
+      continue;
+    }
+    if (how === 'merged') {
+      // ciChecked: the lead's merge commit is this ticket's too, and checkMerged watches it once, on the lead.
+      Object.assign(c, { status: 'merged', mergedAt: iso(), mergedSha: pr?.mergeCommit?.oid ?? null, ciChecked: true });
+      saveState(st);
+      log(`${cid}: merged with ${id}`);
+      await effects(c, cid, [
+        [`remove agent-building from ${cid}`, () => removeLabel(ciid, m.label.building)],
+        [`move ${cid} to Verifying`, () => setState(ciid, m.verifying)],
+        [`comment the merge on ${cid}`, () => comment(ciid, `Merged ${pr.url} together with ${id} (agent dispatcher on ${HOST}). Moved to ${STATES.verifying}.`)],
+      ]);
+    } else if (how === 'stuck') {
+      Object.assign(c, { status: 'stuck', stuckAt: iso(), reason: `its bundle lead ${id} is stuck: ${reason}` });
+      saveState(st);
+      log(`${cid}: stuck with ${id}`);
+      await effects(c, cid, [
+        [`label ${cid} agent-stuck`, () => addLabel(ciid, m.label.stuck)],
+        [`remove agent-building from ${cid}`, () => removeLabel(ciid, m.label.building)],
+        [`comment why ${cid} is stuck`, () => comment(ciid, `Agent dispatcher gave up on this ticket's bundle with ${id}: ${reason}. Labeled ${L.stuck}; see ${id} for the PR and the question to ${HUMAN}.`)],
+      ]);
+    } else {
+      Object.assign(c, { status: 'closed', closedAt: iso() });
+      saveState(st);
+      await effects(c, cid, [[`remove agent-building from ${cid}`, () => removeLabel(ciid, m.label.building)]]);
+    }
+    saveState(st);
+  }
+}
+
+// A green PR merges only once it is known to work with the main it lands on (premerge-check.mjs, 2026-11-04). When
+// main has moved since its CI ran, this merges current main into it locally and type-checks, on every machine. A fail
+// updates the PR branch with main, so CI re-runs, goes red and the worker fixes the clash. A check that could not run
+// (no CI run found, or the type-check was killed, as earlyoom does on a small box) holds the merge to the next tick.
+async function freshEnough(id, t, pr) {
+  // While main is red (main-watch.mjs, every 3 minutes, synced to every machine), no queue PR merges: piling onto a
+  // red main hides the next break, and every pre-merge check would fail on main's own error. The responder's fix PR
+  // is not a queue ticket, so it is never held here. A state file older than 15 minutes is ignored.
+  let mainState = null;
+  try {
+    mainState = JSON.parse(fs.readFileSync(path.join(SHARED, 'main-state.json'), 'utf8'));
+  } catch { /* no watcher state yet */ }
+  if (mainState?.status === 'red' && hoursSince(mainState.updatedAt) < 0.25) {
+    t.note = `green, held while main is red (since ${String(mainState.redSha).slice(0, 10)})`;
+    log(`${id}: green, holding the merge while main is red`);
+    return false;
+  }
+  let r;
+  try {
+    const { premergeCheck } = await import('./premerge-check.mjs');
+    r = premergeCheck(pr.number, pr.headRefOid, { log });
+  } catch (e) {
+    log(`${id}: pre-merge check could not run, trying next tick (${errText(e)})`);
+    return false;
+  }
+  if (!r.stale) return true;
+  if (r.ok) {
+    log(`${id}: pre-merge check passed against main ${r.main.slice(0, 8)}`);
+    return true;
+  }
+  if (r.unchecked) {
+    t.note = `green, pre-merge check could not run (${r.reason})`;
+    log(`${id}: pre-merge check could not run (${r.reason}), trying next tick`);
+    return false;
+  }
+  t.note = `pre-merge check failed: ${r.reason}`;
+  log(`${id}: pre-merge check failed: ${r.reason}\n${r.output ?? ''}`);
+  try {
+    gh(['api', '-X', 'PUT', `repos/${REPO}/pulls/${pr.number}/update-branch`, '-f', `expected_head_sha=${pr.headRefOid}`]);
+    log(`${id}: updated PR #${pr.number} with main so CI re-runs and shows the clash`);
+    await comment(await issueId(id), `Agent dispatcher on ${HOST}: held the merge. Merging current main into this PR fails: ${r.reason}. The PR branch was updated with main, so its CI re-runs and shows the error; the worker fixes it there.\n\n\`\`\`\n${(r.output ?? '').slice(0, 1500)}\n\`\`\``);
+  } catch (e) {
+    log(`${id}: could not update the branch or comment (${errText(e)})`);
+  }
+  return false;
+}
+
+// --- Sentry merge paths: mechanical merges itself, judgment waits on the reviewer -------------------------------
+
+// Sentry triage labels each fix mechanical or judgment (linear.labels) and writes the reason in the spec's
+// "## Merge path". A mechanical PR merges when green, as any queue PR. A judgment PR gets the reviewer (config
+// `reviewer`) as its GitHub reviewer, one ticket comment and one Slack DM, and merges only once the reviewer's latest
+// review approves the current head. A Sentry ticket with neither label (triaged before the merge path existed) counts
+// as judgment. Without branch protection GitHub's reviewDecision stays empty, and a review bot may post APPROVED
+// reviews of its own, so the gate reads the reviewer's reviews by login instead.
+const REVIEWER = { name: 'the reviewer', github: '', slackUser: '', fallbackChannel: conf.slack?.channel ?? '', ...(conf.reviewer ?? {}) };
+const RV = REVIEWER.name;
+const MERGE_LABELS = { mechanical: L.mechanical, judgment: L.judgment };
+const ESCALATION = /^[ \t>*_-]*Merge path:\s*human-review\b[\s:.,()-]*(.*)$/im;
+
+// The Sentry and merge-path labels of the given open tickets, in one query.
+async function sentryLabelsOf(ids) {
+  if (!ids.length) return {};
+  const numbers = ids.map((x) => Number(x.split('-')[1])).filter(Number.isInteger);
+  const d = await gql(`query($team:String!,$numbers:[Float!]){ issues(first:100, filter:{team:{key:{eq:$team}}, number:{in:$numbers}}){
+    nodes{ identifier labels{ nodes{ name } } } } }`, { team: TEAM, numbers });
+  const wanted = new Set(ids);
+  return Object.fromEntries(d.issues.nodes.filter((n) => wanted.has(n.identifier)).map((n) => [n.identifier, n.labels.nodes.map((l) => l.name)]));
+}
+
+// Judgment unless every Sentry ticket in the PR is labeled mechanical. Non-Sentry tickets have no merge path.
+function mergePathOf(id, t, labels) {
+  const members = [id, ...(t.bundle ?? [])].map((x) => labels[x] ?? []);
+  const sentry = members.some((l) => l.includes(L.sentry) || l.includes(MERGE_LABELS.judgment) || l.includes(MERGE_LABELS.mechanical));
+  if (!sentry) return null;
+  if (t.reviewer?.escalated || members.some((l) => l.includes(MERGE_LABELS.judgment))) return 'judgment';
+  return members.every((l) => !l.includes(L.sentry) || l.includes(MERGE_LABELS.mechanical)) ? 'mechanical' : 'judgment';
+}
+
+let mergeLabelIdCache = null;
+async function mergeLabelIds() {
+  if (mergeLabelIdCache) return mergeLabelIdCache;
+  const d = await gql(`query{ issueLabels(first:10, filter:{name:{in:["${MERGE_LABELS.mechanical}","${MERGE_LABELS.judgment}"]}}){ nodes{ id name parent{ name } } } }`);
+  const ids = Object.fromEntries(d.issueLabels.nodes.filter((l) => !l.parent).map((l) => [l.name, l.id]));
+  if (!ids[MERGE_LABELS.judgment]) {
+    ids[MERGE_LABELS.judgment] = (await gql('mutation($n:String!,$d:String!){ issueLabelCreate(input:{name:$n, color:"#7c3aed", description:$d}){ issueLabel{ id } } }',
+      { n: MERGE_LABELS.judgment, d: `Sentry fix: needs a human call, its PR waits on ${RV}'s review` })).issueLabelCreate.issueLabel.id;
+  }
+  mergeLabelIdCache = ids;
+  return ids;
+}
+
+// A mechanical ticket turned judgment: the worker said so in the PR body, or its green PR touches reviewed paths.
+// The label swap runs once; the escalation itself is kept in state, so the PR waits on the reviewer even if the swap failed.
+async function escalate(st, id, t, reason) {
+  if (t.reviewer?.escalated) return;
+  (t.reviewer ??= {}).escalated = reason;
+  saveState(st);
+  log(`${id}: treated as judgment, so it waits on ${RV}'s review: ${reason}`);
+  if (DRY) return;
+  try {
+    const ids = await mergeLabelIds();
+    for (const x of [id, ...(t.bundle ?? [])]) {
+      const iid = await issueId(x);
+      if (ids[MERGE_LABELS.mechanical]) await removeLabel(iid, ids[MERGE_LABELS.mechanical]).catch(() => {});
+      await addLabel(iid, ids[MERGE_LABELS.judgment]);
+    }
+  } catch (e) {
+    (t.effectErrors ??= []).push(`${iso()} swap ${id} to ${MERGE_LABELS.judgment}: ${errText(e)}`);
+    log(`${id}: could not swap its label to ${MERGE_LABELS.judgment} (${errText(e)})`);
+  }
+}
+
+// One-time side effect with its own record in t.reviewer[key]. A failure the effect calls definite (it surely did not
+// happen) is retried on later ticks, up to `tries`; an ambiguous one (a timeout, where it may have happened) is not,
+// so a restart or a flaky network never sends the reviewer a second request, comment or DM.
+async function reviewerOnce(st, id, t, key, what, fn, { tries = 3, idempotent = false } = {}) {
+  const j = (t.reviewer ??= {});
+  const rec = j[key] ?? {};
+  if (rec.done || (rec.tries ?? 0) >= tries) return Boolean(rec.done);
+  // Still marked in flight from a run that ended mid-call: it may have happened, so a comment or DM is never resent.
+  if (rec.inFlight && !idempotent) return false;
+  if (DRY) {
+    log(`would ${what}`);
+    return false;
+  }
+  j[key] = { ...rec, tries: (rec.tries ?? 0) + 1, at: iso(), inFlight: true };
+  saveState(st);
+  try {
+    const extra = await fn();
+    Object.assign(j[key], { done: iso() }, extra && typeof extra === 'object' ? extra : {});
+    delete j[key].inFlight;
+    saveState(st);
+    return true;
+  } catch (e) {
+    // Retried only when it surely did not happen (the service refused it), or when repeating it is harmless.
+    if (idempotent || e.definite === true) delete j[key].inFlight;
+    (t.effectErrors ??= []).push(`${iso()} ${what}: ${errText(e)}`);
+    log(`${id}: could not ${what}${j[key].inFlight ? ', and it may have happened, so it is not retried' : ''} (${errText(e)})`);
+    saveState(st);
+    return false;
+  }
+}
+
+async function slackPost(channel, text) {
+  let token;
+  try {
+    token = fs.readFileSync(SLACK_BOT, 'utf8').trim();
+  } catch {
+    throw Object.assign(new Error(`no Slack bot token at ${SLACK_BOT}`), { definite: true });
+  }
+  let res;
+  try {
+    res = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ channel, text, unfurl_links: false, unfurl_media: false }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw Object.assign(new Error(`Slack did not answer (${e.message})`), { definite: false });
+  }
+  const body = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
+  if (!body.ok) throw Object.assign(new Error(`Slack refused the post: ${body.error}`), { slackError: body.error, definite: true });
+  return body.channel;
+}
+
+// The reviewer's DM. Slack's chat.postMessage docs: with chat:write, a user ID as `channel` posts to that user's DM with the
+// app (its App Home Messages tab); im:write is only needed for conversations.open. When the app's Messages tab is off
+// Slack answers messages_tab_disabled, and channel_not_found when the app may not DM that user. Either one falls back
+// to a post in the fallback channel that mentions them.
+async function dmReviewer(text) {
+  try {
+    return { channel: await slackPost(REVIEWER.slackUser, text), via: 'dm' };
+  } catch (e) {
+    if (!['messages_tab_disabled', 'channel_not_found', 'cannot_dm_bot', 'not_allowed_token_type'].includes(e.slackError)) throw e;
+    log(`${RV}'s DM was refused (${e.slackError}), posting in the fallback channel instead`);
+    return { channel: await slackPost(REVIEWER.fallbackChannel, `<@${REVIEWER.slackUser}> ${text}`), via: 'agent-queue', dmError: e.slackError };
+  }
+}
+
+// The reviews on a PR, oldest first, and the inline comments of one review.
+function readReviews(n) {
+  const out = gh(['api', `repos/${REPO}/pulls/${n}/reviews?per_page=100`, '--paginate', '--jq', '.[] | {id, state, body, commit_id, submitted_at, login: .user.login}']);
+  return out.split('\n').filter(Boolean).map((l) => JSON.parse(l)).sort((a, b) => Date.parse(a.submitted_at) - Date.parse(b.submitted_at));
+}
+function reviewComments(n, reviewId) {
+  const out = gh(['api', `repos/${REPO}/pulls/${n}/reviews/${reviewId}/comments?per_page=100`, '--paginate', '--jq', '.[] | {path, line: (.line // .original_line), body}']);
+  return out.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+const quote = (text) => String(text ?? '').trim().replace(/^/gm, '> ');
+function changesNote(id, pr, review, comments) {
+  const inline = comments.map((c) => `- \`${c.path}${c.line ? `:${c.line}` : ''}\`\n${quote(c.body).replace(/^/gm, '  ')}`).join('\n');
+  const text = `${RV} reviewed PR #${pr.number} for ${id} (${pr.url}) and requested changes. Address every point below: change the code where the review is right, and where you disagree, explain why in your reply. Then push once through ${GATED_PUSH}, reply on each review thread saying what changed, and drive the PR back to green. Do not merge; the dispatcher merges once ${RV} approves. Continue from the existing branch and PR (its worktree under ${WORKTREES}/ may hold unpushed commits; check it first).\n\n${RV}'s review:\n${quote(review.body) || '> (no summary comment)'}\n${inline ? `\nInline comments:\n${inline}\n` : ''}`;
+  return `${text.slice(0, 8000)}\n\n`;
+}
+
+// The reviewer's latest deciding review (APPROVED or CHANGES_REQUESTED) on the PR, or undefined.
+const reviewerLatest = (n) => readReviews(n).filter((r) => r.login?.toLowerCase() === String(REVIEWER.github).toLowerCase()
+  && ['APPROVED', 'CHANGES_REQUESTED'].includes(r.state)).at(-1);
+
+// The judgment path for one open, non-draft PR. Returns 'approved' when the reviewer's latest review approves the
+// current head, 'changes' when their latest review on the current head requests changes (routed to a worker here), or
+// 'waiting'.
+async function reviewerReview(st, id, t, pr, workers, why) {
+  const j = (t.reviewer ??= {});
+  const title = t.title ?? id;
+  await reviewerOnce(st, id, t, 'requested', `request ${REVIEWER.github}'s review on PR #${pr.number}`,
+    () => gh(['pr', 'edit', String(pr.number), '--repo', REPO, '--add-reviewer', REVIEWER.github]), { idempotent: true });
+  if (!j.commented?.done) {
+    await reviewerOnce(st, id, t, 'commented', `comment the review request on ${id}`, async () => {
+      const iid = await issueId(id).catch((e) => { throw Object.assign(e, { definite: true }); });
+      try {
+        await comment(iid, `Agent dispatcher on ${HOST}: ${pr.url} needs ${RV}'s review before it merges. Why: ${why}. ${RV} is requested as the PR's reviewer and was sent a Slack message. The PR merges once they approve it and it is green; if they request changes, a worker addresses them and the PR goes back to them.`);
+      } catch (e) {
+        if (/^Linear: /.test(e.message)) e.definite = true; // Linear answered with an error, so nothing was posted
+        throw e;
+      }
+    });
+  }
+  if (!j.dm?.done) {
+    await reviewerOnce(st, id, t, 'dm', `send ${RV} a Slack message about ${id}`, async () => dmReviewer(
+      `${id} (${title}) has a PR waiting on your review: ${pr.url}. It is a Sentry fix the agent queue flagged for a human call, and it merges once you approve it.`));
+  }
+
+  const latest = reviewerLatest(pr.number);
+  if (latest?.state === 'APPROVED' && latest.commit_id === pr.headRefOid) return 'approved';
+
+  if (latest?.state === 'CHANGES_REQUESTED' && latest.commit_id === pr.headRefOid) {
+    j.handledReviews ??= [];
+    if (j.handledReviews.includes(latest.id)) {
+      t.note = `${RV} requested changes; a worker is addressing them`;
+      return 'changes';
+    }
+    // A replacement already started for this review by a run that ended before recording it: adopt it.
+    if (j.routing?.review === latest.id) {
+      let started = null;
+      try {
+        started = fleetWorkers().find((w) => w.name === workerName(id) && !(w.label === j.routing.fromAccount && w.id === j.routing.fromWorker)) ?? null;
+      } catch (e) {
+        log(`${id}: could not list fleet workers to check ${RV}'s review round (${errText(e)})`);
+        t.note = `${RV} requested changes; checking for its worker`;
+        return 'changes';
+      }
+      if (started) {
+        Object.assign(t, { account: started.label, workerId: started.id, workerName: started.name, goneTicks: 0, lastProgressAt: iso(), lastOutputAt: iso() });
+        j.handledReviews.push(latest.id);
+        delete j.routing;
+        t.note = `${RV} requested changes; a worker is addressing them`;
+        saveState(st);
+        log(`${id}: adopted worker ${started.label}/${started.id} for ${RV}'s requested changes`);
+        return 'changes';
+      }
+    }
+    // Only a worker known to have ended is replaced. An unreadable fleet list reads as "unknown", which waits.
+    const state = workerState(workers, t);
+    if (!['gone', 'done', 'failed', 'idle', 'stopped'].includes(state)) {
+      t.note = `${RV} requested changes; its worker ${t.account}/${t.workerId} is ${state}`;
+      log(`${id}: ${RV} requested changes; its worker is ${state}, so no second worker`);
+      return 'changes';
+    }
+    if (DRY) {
+      log(`would start a worker on ${id} to address ${RV}'s requested changes`);
+      return 'changes';
+    }
+    let note;
+    try {
+      note = changesNote(id, pr, latest, reviewComments(pr.number, latest.id));
+    } catch (e) {
+      log(`${id}: could not read ${RV}'s review comments, trying next tick (${errText(e)})`);
+      t.note = `${RV} requested changes; reading the review`;
+      return 'changes';
+    }
+    // Journal the round before dispatching, so a run that ends mid-dispatch adopts the worker instead of starting another.
+    j.routing = { review: latest.id, fromAccount: t.account, fromWorker: t.workerId, at: iso() };
+    saveState(st);
+    let out = null;
+    try {
+      out = await replaceWorker(st, id, t, { note, why: `${RV} requested changes on ${pr.url}` });
+    } catch (e) {
+      log(`${id}: starting a worker for ${RV}'s changes failed; the next tick adopts it if it started (${errText(e)})`);
+      t.note = `${RV} requested changes; checking whether its worker started`;
+      return 'changes';
+    }
+    if (!out) {
+      delete j.routing; // no account had room, so nothing started
+      t.note = `${RV} requested changes; waiting for an account with room for a worker`;
+      saveState(st);
+      return 'changes';
+    }
+    j.handledReviews.push(latest.id);
+    delete j.routing;
+    j.changesAt = iso();
+    t.note = `${RV} requested changes; a worker is addressing them`;
+    saveState(st);
+    return 'changes';
+  }
+
+  // A push after their review: ask them again, once per head, so GitHub tells them there is something new to look at.
+  if (latest && latest.commit_id !== pr.headRefOid && j.rerequestedFor !== pr.headRefOid && !DRY) {
+    j.rerequestedFor = pr.headRefOid;
+    saveState(st);
+    try {
+      gh(['pr', 'edit', String(pr.number), '--repo', REPO, '--add-reviewer', REVIEWER.github]);
+      log(`${id}: new commits since ${RV}'s last review, asked them to review again`);
+    } catch (e) {
+      log(`${id}: could not re-request ${RV}'s review (${errText(e)})`);
+    }
+  }
+  return 'waiting';
+}
+
+// The reason a judgment PR waits on the reviewer, for the ticket comment: the worker's escalation, then the spec's
+// "## Merge path" reason, then the no-label default.
+async function judgmentWhy(id, t, labels) {
+  if (t.reviewer?.escalated && t.title) return t.reviewer.escalated;
+  if (t.reviewer?.why && t.title) return t.reviewer.why;
+  const why = await readJudgmentWhy(id, t, labels);
+  if (!t.reviewer?.escalated) (t.reviewer ??= {}).why = why;
+  return why;
+}
+async function readJudgmentWhy(id, t, labels) {
+  try {
+    const { issue } = await gql('query($id:String!){ issue(id:$id){ title description } }', { id });
+    t.title ??= issue.title;
+    if (t.reviewer?.escalated) return t.reviewer.escalated;
+    const m = (issue.description ?? '').match(/^##\s*Merge path\s*\n[\s\S]*?^Reason:\s*(.+?)\.?\s*$/im);
+    if (m) return m[1];
+  } catch (e) {
+    log(`${id}: could not read its merge-path reason (${errText(e)})`);
+  }
+  if (t.reviewer?.escalated) return t.reviewer.escalated;
+  return (labels[id] ?? []).includes(MERGE_LABELS.judgment) ? 'Sentry triage marked it as needing a human call'
+    : 'it is a Sentry fix with no merge-path verdict from triage, so it counts as a judgment call';
+}
+
+// A stuck ticket's PR can still be merged by hand later (one merged while status listed it as stuck for days). Re-read each stuck PR at most hourly and record a merge. Linear is left alone: whoever merged it
+// already moved the ticket on, and the merge's CI is long settled.
+async function settleStuck(st) {
+  for (const [id, t] of Object.entries(st.tickets)) {
+    if (t.status !== 'stuck' || !t.prNumber || (t.stuckCheckedAt && hoursSince(t.stuckCheckedAt) < 1)) continue;
+    t.stuckCheckedAt = iso();
+    try {
+      const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json', 'state,mergedAt,mergeCommit,url']));
+      if (pr.state === 'MERGED') {
+        clearMergeRequest(id);
+        Object.assign(t, { status: 'merged', mergedAt: pr.mergedAt, mergedSha: pr.mergeCommit?.oid ?? null, ciChecked: true,
+          note: 'merged outside the dispatcher after it was stuck' });
+        log(`${id}: its stuck PR ${pr.url} was merged outside the dispatcher; recorded as merged`);
+        clearBundle(id);
+        for (const cid of t.bundle ?? []) {
+          const c = st.tickets[cid];
+          if (['bundled', 'stuck'].includes(c?.status)) Object.assign(c, { status: 'merged', mergedAt: pr.mergedAt, ciChecked: true, note: `merged with ${id} outside the dispatcher` });
+        }
+      }
+    } catch (e) {
+      log(`${id}: could not re-read its stuck PR (${errText(e)})`);
+    }
+    saveState(st);
+  }
+}
+
+async function finishMerged(st, m, id, t, pr) {
+  clearMergeRequest(id);
+  Object.assign(t, { status: 'merged', mergedAt: iso(), mergedSha: pr.mergeCommit?.oid ?? null });
+  st.stuckStreak = 0;
+  saveState(st);
+  log(`${id}: merged ${pr.url}`);
+  await notify(`${id} merged`, `Moved to ${STATES.verifying}`, { id, link: pr.url, progress: true });
+  const iid = await issueId(id);
+  await effects(t, id, [
+    [`remove agent-building from ${id}`, () => removeLabel(iid, m.label.building)],
+    [`move ${id} to Verifying`, () => setState(iid, m.verifying)],
+    [`comment the merge on ${id}`, () => comment(iid, `Merged ${pr.url} (agent dispatcher on ${HOST}). Moved to ${STATES.verifying}.`)],
+  ]);
+  saveState(st);
+  // The merge no longer passes --delete-branch (the merge queue refuses it), so the branch goes here. One the repo
+  // already deleted is fine.
+  if (!DRY && t.branch) {
+    try {
+      gh(['api', '-X', 'DELETE', `repos/${REPO}/git/refs/heads/${t.branch}`]);
+    } catch (e) {
+      if (!/Reference does not exist|Not Found|422|404/i.test(errText(e))) log(`${id}: could not delete ${t.branch} (${errText(e)})`);
+    }
+  }
+  await settleCompanions(st, m, id, t, 'merged', { pr });
+}
+
+async function markStuck(st, m, id, t, reason) {
+  Object.assign(t, { status: 'stuck', stuckAt: iso(), reason });
+  st.stuckStreak = (st.stuckStreak ?? 0) + 1;
+  saveState(st);
+  log(`${id}: stuck, ${reason}`);
+  const withBundle = t.bundle?.length ? `${id} (bundled with ${t.bundle.join(', ')})` : id;
+  await notify(`${withBundle} is stuck`, reason);
+  const iid = await issueId(id);
+  await effects(t, id, [
+    [`label ${id} agent-stuck`, () => addLabel(iid, m.label.stuck)],
+    [`remove agent-building from ${id}`, () => removeLabel(iid, m.label.building)],
+    [`comment why ${id} is stuck`, () => comment(iid, `Agent dispatcher gave up: ${reason}. Labeled ${L.stuck}. Worker ${t.account}/${t.workerId} may still be running.`)],
+    [`ask ${HUMAN} about ${id}`, () => askHuman(id, 'blocked', `${withBundle} is stuck: ${reason}. Re-queue it, take it over, or rescope it?`,
+      `Read the PR and its threads; if the spec holds, remove ${L.stuck} and add ${L.ready} to re-queue`,
+      `it stays ${L.stuck} and the dispatcher leaves it alone`)],
+  ]);
+  saveState(st);
+  await settleCompanions(st, m, id, t, 'stuck', { reason });
+  if (st.stuckStreak >= cfg.stuckInARowTrips) await trip(st, `${st.stuckStreak} tickets in a row got stuck (latest ${id})`);
+}
+
+async function advance(st, m, workers) {
+  if (!Object.values(st.tickets).some((t) => LIVE.includes(t.status))) return;
+  const waiting = new Set(await labeled(L.needsHuman));
+  const liveIds = Object.entries(st.tickets).filter(([, t]) => LIVE.includes(t.status)).flatMap(([id, t]) => [id, ...(t.bundle ?? [])]);
+  let sentryLabels = {};
+  try {
+    sentryLabels = await sentryLabelsOf(liveIds);
+  } catch (e) {
+    // Unknown labels must never let a judgment PR merge: hold every Sentry merge this tick.
+    sentryLabels = null;
+    log(`could not read the Sentry merge-path labels, so no queue PR merges this tick (${errText(e)})`);
+  }
+  for (const [id, t] of Object.entries(st.tickets)) {
+    if (!LIVE.includes(t.status)) continue;
+    // A question about a companion holds the bundle's one worker, so it counts as waiting on the lead too.
+    t.waiting = waiting.has(id) || (t.bundle ?? []).some((c) => waiting.has(c));
+    let pr;
+    const hadPr = Boolean(t.prNumber);
+    try {
+      pr = findPr(t, id);
+    } catch (e) {
+      log(`${id}: could not read its PR, trying next tick (${errText(e)})`);
+      continue;
+    }
+    if (pr) t.pr = pr.url;
+    const state = workerState(workers, t);
+    trackProgress(t, pr?.headRefOid ?? branchSha(t), pr?.updatedAt, state);
+    saveState(st);
+    if (pr && !hadPr) {
+      log(`${id}: PR opened ${pr.url}`);
+      await notify(`${id} opened a PR`, `PR #${pr.number}`, { id, link: pr.url, progress: true });
+    }
+
+    if (pr?.state === 'MERGED') {
+      await finishMerged(st, m, id, t, pr);
+      continue;
+    }
+    if (pr?.state === 'CLOSED') {
+      if (t.status === 'merge-asked') {
+        Object.assign(t, { status: 'closed', closedAt: iso() });
+        clearMergeRequest(id);
+        saveState(st);
+        log(`${id}: PR closed while waiting on its merge review, left closed`);
+        const iid = await issueId(id);
+        await effects(t, id, [[`remove agent-building from ${id}`, () => removeLabel(iid, m.label.building)]]);
+        saveState(st);
+        await settleCompanions(st, m, id, t, 'closed');
+      } else {
+        await markStuck(st, m, id, t, `PR ${pr.url} was closed without merging`);
+      }
+      continue;
+    }
+
+    // The Sentry merge path. A judgment PR (or a mechanical one the worker escalated in its PR body) gets the
+    // reviewer's review once it is open and out of draft, and merges only on their approval. A ticket already sent to the
+    // orchestrator stays with it.
+    let path = null;
+    let verdict = null;
+    if (pr) {
+      // Labels unread: a known judgment PR keeps waiting on the reviewer, and every other green PR is held, since a label
+      // may have changed to judgment since the last read.
+      if (sentryLabels === null) path = t.sentryPath === 'judgment' ? 'judgment' : 'unknown';
+      else path = mergePathOf(id, t, sentryLabels);
+      if (path) t.sentryPath = path;
+      if (path === 'judgment' && t.status === 'merge-asked') {
+        // Asked of the orchestrator before the merge path existed: a judgment PR is the reviewer's to approve.
+        if (!DRY) clearMergeRequest(id);
+        t.status = 'building';
+        log(`${id}: a judgment Sentry PR, so it moves from the orchestrator's merge review to ${RV}'s`);
+      }
+      const flagged = pr.body?.match(ESCALATION);
+      if (path === 'mechanical' && flagged) {
+        await escalate(st, id, t, `the worker flagged it in the PR body: ${flagged[1].trim().replace(/\.$/, '') || 'no reason given'}`);
+        path = 'judgment';
+        t.sentryPath = path;
+      }
+      if (path === 'judgment' && !pr.isDraft) {
+        try {
+          verdict = await reviewerReview(st, id, t, pr, workers, await judgmentWhy(id, t, sentryLabels ?? {}));
+        } catch (e) {
+          log(`${id}: could not read ${RV}'s review state, trying next tick (${errText(e)})`);
+          saveState(st);
+          continue;
+        }
+        saveState(st);
+        // The reviewer's requested changes are with a worker: that is never a stall.
+        if (verdict === 'changes') continue;
+      }
+    }
+
+    let notGreen = pr ? null : 'no PR yet';
+    if (pr) {
+      try {
+        notGreen = greenReason(pr);
+      } catch (e) {
+        log(`${id}: could not check PR #${pr.number}, trying next tick (${errText(e)})`);
+        continue;
+      }
+    }
+    t.note = notGreen ? `not green: ${notGreen}` : 'green';
+    if (!notGreen && path === 'unknown') {
+      t.note = 'green, held: the Sentry merge-path labels could not be read';
+      continue;
+    }
+    if (!notGreen && path === 'judgment' && verdict !== 'approved') {
+      // Waiting on the reviewer is never a stall, the same as waiting on the human's answer.
+      t.note = `waiting on ${RV}'s review`;
+      continue;
+    }
+    if (!notGreen) {
+      // An approved judgment PR has had the reviewer's review, so its reviewed paths need no second one.
+      let risky = [];
+      if (path !== 'judgment') {
+        try {
+          risky = riskyPaths(pr);
+        } catch (e) {
+          log(`${id}: could not list PR #${pr.number}'s files, trying next tick (${errText(e)})`);
+          continue;
+        }
+      }
+      // A green PR that touches reviewed paths goes to the orchestrator session for review and merge, so a finished,
+      // green, built-to-spec PR never waits on the human's merge button (a worker waiting on a merge holds its slot).
+      // The request file lands in the shared merge-requests folder, which the orchestrator watches. It escalates to
+      // the human only for a trust boundary or a change beyond the ticket's spec.
+      if (risky.length && path === 'mechanical') {
+        // A mechanical fix that touches reviewed paths is a judgment call: the reviewer reviews it instead of the orchestrator.
+        await escalate(st, id, t, `its PR touches reviewed paths (${risky.slice(0, 5).join(', ')})`);
+        t.sentryPath = 'judgment';
+        try {
+          verdict = await reviewerReview(st, id, t, pr, workers, t.reviewer.escalated);
+        } catch (e) {
+          log(`${id}: could not read ${RV}'s review state, trying next tick (${errText(e)})`);
+        }
+        saveState(st);
+        if (verdict !== 'approved') {
+          if (verdict !== 'changes') t.note = `waiting on ${RV}'s review`;
+          continue;
+        }
+      } else if (risky.length) {
+        t.note = 'green, waiting on the orchestrator\'s review and merge';
+        if (t.status !== 'merge-asked' || t.riskySha !== pr.headRefOid) {
+          Object.assign(t, { status: 'merge-asked', mergeAskedAt: t.mergeAskedAt ?? iso(), riskySha: pr.headRefOid });
+          saveState(st);
+          log(`${id}: green but touches ${risky.length} reviewed path(s), sent to the orchestrator to review and merge`);
+          await effects(t, id, [[`request the orchestrator's merge of ${id}`, () => requestMerge(id, pr, risky)]]);
+          saveState(st);
+        }
+        continue;
+      }
+      if (t.status === 'merge-asked') continue; // The orchestrator merges an asked PR, even if a later push looks safe.
+      if (isPaused()) {
+        t.note = 'green, held while the queue is paused';
+        log(`${id}: green, not merging while paused`);
+        continue;
+      }
+      // With a merge queue on the base branch, `gh pr merge` enqueues the PR and the queue lands it after its
+      // merge_group run; a queued PR is left to the queue, and the tick that sees it MERGED finishes it.
+      const queued = queueEntry(pr.number);
+      if (queued) {
+        t.note = `green, in the merge queue (${queued.state.toLowerCase()}, position ${queued.position})`;
+        continue;
+      }
+      if (DRY) {
+        log(`would squash-merge ${pr.url} at ${pr.headRefOid.slice(0, 8)}`);
+        continue;
+      }
+      if (!(await freshEnough(id, t, pr))) continue;
+      if (path === 'judgment') {
+        // The pre-merge check can take minutes: re-read the reviewer's verdict so a review they changed meanwhile wins.
+        let still;
+        try {
+          still = reviewerLatest(pr.number);
+        } catch (e) {
+          log(`${id}: could not re-read ${RV}'s review before merging, trying next tick (${errText(e)})`);
+          continue;
+        }
+        if (still?.state !== 'APPROVED' || still.commit_id !== pr.headRefOid) {
+          log(`${id}: ${RV}'s approval no longer holds on ${pr.headRefOid.slice(0, 8)}, not merging`);
+          continue;
+        }
+      }
+      try {
+        // No --delete-branch: gh refuses it while the merge queue is on. finishMerged deletes the branch.
+        gh(['pr', 'merge', String(pr.number), '--repo', REPO, '--squash', '--match-head-commit', pr.headRefOid]);
+      } catch (e) {
+        log(`${id}: merge refused, trying next tick (${errText(e)})`);
+        continue;
+      }
+      const after = findPr(t, id);
+      if (after.state === 'MERGED') await finishMerged(st, m, id, t, after);
+      else if (queueEntry(pr.number)) log(`${id}: added to the merge queue`);
+      else log(`${id}: merge did not complete (state ${after.state}), trying next tick`);
+      continue;
+    }
+
+    if (t.waiting) t.note = `waiting on your answer; ${t.note}`;
+    log(`${id}: not green yet (${notGreen}), ${Math.round(hoursSince(t.dispatchedAt) * 10) / 10}h in, last progress ${Math.round(hoursSince(t.lastProgressAt) * 10) / 10}h ago, worker ${state}`);
+    if (t.status === 'building') await checkStall(st, m, id, t, pr, notGreen, state);
+  }
+}
+
+// Never fails a ticket for taking long. A long run gets an informational post every longRunNoticeHours; a ticket
+// that stops moving gets one note to the human and stays in the queue; only a worker that is gone, with nothing
+// moving for stallHours, makes the ticket stuck. Waiting on the human's answer is never a stall.
+async function checkStall(st, m, id, t, pr, notGreen, state) {
+  const where = pr ? `PR ${pr.url}` : `branch ${t.branch}`;
+  const idle = hoursSince(t.lastProgressAt);
+  // A worker the fleet reports as failed has ended too (a machine's daemon was killed under two workers once, and
+  // they sat in "failed", holding their slots, with no path to stuck).
+  t.goneTicks = ['gone', 'done', 'failed'].includes(state) ? (t.goneTicks ?? 0) + 1 : 0;
+  // With no PR, or a PR that conflicts with main, nothing can move once the worker has ended, so two ticks of an
+  // ended worker are enough. Waiting stallHours there once kept a machine's two slots idle for 3h.
+  // A PR without conflicts keeps the full wait, since its CI and review can still go green after the worker ends.
+  const deadEnd = !pr || ['DIRTY', 'CONFLICTING'].includes(pr.mergeStateStatus);
+  // "failed" means the session itself died (a reboot or a killed daemon), not that the worker gave up, so its ticket
+  // gets one replacement worker before it can go stuck. "done" and "gone" keep going straight to stuck.
+  if (t.goneTicks >= 2 && state === 'failed' && (t.redispatches ?? 0) < (cfg.maxRedispatches ?? 1)) {
+    try {
+      if (await replaceWorker(st, id, t)) return;
+      log(`${id}: its worker failed and no account has room for a replacement`);
+    } catch (e) {
+      log(`${id}: could not replace its failed worker (${errText(e)})`);
+    }
+  }
+  if (t.goneTicks >= 2 && (deadEnd || idle > cfg.stallHours)) {
+    return markStuck(st, m, id, t, `its worker ${t.account}/${t.workerId} has ended and ${where} has not moved in ${Math.round(idle)}h (${notGreen})`);
+  }
+  const elapsed = hoursSince(t.dispatchedAt);
+  const runs = Math.floor(elapsed / cfg.longRunNoticeHours);
+  if (runs > (t.longRunNotices ?? 0)) {
+    t.longRunNotices = runs;
+    saveState(st);
+    await notify(`${id} still going`, `${Math.round(elapsed)}h in, worker ${state}, ${notGreen}`, { id, link: pr?.url, progress: true });
+  }
+  if (t.waiting) return;
+  const quiet = hoursSince(t.lastOutputAt);
+  const stalled = idle > cfg.stallHours ? `nothing has moved for ${Math.round(idle)}h and its worker is ${state}`
+    : ACTIVE.includes(state) && quiet > cfg.spinHours ? `its worker has been busy for ${Math.round(quiet)}h without a commit or PR change`
+      : null;
+  if (!stalled) {
+    if (t.stalledSince) {
+      delete t.stalledSince;
+      saveState(st);
+      log(`${id}: moving again`);
+    }
+    return;
+  }
+  if (t.stalledSince) return;
+  t.stalledSince = iso();
+  saveState(st);
+  log(`${id}: stalled, ${stalled}`);
+  await notify(`${id} stalled`, stalled);
+  await effects(t, id, [[`tell ${HUMAN} ${id} stalled`, () => askHuman(id, 'blocked', `${id} has stalled: ${stalled}. ${where}: ${notGreen}.`,
+    `Open the worker's session and nudge it: ${attachCmd(t)}`, 'the ticket stays in the queue and the dispatcher keeps watching it')]]);
+  saveState(st);
+}
+
+// --- 3. watch the workers ---------------------------------------------------------------------------
+
+// A worker blocked on input in its session has stopped, and the stall check would only notice it hours later.
+// The human hears once per block; the mark clears when the worker moves again. Runs while paused, too.
+async function watchWorkers(st, workers) {
+  const live = Object.entries(st.tickets).filter(([, t]) => t.status === 'building' && t.workerId);
+  if (!live.length || !workers) return;
+  for (const [id, t] of live) {
+    const w = workers.find((x) => x.label === t.account && x.id === t.workerId);
+    if ((w?.status || w?.state) !== 'blocked') {
+      if (t.blockedSince) {
+        delete t.blockedSince;
+        saveState(st);
+        log(`${id}: worker ${t.account}/${t.workerId} is moving again`);
+      }
+      continue;
+    }
+    if (t.blockedSince) continue;
+    t.blockedSince = iso();
+    saveState(st);
+    log(`${id}: worker ${t.account}/${t.workerId} is blocked, waiting on input`);
+    await notify(`${id}'s worker is blocked`, 'It is waiting on input in its session');
+    await effects(t, id, [[`tell ${HUMAN} ${id}'s worker is blocked`, () => askHuman(id, 'blocked',
+      `The worker building ${id} (${t.account}/${t.workerId}) is waiting on input in its session and has stopped working.`,
+      `Open its session and answer it: ${attachCmd(t)}`,
+      'it stays blocked; the ticket stays in the queue')]]);
+    saveState(st);
+  }
+}
+
+// A signed-out account would otherwise just stop getting work. The human hears once per sign-out; the mark clears
+// when it signs back in. Only the accounts this machine may use count.
+async function watchSignIns(st) {
+  let accounts;
+  try {
+    accounts = JSON.parse(run(FLEET, ['accounts', '--json'], { timeout: 60_000 }));
+  } catch (e) {
+    return log(`could not read the fleet's accounts (${errText(e)})`);
+  }
+  st.signedOut ??= {};
+  // An account taken off this machine's lists stops being watched, so forget any sign-out it left behind.
+  for (const label of Object.keys(st.signedOut)) {
+    if (!usedHere(label)) {
+      delete st.signedOut[label];
+      saveState(st);
+      log(`account ${label} is no longer used on ${HOST}, so its sign-out is dropped`);
+    }
+  }
+  for (const a of accounts) {
+    if (!usedHere(a.label)) continue;
+    if (a.signed_in) {
+      if (st.signedOut[a.label]) {
+        delete st.signedOut[a.label];
+        saveState(st);
+        log(`account ${a.label} is signed in again`);
+      }
+      continue;
+    }
+    if (st.signedOut[a.label]) continue;
+    st.signedOut[a.label] = iso();
+    saveState(st);
+    log(`account ${a.label} (${a.email ?? 'unknown'}) on ${HOST} is signed out, so it gets no work`);
+    await notify(`Account ${a.label} signed out`, `${a.email ?? 'unknown'} on ${HOST} gets no work until it signs back in`, { progress: true });
+    if (DRY) continue;
+    try {
+      askHuman(null, 'blocked', `Fleet account ${a.label} (${a.email ?? 'unknown'}) on ${HOST} is signed out, so it gets no queue work.`,
+        `Sign it back in: ${path.join(ROOT, 'fleet/setup/add-account.sh')} <here or machine name> ${a.label} ${a.email ?? '<email>'}`,
+        'the queue keeps running on the other accounts');
+    } catch (e) {
+      log(`could not tell ${HUMAN} account ${a.label} is signed out (${errText(e)})`);
+    }
+  }
+}
+
+// --- 4. dispatch ready tickets ----------------------------------------------------------------------
+
+// Percent of memory free: macOS's memory pressure level, or MemAvailable over MemTotal on Linux.
+function memoryFreePercent() {
+  if (process.platform === 'darwin') return Number(run('sysctl', ['-n', 'kern.memorystatus_level']));
+  const info = fs.readFileSync('/proc/meminfo', 'utf8');
+  const kb = (key) => Number(info.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'))[1]);
+  return Math.round((kb('MemAvailable') / kb('MemTotal')) * 100);
+}
+
+// A machine with no room claims nothing. The ticket stays agent-ready in Linear for its next tick or another machine's.
+function machineBusy() {
+  const perCore = hostCfg.maxLoadPerCore ?? cfg.maxLoadPerCore;
+  const minFree = hostCfg.minMemoryFreePercent ?? cfg.minMemoryFreePercent;
+  const cores = os.cpus().length;
+  const load = os.loadavg()[1];
+  if (perCore && load > perCore * cores) return `load ${Math.round(load)} is over its limit of ${Math.round(perCore * cores)} on ${cores} cores`;
+  if (minFree) {
+    const free = memoryFreePercent();
+    if (free < minFree) return `only ${free}% of memory is free, under its limit of ${minFree}%`;
+  }
+  return null;
+}
+
+// hosts.<host>.fallbackAccounts get queue work only when no regular account can take it, which in practice means
+// the regular ones are under headroomFloorPercent.
+const fallbackAccounts = hostCfg.fallbackAccounts ?? [];
+const usedHere = (label) => fallbackAccounts.includes(label) || !hostCfg.accounts || hostCfg.accounts.includes(label);
+
+function pickAccount(accounts) {
+  const floor = cfg.headroomFloorPercent;
+  // A plan with no 5-hour window reports five_hour as null once its usage is known; that is no limit, not an empty
+  // one. The weekly window is still required.
+  const fiveHourOk = (u) => u.five_hour == null || (u.five_hour.remaining_percentage ?? -1) >= floor;
+  const usable = (a) => a.signed_in && a.working < cfg.workerCap && a.usage?.available
+    && fiveHourOk(a.usage) && (a.usage.weekly?.remaining_percentage ?? -1) >= floor;
+  // Spread usage away from the primary account, which the human's own sessions use.
+  const best = (pool) => pool.filter(usable)
+    .sort((x, y) => (x.label === PRIMARY) - (y.label === PRIMARY) || y.usage.weekly.remaining_percentage - x.usage.weekly.remaining_percentage)[0] ?? null;
+  const regular = accounts.filter((a) => usedHere(a.label) && !fallbackAccounts.includes(a.label));
+  return best(regular) ?? best(accounts.filter((a) => fallbackAccounts.includes(a.label)));
+}
+
+// The worker brief's config placeholders, filled once before the ticket placeholders.
+const fillConfig = (text) => text
+  .replaceAll('{{HUMAN}}', HUMAN)
+  .replaceAll('{{REPO}}', REPO)
+  .replaceAll('{{REPO_NAME}}', REPO_NAME)
+  .replaceAll('{{REPO_PATH}}', conf.repoPath ?? '')
+  .replaceAll('{{WORKTREES}}', WORKTREES)
+  .replaceAll('{{BASE}}', BASE)
+  .replaceAll('{{ROOT}}', ROOT)
+  .replaceAll('{{GATED_PUSH}}', GATED_PUSH)
+  .replaceAll('{{REVIEW_CHECK}}', REVIEW_CHECK ?? 'the AI review check')
+  .replaceAll('{{REVIEWER}}', RV)
+  .replaceAll('{{JUDGMENT_LABEL}}', L.judgment);
+
+// The worker brief for one ticket, or for a bundle: the lead first, then its companions. A bundle gets one header,
+// a note on building the tickets together, and one ticket section per ticket.
+function brief(issues, branch) {
+  const [lead] = issues;
+  const fill = (text, issue) => text
+    .replaceAll('{{ID}}', issue.identifier)
+    .replaceAll('{{BRANCH}}', branch)
+    .replaceAll('{{TITLE}}', issue.title)
+    .replaceAll('{{URL}}', issue.url)
+    .replaceAll('{{DESCRIPTION}}', issue.description || `(The ticket has no description. Ask ${HUMAN} before building.)`);
+  const template = fillConfig(fs.readFileSync(path.join(DIR, 'worker-brief.md'), 'utf8'));
+  if (issues.length === 1) return fill(template, lead);
+  const at = template.search(/^## Ticket \{\{ID\}\}/m);
+  const head = at < 0 ? template : template.slice(0, at);
+  const section = at < 0 ? '## Ticket {{ID}}: {{TITLE}}\n\n{{URL}}\n\n{{DESCRIPTION}}\n' : template.slice(at);
+  const ids = issues.map((i) => i.identifier);
+  const list = ids.join(', ');
+  const note = `This is a bundle. The agent dispatcher gave you ${issues.length} tickets from one Linear project, ${list}, to build together as one pull request, because every extra PR costs CI runs and a review round. Where the brief below says ${lead.identifier}, it means the whole bundle, except in ask-human commands. Build every ticket's full spec: each ticket's acceptance scenarios must run. Give each ticket its own commits, each subject starting with that ticket's ID. The PR title starts with "${list}: ". The PR body keeps every section of the repo's pull request template once for the whole PR, and adds one short section per ticket for what it changed. A question about one ticket goes to ask-human.sh with that ticket's own ID, in both the ask and the wait command. If one ticket turns out not to belong in this PR (a decision that blocks only it, or a risky change that deserves its own review), ask about it with its ID and keep building the others.\n\n`;
+  const header = fill(head, lead)
+    .replace(`Build Linear ticket ${lead.identifier} in ${REPO_NAME} as one pull request.`, `Build Linear tickets ${list} in ${REPO_NAME} as one pull request.`)
+    .replace(`PR title starts with "${lead.identifier}: "`, `PR title starts with "${list}: "`);
+  return note + header + issues.map((i) => fill(section, i)).join('\n');
+}
+
+const workerName = (id) => `queue-${id.toLowerCase()}`;
+
+// A claim interrupted by a crash or an ambiguous dispatch error: adopt the worker if it exists, else undo.
+async function reconcileClaims(st, m) {
+  for (const [id, t] of Object.entries(st.tickets)) {
+    if (t.status !== 'claiming') continue;
+    let worker;
+    try {
+      worker = fleetWorker(workerName(t.bundledInto ?? id));
+    } catch (e) {
+      log(`${id}: could not list fleet workers to reconcile its claim (${errText(e)})`);
+      continue;
+    }
+    if (worker) {
+      const ids = { account: worker.label, workerId: worker.id, workerName: worker.name, dispatchedAt: t.dispatchedAt ?? t.claimedAt };
+      if (t.bundledInto) {
+        Object.assign(t, { ...ids, status: 'bundled' });
+      } else {
+        Object.assign(t, { ...ids, status: 'building' });
+        st.dispatches.push(t.claimedAt);
+        if (t.bundle?.length) writeBundle(id, t.bundle);
+      }
+      saveState(st);
+      log(`${id}: interrupted claim reconciled, worker ${worker.label}/${worker.id} is running`);
+      continue;
+    }
+    if (DRY) {
+      log(`would undo the interrupted claim on ${id}`);
+      continue;
+    }
+    const iid = await issueId(id);
+    await effects(t, id, [
+      [`put agent-ready back on ${id}`, () => addLabel(iid, m.label.ready)],
+      [`remove agent-building from ${id}`, () => removeLabel(iid, m.label.building)],
+      ...(t.priorStateId ? [[`restore ${id}'s state`, () => setState(iid, t.priorStateId)]] : []),
+    ]);
+    delete st.tickets[id];
+    saveState(st);
+    log(`${id}: interrupted claim undone, back in the queue`);
+  }
+}
+
+// The queue bar's mechanical half (Specdesk's SPECDESK.md has the whole bar): the spec floor's scenarios, a Size the
+// queue takes, and a priority. `check ENG-123` runs it on one ticket.
+function readyProblems(issue) {
+  const problems = [];
+  if (!/^##\s*Acceptance scenarios/im.test(issue.description ?? '')) problems.push('no "## Acceptance scenarios" section');
+  const size = issue.labels.nodes.find((l) => l.parent?.name === SIZE_GROUP)?.name;
+  if (!size) problems.push(`no ${SIZE_GROUP} label (${cfg.queueSizes.join(' or ')})`);
+  else if (!cfg.queueSizes.includes(size)) problems.push(`${SIZE_GROUP} ${size} is too big for one worker, so split it`);
+  if (!issue.priority) problems.push('no priority');
+  return problems;
+}
+
+// A ticket under the bar goes back to the human instead of to a worker. The label comes off first, so a failed comment
+// or inbox call can never repeat on the next tick.
+async function sendBack(m, issue, problems) {
+  const id = issue.identifier;
+  const why = problems.join('; ');
+  log(`${id}: not queued, ${why}`);
+  if (DRY) return;
+  try {
+    await removeLabel(issue.id, m.label.ready);
+  } catch (e) {
+    return log(`${id}: could not remove agent-ready, trying next tick (${errText(e)})`);
+  }
+  await effects({}, id, [
+    [`comment why ${id} was not queued`, () => comment(issue.id, `Not queued (agent dispatcher on ${HOST}): ${why}. The queue takes a ticket that meets the spec floor (the agent queue's \`docs/ticket-spec.md\`), carries a ${SIZE_GROUP} label of ${cfg.queueSizes.join(' or ')}, and has a priority. Fix it, then add ${L.ready} again.`)],
+    [`ask ${HUMAN} about ${id}`, () => askHuman(id, 'blocked', `${id} was sent back from the agent queue: ${why}.`,
+      `Finish its spec in ${ORCH}, then add ${L.ready} again`, 'it stays out of the queue')],
+  ]);
+  await notify(`${id} sent back`, why);
+}
+
+async function dispatch(st, m) {
+  if (isPaused()) return log(`paused (${pauseReason()}), not dispatching`);
+  st.dispatches = (st.dispatches ?? []).filter((d) => hoursSince(d) < 24);
+
+  const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}},
+    labels:{name:{eq:$ready}}, state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{
+      id identifier title url priority createdAt description state{ id } project{ id } parent{ identifier }
+      labels{ nodes{ name parent{ name } } }
+      relations(first:50){ nodes{ type relatedIssue{ identifier } } }
+      inverseRelations(first:100){ nodes{ type issue{ identifier state{ name type } } } } } } }`, { team: TEAM, ready: L.ready });
+  const rank = (p) => (p === 0 ? 5 : p);
+  const ready = [];
+  for (const i of q.issues.nodes) {
+    if (i.labels.nodes.some((l) => [L.building, L.stuck].includes(l.name)) || st.tickets[i.identifier]) continue;
+    const problems = readyProblems(i);
+    if (problems.length) await sendBack(m, i, problems);
+    else ready.push(i);
+  }
+  ready.sort((a, b) => rank(a.priority) - rank(b.priority) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  if (!ready.length) return log('queue empty');
+
+  const busy = machineBusy();
+  if (busy) return log(`${ready.length} ready, none claimed: this machine is busy, ${busy}`);
+
+  // A bundle is one worker: its companions carry agent-building too, so they are left out of the count.
+  const companions = bundledCompanions();
+  const active = (await building()).filter((id) => !companions.has(id)).length;
+  const liveHere = Object.values(st.tickets).filter((t) => t.status === 'building');
+  const queued = liveHere.filter((t) => !t.sentry).length;
+  const sentrySlots = hostCfg.sentryWorkers ?? 0;
+  let sentryRoom = sentrySlots - liveHere.filter((t) => t.sentry).length;
+  const sentryHost = sentrySlots > 0 ? null : liveSentryHost();
+  let outside;
+  try {
+    outside = outsideWorkers(st);
+  } catch (e) {
+    return log(`${ready.length} ready, none claimed: could not count this machine's other fleet workers (${errText(e)})`);
+  }
+  const local = queued + outside;
+  let room = (hostCfg.maxWorkers ?? Infinity) - local;
+  // maxDispatchesPerDay is optional: with many small, quick PRs a daily cap runs out fast and the work stops.
+  // Worker slots and maxConcurrent still bound the queue.
+  const dailyCap = cfg.maxDispatchesPerDay ?? Infinity;
+  let slots = Math.min(cfg.maxConcurrent - active, dailyCap - st.dispatches.length, Math.max(room, 0) + Math.max(sentryRoom, 0));
+  if (slots <= 0) return log(`no slots for ${ready.length} ready: ${active}/${cfg.maxConcurrent} building across machines, ${local}/${hostCfg.maxWorkers ?? 'no limit'} on this machine${sentrySlots ? `, Sentry slot ${sentrySlots - sentryRoom}/${sentrySlots}` : ''}${outside ? ` (${outside} outside the queue)` : ''}, ${st.dispatches.length}${Number.isFinite(dailyCap) ? `/${dailyCap}` : ''} dispatched today`);
+
+  let accounts = null;
+  const taken = new Set(); // companions this tick bundled, so they are never dispatched on their own as well
+  for (const issue of ready) {
+    if (slots <= 0) break;
+    if (taken.has(issue.identifier)) continue;
+    const blockers = openBlockers(issue);
+    if (blockers.length) {
+      log(`${issue.identifier}: waiting on ${blockers.map((b) => b.issue.identifier).join(', ')}`);
+      continue;
+    }
+    if (isSentry(issue) && sentryHost) {
+      log(`${issue.identifier}: left for ${sentryHost}'s Sentry slot`);
+      continue;
+    }
+    const useSentrySlot = isSentry(issue) && sentrySlots > 0;
+    if (useSentrySlot ? sentryRoom <= 0 : room <= 0) continue;
+    accounts ??= JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 }));
+    const acct = pickAccount(accounts);
+    if (!acct) {
+      log(`${issue.identifier}: no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom, trying next tick`);
+      break;
+    }
+    const id = issue.identifier;
+    const branch = branchFor(id);
+    // Another machine may have claimed it since the list was read. This narrows that race; staggered ticks do the rest.
+    const now = await gql('query($id:String!){ issue(id:$id){ labels{ nodes{ name } } } }', { id });
+    if (!now.issue.labels.nodes.some((l) => l.name === L.ready)) {
+      log(`${id}: another machine claimed it first`);
+      continue;
+    }
+    const mates = [];
+    for (const c of pickCompanions(issue, ready, taken)) {
+      const cur = await gql('query($id:String!){ issue(id:$id){ labels{ nodes{ name } } } }', { id: c.identifier });
+      if (cur.issue.labels.nodes.some((l) => l.name === L.ready)) mates.push(c);
+    }
+    for (const c of mates) taken.add(c.identifier);
+    const members = [issue, ...mates];
+    const bundleIds = mates.map((c) => c.identifier);
+    const withMates = bundleIds.length ? ` (bundled with ${bundleIds.join(', ')})` : '';
+    slots -= 1;
+    if (useSentrySlot) sentryRoom -= 1;
+    else room -= 1;
+    acct.working += 1;
+    if (DRY) {
+      log(`would dispatch ${id}${withMates} to account ${acct.label} on ${branch}${useSentrySlot ? ' in the Sentry slot' : ''}`);
+      continue;
+    }
+    if (isPaused()) return log('paused mid-tick, stopping dispatch');
+
+    // Journal the claim before touching Linear, so a crash anywhere below is reconciled next tick.
+    const t = { status: 'claiming', claimedAt: iso(), branch, priorStateId: issue.state.id,
+      ...(bundleIds.length ? { bundle: bundleIds } : {}), ...(useSentrySlot ? { sentry: true } : {}) };
+    st.tickets[id] = t;
+    for (const c of mates) st.tickets[c.identifier] = { status: 'claiming', claimedAt: iso(), branch, priorStateId: c.state.id, bundledInto: id };
+    saveState(st);
+    let out = null;
+    try {
+      for (const member of members) {
+        await addLabel(member.id, m.label.building);
+        await removeLabel(member.id, m.label.ready);
+        await setState(member.id, m.inProgress);
+      }
+      out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
+        '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
+        '--no-report', '--', brief(members, branch)],
+      { timeout: 180_000 }));
+    } catch (e) {
+      log(`${id}: claim or dispatch failed, reconciling (${errText(e)})`);
+      await reconcileClaims(st, m);
+      continue;
+    }
+    Object.assign(t, { status: 'building', dispatchedAt: iso(), account: out.label, workerId: out.id, workerName: out.name });
+    for (const c of mates) Object.assign(st.tickets[c.identifier], { status: 'bundled', dispatchedAt: iso(), account: out.label, workerId: out.id, workerName: out.name });
+    if (bundleIds.length) writeBundle(id, bundleIds);
+    st.dispatches.push(iso());
+    saveState(st);
+    log(`${id}: dispatched to ${out.label}/${out.id}${withMates}${useSentrySlot ? ' in the Sentry slot' : ''}`);
+    await notify(`${id} started`, `Worker ${out.label}/${out.id}: ${issue.title}${withMates}`, { id, progress: true });
+    for (const c of mates) {
+      await effects(st.tickets[c.identifier], c.identifier, [[`comment the bundle on ${c.identifier}`, () => comment(c.id,
+        `Agent dispatcher on ${HOST}: bundled into ${id}. Fleet worker ${out.label}/${out.id} (${out.name}) builds this ticket together with ${[id, ...bundleIds.filter((x) => x !== c.identifier)].join(', ')} as one PR on \`${branch}\`. It moves to ${STATES.verifying} when that PR merges. Questions go to ${HUMAN}'s Slack.`)]]);
+    }
+    await effects(t, id, [[`comment the dispatch on ${id}`, () => comment(issue.id,
+      `Agent dispatcher on ${HOST}: fleet worker ${out.label}/${out.id} (${out.name}) is building this${withMates} as one PR on \`${branch}\` with ${cfg.model}. No time limit; the dispatcher watches for progress. Questions go to ${HUMAN}'s Slack.`)]]);
+    saveState(st);
+  }
+}
+
+// Starts a new worker on a ticket whose worker ended before finishing (a reboot ends every fleet worker). The new worker continues from the old one's worktree and PR instead of
+// starting over, and a ticket already marked stuck for it goes back to building. Returns null when no account has room.
+async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) {
+  const members = [];
+  for (const x of [id, ...(t.bundle ?? [])]) members.push((await gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id: x })).issue);
+  const [issue] = members;
+  const acct = pickAccount(JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 })));
+  if (!acct) return null;
+  const note = `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
+  const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
+    '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
+    '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+  const wasStuck = t.status === 'stuck';
+  // lastOutputAt too: the spin check measures a busy worker's quiet time from it, and the old worker's last commit
+  // made every replacement read as stalled on its first tick.
+  Object.assign(t, { status: 'building', account: out.label, workerId: out.id, workerName: out.name, goneTicks: 0,
+    lastProgressAt: iso(), lastOutputAt: iso(), redispatchedAt: iso(), redispatches: (t.redispatches ?? 0) + (why ? 0 : 1) });
+  for (const k of ['stalledSince', 'stuckAt', 'reason']) delete t[k];
+  saveState(st);
+  log(`${id}: redispatched to ${out.label}/${out.id}${wasStuck ? ' (was stuck)' : ''}`);
+  if (wasStuck) {
+    const m = await teamMeta();
+    await addLabel(issue.id, m.label.building);
+    await removeLabel(issue.id, m.label.stuck);
+  }
+  // Companions follow the new worker, back out of stuck when the bundle went stuck with its lead.
+  for (const mate of members.slice(1)) {
+    const c = st.tickets[mate.identifier];
+    if (!c || !['bundled', 'stuck'].includes(c.status)) continue;
+    const back = c.status === 'stuck';
+    Object.assign(c, { status: 'bundled', account: out.label, workerId: out.id, workerName: out.name });
+    delete c.stuckAt;
+    delete c.reason;
+    if (back) {
+      const m = await teamMeta();
+      await addLabel(mate.id, m.label.building);
+      await removeLabel(mate.id, m.label.stuck);
+    }
+  }
+  if (t.bundle?.length) writeBundle(id, t.bundle);
+  saveState(st);
+  await comment(issue.id, why
+    ? `Agent dispatcher on ${HOST}: ${why}, so fleet worker ${out.label}/${out.id} addresses them on \`${t.branch}\` and pushes to the same PR.`
+    : `Agent dispatcher on ${HOST}: the previous worker ended before finishing, so fleet worker ${out.label}/${out.id} continues on \`${t.branch}\` from its worktree and PR.`);
+  return out;
+}
+
+async function redispatch(id) {
+  if (!takeLock()) return console.log('a tick is running; try again in a minute');
+  try {
+    const st = loadState();
+    const t = st.tickets[id];
+    if (!['building', 'stuck'].includes(t?.status)) return console.log(`${id} is not building or stuck on ${HOST} (status ${t?.status ?? 'none'})`);
+    const w = fleetWorkers().find((x) => x.label === t.account && x.id === t.workerId);
+    if (w && ACTIVE.includes(w.status || w.state)) return console.log(`${id}: its worker ${t.account}/${t.workerId} is still ${w.status || w.state}`);
+    const out = await replaceWorker(st, id, t);
+    console.log(out ? `${id}: redispatched to ${out.label}/${out.id}` : `no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom`);
+  } finally {
+    fs.rmdirSync(LOCK);
+  }
+}
+
+// --- Sentry triage -------------------------------------------------------------------------------------
+
+// Sentry triage is a module you supply (dispatcher.sentryTriage.module, default sentry-triage.mjs next to this file;
+// the repo ships none). It runs on sentryTriage.host only, behind sentryTriage.enabled, and its kickFromTick should
+// start the run in its own detached process. It is loaded here and nowhere at the top, so a syntax error or a throw in
+// it is one log line and never stops a tick. It exports kickFromTick({ cfg, dry, log }) and statusLine(cfg), and labels
+// the tickets it queues with linear.labels.sentry plus mechanical or judgment, which the Sentry slot and the merge
+// paths above read.
+const triageModule = () => pathToFileURL(path.resolve(DIR, cfg.sentryTriage?.module ?? 'sentry-triage.mjs')).href;
+async function sentryTriage() {
+  if (HOST !== cfg.sentryTriage?.host || !cfg.sentryTriage?.enabled) return;
+  try {
+    (await import(triageModule())).kickFromTick({ cfg: conf, dry: DRY, log });
+  } catch (e) {
+    log(`sentry triage failed, the tick goes on (${errText(e)})`);
+  }
+}
+
+// --- commands ------------------------------------------------------------------------------------------
+
+async function tick() {
+  if (!cfg.enabledHosts.includes(HOST)) return log(`host ${HOST} is not in enabledHosts, nothing to do`);
+  if (!DRY && !takeLock()) return log('the previous tick is still running');
+  let st = null;
+  try {
+    st = loadState();
+    if (fs.existsSync(STREAK_RESET) && !DRY) {
+      st.stuckStreak = 0;
+      fs.rmSync(STREAK_RESET);
+    }
+    const m = await teamMeta();
+    if (st.fresh) {
+      const orphans = await building();
+      if (orphans.length && !isPaused()) {
+        await trip(st, `no state file on ${HOST}, but ${orphans.join(', ')} carry ${L.building}. Check which machine owns them before resuming`);
+      }
+    }
+    await sendPendingNotice(st);
+    inboxSweep();
+    await reconcileClaims(st, m);
+    await checkMerged(st);
+    await settleStuck(st);
+    let workers = null;
+    try {
+      workers = fleetWorkers();
+    } catch (e) {
+      log(`could not list fleet workers, so worker states are unknown this tick (${errText(e)})`);
+    }
+    await advance(st, m, workers);
+    await watchWorkers(st, workers);
+    await watchSignIns(st);
+    await dispatch(st, m);
+    await sentryTriage();
+    writeHeartbeat();
+    st.lastTick = iso();
+    delete st.lastError;
+  } catch (e) {
+    log(`tick failed: ${e.message}`);
+    process.exitCode = 1;
+    if (st) st.lastError = `${iso()} ${e.message}`;
+    else if (!DRY && !isPaused()) fs.writeFileSync(PAUSED, `${iso()} state could not be loaded: ${e.message}\n`);
+  } finally {
+    if (st) saveState(st);
+    if (!DRY) fs.rmdirSync(LOCK);
+  }
+}
+
+async function status() {
+  const st = loadState();
+  const day = (st.dispatches ?? []).filter((d) => hoursSince(d) < 24).length;
+  console.log(`host ${HOST} (${cfg.enabledHosts.includes(HOST) ? 'enabled' : 'not enabled'}), ${isPaused() ? `PAUSED: ${pauseReason()}` : 'running'}`);
+  console.log(`last tick ${st.lastTick ?? 'never'}${st.lastError ? `, last error ${st.lastError}` : ''}; dispatched ${day}${cfg.maxDispatchesPerDay ? `/${cfg.maxDispatchesPerDay}` : ''} in 24h; stuck streak ${st.stuckStreak ?? 0}${st.pendingNotice ? '; pause notice not yet delivered' : ''}`);
+  if (cfg.sentryTriage?.enabled) {
+    try {
+      console.log((await import(triageModule())).statusLine(conf));
+    } catch (e) {
+      console.log(`sentry triage: status unavailable (${errText(e)})`);
+    }
+  }
+  const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{eq:$ready}},
+    state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
+  console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
+  for (const [id, t] of Object.entries(st.tickets)) {
+    const last = t.mergedAt ?? t.stuckAt ?? t.closedAt ?? t.dispatchedAt ?? t.claimedAt;
+    if (!LIVE.includes(t.status) && !['claiming', 'bundled'].includes(t.status) && hoursSince(last) > 7 * 24) continue;
+    const errs = t.effectErrors?.length ? `  [${t.effectErrors.length} side effect(s) failed]` : '';
+    const bundle = t.bundledInto ? `  (rides on ${t.bundledInto})` : t.bundle?.length ? `  (+ ${t.bundle.join(', ')})` : '';
+    if (t.status === 'bundled' && !LIVE.includes(st.tickets[t.bundledInto]?.status) && st.tickets[t.bundledInto]?.status !== 'claiming') continue;
+    console.log(`  ${id.padEnd(10)} ${t.status.padEnd(12)} ${t.account ?? '-'}/${t.workerId ?? '-'}  ${t.pr ?? t.branch}${bundle}${t.reason ? `  (${t.reason})` : ''}${errs}`);
+  }
+}
+
+// The session-start line: what is running and what changed in the last day. Local state only, so it never waits on
+// the network, and it prints nothing on a machine with no queue activity.
+function summary() {
+  if (!fs.existsSync(STATE)) return;
+  const st = loadState();
+  const live = Object.entries(st.tickets).filter(([, t]) => LIVE.includes(t.status) || t.status === 'claiming');
+  const recent = Object.entries(st.tickets).filter(([, t]) => ['merged', 'stuck'].includes(t.status) && hoursSince(t.mergedAt ?? t.stuckAt) < 24);
+  if (!live.length && !recent.length && !isPaused()) return;
+  const ago = st.lastTick ? `${Math.round((Date.now() - Date.parse(st.lastTick)) / 60_000)} min ago` : 'never';
+  console.log(`[Queue] ${isPaused() ? `PAUSED (${pauseReason()})` : `${live.length} running`}, last check ${ago}. dispatcher.mjs status has more.`);
+  for (const [id, t] of live) {
+    const where = t.prNumber ? `PR #${t.prNumber}, ${t.note ?? t.status}` : 'building, no PR yet';
+    const hours = `${hoursSince(t.dispatchedAt ?? t.claimedAt).toFixed(1)}h in${t.lastProgressAt ? `, last progress ${hoursSince(t.lastProgressAt).toFixed(1)}h ago` : ''}${t.stalledSince ? ', STALLED' : ''}`;
+    console.log(`  ${id}  ${where}${t.blockedSince ? ', WORKER BLOCKED on input' : ''}  (${hours})`);
+  }
+  for (const [id, t] of recent) {
+    console.log(`  ${id}  ${t.status === 'merged' ? `merged ${hoursSince(t.mergedAt).toFixed(1)}h ago, now in Verifying` : `stuck: ${t.reason}`}`);
+  }
+}
+
+const [cmd, ...rest] = process.argv.slice(2).filter((a) => a !== '--dry-run');
+if (cmd === 'tick') await tick();
+else if (cmd === 'status') await status();
+else if (cmd === 'summary') summary();
+else if (cmd === 'check') {
+  if (!rest[0]) {
+    console.log(`usage: node dispatcher.mjs check ${TEAM}-123`);
+    process.exitCode = 2;
+  } else {
+    const { issue } = await gql(`query($id:String!){ issue(id:$id){ identifier title priority description
+      labels{ nodes{ name parent{ name } } } } }`, { id: rest[0] });
+    const problems = readyProblems(issue);
+    console.log(problems.length ? `${issue.identifier} is not ready: ${problems.join('; ')}` : `${issue.identifier} passes the queue's mechanical checks (scenarios, size, priority)`);
+    if (problems.length) process.exitCode = 1;
+  }
+}
+else if (cmd === 'test-notify') {
+  await notify('Test', `Agent queue notifications from ${HOST} work`, { progress: true });
+  console.log(`macOS notification sent; Slack ${fs.existsSync(SLACK) ? 'posted (anything else is in dispatcher.log)' : `skipped, no webhook at ${SLACK}`}`);
+}
+else if (cmd === 'redispatch') {
+  if (rest[0]) await redispatch(rest[0]);
+  else {
+    console.log(`usage: node dispatcher.mjs redispatch ${TEAM}-123`);
+    process.exitCode = 2;
+  }
+}
+else if (cmd === 'pause') {
+  fs.writeFileSync(PAUSED, `${iso()} ${rest.join(' ') || 'paused by hand'}\n`);
+  log(`paused: ${rest.join(' ') || 'paused by hand'}`);
+} else if (cmd === 'resume') {
+  fs.rmSync(PAUSED, { force: true });
+  fs.writeFileSync(STREAK_RESET, `${iso()}\n`);
+  log('resumed; the stuck streak resets on the next tick');
+} else {
+  console.log(`usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ${TEAM}-123 | redispatch ${TEAM}-123 | test-notify | pause [reason] | resume`);
+  process.exitCode = 2;
+}
