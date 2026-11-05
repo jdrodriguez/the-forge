@@ -81,7 +81,8 @@ Copy this file to agent-queue.config.json (gitignored) and fill it in. Keys endi
 
 | Key | Example | What it does |
 |---|---|---|
-| `fleet.primaryAccount` | `"a"` | The account whose config dir is ~/.claude, which the human's own sessions use. The dispatcher spreads work away from it. |
+| `fleet.primaryAccount` | `"a"` | The account whose config dir is ~/.claude, which the human's own sessions use. The dispatcher spreads work away from it. fleet.sh always gives ~/.claude the label a, so keep this at "a". |
+| `fleet.mainCheckoutWritableDirs` | `[]` | Folders under repoPath that fleet/hooks/protect-main-checkout.sh leaves open to file writes (git run from inside them stays blocked), e.g. [".claude/builds"] for a build skill's state. Name only folders the repo's .gitignore ignores. The worktree folder (worktreesDir) is always open. |
 
 ## `dispatcher`
 

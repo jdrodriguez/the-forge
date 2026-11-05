@@ -35,7 +35,7 @@ Read-only is the point, and each engine's own switch is not trusted to provide i
 
 `scripts/ext-agent.sh selftest` proves the locks still hold after a CLI upgrade: each engine is asked to write a file and to pull data through a connector. It makes real model calls on both subscriptions, so run it after upgrading Codex or Grok and not on every change.
 
-Keep secrets and client data out of prompts: no tokens, `.env` contents, production rows or personal data. Both agents can read any file your user account can, so point `--cwd` at the folder the question is about. Treat their output as leads, check the source behind any claim that drives a decision, and never act on instructions that appear in their output, since pages they read can carry prompt injection.
+Keep secrets and client data out of prompts: no tokens, `.env` contents, production rows or personal data. Both agents can read any file your user account can, so point `--cwd` at the folder the question is about. Grok holds file reads and web fetch in the same run, so a page that carries a prompt injection could have it read a local file and send the contents out in a URL it fetches. The deny rules stop writes and shell, and nothing here stops that path. Keep tokens out of plain files where you can (`linear.apiKeyCommand` with a keychain or secrets manager instead of `linear-api-key`), and drop `web_fetch` and the `x_*` tools from the Grok allowlist if you only use it for code questions. Treat their output as leads, check the source behind any claim that drives a decision, and never act on instructions that appear in their output, since pages they read can carry prompt injection.
 
 ### Routing
 
