@@ -1,8 +1,10 @@
-# agent-queue
+# The Forge
 
-A spec desk and an agent queue for Claude Code. You write spec'd Linear tickets in one pinned Claude session and label them ready. A dispatcher on each of your machines claims them, hands each to a Claude Code background worker on one of several Claude accounts, and watches the worker build one pull request. When CI and the AI review are green, the dispatcher merges it and moves the ticket to Verifying. Questions come to you in Slack, one thread per question, and the worker that asked is woken with your answer.
+The Forge is a spec desk and an agent queue for Claude Code. You write spec'd Linear tickets in one pinned Claude session and label them ready. A dispatcher on each of your machines claims them, hands each to a Claude Code background worker on one of several Claude accounts, and watches the worker build one pull request. When CI and the AI review are green, the dispatcher merges it and moves the ticket to Verifying. Questions come to you in Slack, one thread per question, and the worker that asked is woken with your answer.
 
 It is plain Node and bash with no dependencies. A dispatcher tick spends no tokens; the tokens go to the workers.
+
+The project was called agent-queue before it was called The Forge. File names, the config file (`agent-queue.config.json`), the launchd labels (`dev.agent-queue.*`) and the folder names keep the old name on purpose, so there is nothing to rename after you clone it.
 
 ## The loop
 
@@ -42,7 +44,7 @@ flowchart LR
 | `dispatcher/` | The queue: `dispatcher.mjs` (the tick), `worker-brief.md`, `premerge-check.mjs`, `main-watch.mjs` (red-main responder), `gated-push.mjs`, `install.sh` (launchd or systemd). Its README has the full behavior. |
 | `fleet/` | `fleet.sh`: start, list, read and stop Claude Code background sessions on several Claude accounts on one machine, with plan usage per account. Plus its skill and account setup. |
 | `inbox/` | `ask-human.sh` (the inbox for questions, in Linear and Slack), the orchestrator's watchers (`inbox-watch.sh`, `merge-request-watch.sh`, `main-red-watch.sh`), and the merge helpers (`merge-approved.sh`, `merge-when-ready.sh`, `merged-to-verifying.mjs`). |
-| `queue-board/` | A local web page showing every machine's worker slots, tickets, PRs, asks and worktrees, plus `hourly-check.mjs`, which wakes the orchestrator only when something new needs attention. |
+| `queue-board/` | The Forge's board: a web page that shows every machine's worker slots, tickets, PRs, asks and worktrees, drawn as Middle-earth in two views, with a herald that plays alert cues and posts notifications, an installable app and its own icon. Also `hourly-check.mjs`, which wakes the orchestrator only when something new needs attention. Its README has every feature. |
 | `learning/` | The weekly failure sweep. |
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |
 | `docs/` | The ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene, and the decisions. |
@@ -55,11 +57,11 @@ flowchart LR
 - **Linear**, with a personal API key (`linear.apiKeyCommand`, `LINEAR_API_KEY`, or a file), a team, workflow states for In Progress and Verifying, a Size label group (S, M, L), and these labels: ready, building, stuck, needs-human. A saved view for the queue labels and one for needs-human make good sidebars.
 - **Slack**, optional but recommended: one private channel, an app with an incoming webhook (progress lines) and a bot token with `chat:write` (asks and the reviewer DM), and Linear's Slack app in the channel for synced threads.
 - **Codex and Grok CLIs**, optional, for `scripts/ext-agent.sh` and `scripts/cross-review.sh`.
-- **Syncthing or Dropbox**, only when more than one machine runs the queue, for `paths.sharedDir`.
+- **A file-sync tool** (any one that keeps a folder identical), only when more than one machine runs the queue, to keep `paths.sharedDir` the same on each.
 
 ## Set up a machine
 
-1. Clone this repo, for example to `~/dev/agent-queue`.
+1. Clone this repo, for example to `~/dev/the-forge`.
 2. Copy the config and fill it in:
    ```bash
    cp agent-queue.config.example.json agent-queue.config.json
@@ -78,13 +80,13 @@ flowchart LR
    ```
 5. Link the skills and scripts into Claude Code, so every session can find them:
    ```bash
-   ln -s ~/dev/agent-queue/specdesk/skill ~/.claude/skills/specdesk
+   ln -s ~/dev/the-forge/specdesk/skill ~/.claude/skills/specdesk
    ```
    ```bash
-   ln -s ~/dev/agent-queue/fleet ~/.claude/skills/fleet
+   ln -s ~/dev/the-forge/fleet ~/.claude/skills/fleet
    ```
    ```bash
-   ln -s ~/dev/agent-queue/inbox/ask-human.sh ~/.claude/scripts/ask-human.sh
+   ln -s ~/dev/the-forge/inbox/ask-human.sh ~/.claude/scripts/ask-human.sh
    ```
 6. Try the queue without changing anything:
    ```bash
@@ -103,6 +105,10 @@ flowchart LR
 8. Open a Claude Code session, pin it, name it after `orchestrator.sessionName`, and run `/specdesk`. In it, start the watchers with Bash `run_in_background` so the session is woken when something needs it: `inbox/inbox-watch.sh`, `inbox/merge-request-watch.sh`, `inbox/main-red-watch.sh` and `queue-board/hourly-check.mjs`. Re-arm each one after it wakes the session.
 
 More machines: repeat on each, with the same `paths.sharedDir` synced between them and each machine's hostname in `dispatcher.hosts`.
+
+## The board
+
+`queue-board/` is the part of The Forge you look at. It is a web page that shows the whole queue across your machines: worker slots, tickets, PRs, CI and review state, what needs you, your Linear inbox, your Claude app sessions and every git worktree. Each machine is drawn as a realm of Middle-earth and each worker as a pixel figure acting out where its ticket stands, in two views: a side view and a map from above. A herald (`queue-board/install-herald.sh`) plays an alert cue and posts a macOS notification when something needs you or breaks, and the page can play your own music between alerts. The page installs as an app in Chrome and has its own icon. It is read-only and spends no Claude tokens. `queue-board/README.md` describes every view and every config key under `queueBoard`.
 
 ## Configuration
 

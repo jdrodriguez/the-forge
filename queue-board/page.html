@@ -3,43 +3,63 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Agent Queue Board</title>
+<title>The Forge</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="The Forge">
+<meta name="theme-color" content="#e4d6b3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0e14" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Cinzel:wght@500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Silkscreen&display=swap">
 <style>
-/* Layout, after Linear: a sidebar of four views beside an inset main panel. The Inbox view has the human's unread Linear
-   notifications (inbox.js); the Queue view has the worker slots over the list groups (needs you, building, ready,
-   merged); the Machines view has a card per machine plus Codex and Grok; the Worktrees view lists every machine's git
-   worktrees and their state (worktrees.js).
-   Below 900px the sidebar becomes a tab strip and the panel fills the page. */
+/* Layout: a sidebar of six views beside a framed main panel. The Inbox view has the owner's unread Linear notifications
+   (inbox.js); the Sessions view has their Claude app sessions outside the queue, the ones waiting on them first
+   (sessions.js); the Queue view has the worker slots over the list groups (needs you, building, ready, merged); the
+   Middle-earth view is the same workers as pixel art (scene.js); the Machines view has a card per machine plus Codex
+   and Grok; the Worktrees view lists every machine's git worktrees and their state (worktrees.js); the Gollum view shows
+   the forgotten worktrees and the accounts near their limits (gollum-view.js).
+   Below 900px the sidebar becomes a tab strip and the panel fills the page.
+   The look is Middle-earth (2026-11-06): parchment and iron-gall ink by day, Rivendell's night sky in dark mode.
+   Cinzel sets headings and names, EB Garamond titles, and Inter stays for small data so numbers read cleanly.
+   Each machine keeps its realm's colour: Rivendell teal, Shire green, Erebor bronze. The config says which machine
+   holds which realm (snap.config.realms). */
 :root {
-  --frame: #f4f5f7; --panel: #ffffff; --raised: #ffffff; --group: #f7f7f9; --sunk: #f0f1f3; --hover: rgb(0 0 0 / 0.028); --active: rgb(0 0 0 / 0.055);
-  --line: #e9eaed; --line-2: #dddfe3; --ink: #1d1e22; --ink-2: #5d6169; --ink-3: #8f939b;
-  --accent: #5e6ad2; --accent-ink: #4f5bc7; --tint: rgb(94 106 210 / 0.08);
-  --ok: #26a46b; --run: #d39e00; --warn: #e2700f; --bad: #e0453a; --merged: #8366ee;
-  --bad-tint: rgb(224 69 58 / 0.07);
-  --m1: #8b7cf6; --m2: #13a59d; --m3: #df5f9a;
-  --shadow: 0 1px 2px rgb(16 18 24 / 0.05);
+  --frame: #e4d6b3; --panel: #f5ecd7; --raised: #faf4e4; --group: #ede1c3; --sunk: #e8dbbb; --hover: rgb(110 78 32 / 0.06); --active: rgb(110 78 32 / 0.12);
+  --line: #dac8a0; --line-2: #c4ac7a; --ink: #2a1f14; --ink-2: #5b4831; --ink-3: #85704f;
+  --accent: #2f6b4f; --accent-ink: #285c44; --tint: rgb(47 107 79 / 0.1); --gold: #a67c26;
+  --ok: #3f7d3a; --run: #b07c12; --warn: #c25f1c; --bad: #a12b22; --merged: #6a4c97;
+  --bad-tint: rgb(161 43 34 / 0.08);
+  --m1: #2e7d74; --m2: #5f8f2c; --m3: #9a5a26;
+  --shadow: 0 1px 0 rgb(90 60 20 / 0.06), 0 2px 8px rgb(90 60 20 / 0.08);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .38 0 0 0 0 .27 0 0 0 0 .12 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --sky: radial-gradient(ellipse at 15% -10%, rgb(255 249 232 / 0.75), transparent 55%), radial-gradient(ellipse at 110% 120%, rgb(120 80 30 / 0.16), transparent 55%);
   --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --serif: "EB Garamond", Georgia, "Times New Roman", serif;
+  --display: "Cinzel", "EB Garamond", Georgia, serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --frame: #08090a; --panel: #0f1012; --raised: #151619; --group: #141518; --sunk: #1b1c20; --hover: rgb(255 255 255 / 0.03); --active: rgb(255 255 255 / 0.065);
-  --line: #1f2024; --line-2: #2c2d32; --ink: #e9eaec; --ink-2: #9a9ea7; --ink-3: #666a73;
-  --accent: #5e6ad2; --accent-ink: #939cf6; --tint: rgb(94 106 210 / 0.14);
-  --ok: #4cb782; --run: #f2c94c; --warn: #f2994a; --bad: #eb5757; --merged: #a48bff;
-  --bad-tint: rgb(235 87 87 / 0.09);
-  --m1: #a093ff; --m2: #3cc4b6; --m3: #f07bb3; --shadow: none; color-scheme: dark;
+  --frame: #0b0e14; --panel: #12161f; --raised: #181d28; --group: #151a24; --sunk: #0f131b; --hover: rgb(236 227 204 / 0.04); --active: rgb(236 227 204 / 0.08);
+  --line: #232a37; --line-2: #333c4d; --ink: #ece3cc; --ink-2: #b8ac92; --ink-3: #807663;
+  --accent: #5aa287; --accent-ink: #86cdb2; --tint: rgb(90 162 135 / 0.14); --gold: #d2ac57;
+  --ok: #6dbb6f; --run: #e0b23e; --warn: #e8873a; --bad: #e25a4c; --merged: #a88bdc;
+  --bad-tint: rgb(226 90 76 / 0.1);
+  --m1: #4fb3a7; --m2: #8cc152; --m3: #d08a4e; --shadow: none; color-scheme: dark;
+  --grain: none; --sky-size: 200px 200px;
+  --sky: radial-gradient(1px 1px at 22px 34px, rgb(255 255 255 / 0.55), transparent), radial-gradient(1px 1px at 128px 92px, rgb(255 255 255 / 0.4), transparent), radial-gradient(1px 1px at 66px 150px, rgb(214 226 255 / 0.45), transparent), radial-gradient(1.5px 1.5px at 170px 20px, rgb(255 246 214 / 0.5), transparent);
 } }
 :root[data-theme="dark"] {
-  --frame: #08090a; --panel: #0f1012; --raised: #151619; --group: #141518; --sunk: #1b1c20; --hover: rgb(255 255 255 / 0.03); --active: rgb(255 255 255 / 0.065);
-  --line: #1f2024; --line-2: #2c2d32; --ink: #e9eaec; --ink-2: #9a9ea7; --ink-3: #666a73;
-  --accent: #5e6ad2; --accent-ink: #939cf6; --tint: rgb(94 106 210 / 0.14);
-  --ok: #4cb782; --run: #f2c94c; --warn: #f2994a; --bad: #eb5757; --merged: #a48bff;
-  --bad-tint: rgb(235 87 87 / 0.09);
-  --m1: #a093ff; --m2: #3cc4b6; --m3: #f07bb3; --shadow: none; color-scheme: dark;
+  --frame: #0b0e14; --panel: #12161f; --raised: #181d28; --group: #151a24; --sunk: #0f131b; --hover: rgb(236 227 204 / 0.04); --active: rgb(236 227 204 / 0.08);
+  --line: #232a37; --line-2: #333c4d; --ink: #ece3cc; --ink-2: #b8ac92; --ink-3: #807663;
+  --accent: #5aa287; --accent-ink: #86cdb2; --tint: rgb(90 162 135 / 0.14); --gold: #d2ac57;
+  --ok: #6dbb6f; --run: #e0b23e; --warn: #e8873a; --bad: #e25a4c; --merged: #a88bdc;
+  --bad-tint: rgb(226 90 76 / 0.1);
+  --m1: #4fb3a7; --m2: #8cc152; --m3: #d08a4e; --shadow: none; color-scheme: dark;
+  --grain: none; --sky-size: 200px 200px;
+  --sky: radial-gradient(1px 1px at 22px 34px, rgb(255 255 255 / 0.55), transparent), radial-gradient(1px 1px at 128px 92px, rgb(255 255 255 / 0.4), transparent), radial-gradient(1px 1px at 66px 150px, rgb(214 226 255 / 0.45), transparent), radial-gradient(1.5px 1.5px at 170px 20px, rgb(255 246 214 / 0.5), transparent);
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -55,7 +75,7 @@ a:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-vis
 .side { position: sticky; top: 0; height: 100dvh; overflow-y: auto; padding: 12px 10px; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .ws { display: flex; align-items: center; gap: 9px; padding: 4px 8px 14px; font-weight: 600; font-size: 13.5px; }
-.logo { width: 20px; height: 20px; border-radius: 5px; background: linear-gradient(135deg, #7a84f0, #5e6ad2 55%, #4a54b8); color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 600; flex: none; }
+.logo { width: 26px; height: 26px; border-radius: 6px; flex: none; display: block; box-shadow: 0 1px 2px rgb(60 40 10 / 0.3); }
 .nav-item { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: 6px; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
 .nav-item:hover { background: var(--hover); color: var(--ink); text-decoration: none; }
 .nav-item .nav-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -93,18 +113,22 @@ h1 { font-size: 13.5px; font-weight: 600; margin: 0; white-space: nowrap; }
 
 /* Worker slots */
 .slots { padding: 16px 24px 18px; border-bottom: 1px solid var(--line); }
-.bays { display: grid; grid-template-columns: repeat(var(--n, 8), minmax(0, 1fr)); gap: 8px; }
-.bay-group-label { grid-row: 1; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 7px; font-weight: 500; padding-bottom: 1px; }
-.bay { grid-row: 2; display: flex; flex-direction: column; gap: 5px; min-width: 0; min-height: 88px; padding: 10px 11px 9px; background: var(--raised); border: 1px solid var(--line-2); border-radius: 8px; color: var(--ink); box-shadow: var(--shadow); scroll-margin-top: 60px; transition: border-color .12s, background-color .12s; }
+.realms { display: flex; flex-wrap: wrap; gap: 16px 28px; }
+.realm-row { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.realm-head { margin: 0; display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+.realm-head .mdot { align-self: center; }
+.realm-bays { display: flex; flex-wrap: wrap; gap: 8px; }
+.bay { display: flex; flex-direction: column; gap: 5px; width: 186px; min-height: 92px; padding: 10px 11px 9px; background: var(--raised); border: 1px solid var(--line-2); border-radius: 8px; color: var(--ink); box-shadow: var(--shadow); scroll-margin-top: 60px; transition: border-color .12s, background-color .12s; }
+.bay.out { border-style: dashed; box-shadow: none; }
 .bay:hover { text-decoration: none; color: var(--ink); border-color: color-mix(in srgb, var(--mc) 55%, var(--line-2)); }
 .bay .id { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 500; color: var(--ink-2); white-space: nowrap; overflow: hidden; }
 .bay .id .ids { white-space: normal; line-height: 1.3; min-width: 0; }
 .bay .id .ico { margin-top: 1px; }
 .bay .what { font-size: 12.5px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .bay .when { font-size: 11.5px; color: var(--ink-3); margin-top: auto; }
-.bay.free { background: transparent; border-style: dashed; box-shadow: none; color: var(--ink-3); flex-direction: row; justify-content: center; align-items: center; gap: 7px; font-size: 12px; }
+.bay.seat { width: auto; padding-inline: 14px; background: transparent; border-style: dashed; box-shadow: none; color: var(--ink-3); flex-direction: row; justify-content: center; align-items: center; gap: 7px; font-size: 12px; white-space: nowrap; }
 .bay .stag svg.ic { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; }
-.bay.free.sentry.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line-2)); }
+.bay.seat.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line-2)); }
 
 /* Groups */
 .lists { min-width: 0; }
@@ -122,6 +146,8 @@ h2.gh .gcount { color: var(--ink-3); font-weight: 400; }
 .rbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .rline { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .rid { color: var(--ink-3); font-weight: 500; white-space: nowrap; flex: none; }
+.wname { color: var(--ink); font-weight: 600; white-space: nowrap; flex: none; }
+.bay .wname { white-space: normal; }
 .rid a:hover { color: var(--ink-2); }
 .rtitle { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rmeta { display: flex; align-items: center; gap: 10px; flex: none; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
@@ -170,40 +196,173 @@ details > summary:hover { color: var(--ink-2); }
 code.cmd { display: block; overflow-x: auto; white-space: nowrap; margin-top: 6px; padding: 7px 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; color: var(--ink-2); user-select: all; -webkit-user-select: all; }
 pre.log { margin: 8px 0 0; max-height: 280px; overflow: auto; padding: 10px; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; font: 11.5px/1.55 var(--mono); color: var(--ink-2); white-space: pre; }
 
-/* Machines */
-.mview { padding: 20px 24px 28px; }
-.machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: 16px; align-items: start; }
-.mcard { background: var(--raised); border: 1px solid var(--line-2); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0; box-shadow: var(--shadow); scroll-margin-top: 60px; }
-.mhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; }
-.mname { font-weight: 600; }
-.mmeta { color: var(--ink-3); font-size: 12px; flex-basis: 100%; }
-.meters { display: flex; flex-direction: column; gap: 9px; }
-.meter { display: grid; grid-template-columns: 116px minmax(0, 1fr) auto; align-items: center; gap: 12px; font-size: 12px; color: var(--ink-3); }
-.meter b { color: var(--ink); font-weight: 500; text-align: right; white-space: nowrap; }
-.meter b span { color: var(--ink-3); font-weight: 400; }
-.bar { position: relative; height: 4px; background: var(--sunk); border-radius: 2px; }
-.bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
-.bar i.ok { background: var(--ok); } .bar i.warn { background: var(--warn); } .bar i.bad { background: var(--bad); }
-.bar s { position: absolute; top: -3px; bottom: -3px; width: 2px; border-radius: 1px; background: var(--ink-2); text-decoration: none; }
+/* Machines (machines.js, realm-art.js): a card per machine dressed as its realm. A pixel diorama across the top with
+   the realm's name lettered over it, then the seats, the ledger and gauges, then the worktrees, accounts and log. */
+.mview { padding: 22px 24px 32px; }
+.machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); gap: 22px; align-items: start; }
+.mcard { position: relative; display: flex; flex-direction: column; min-width: 0; background: var(--raised) var(--grain); border: 1px solid var(--line-2); border-radius: 2px; box-shadow: var(--shadow); scroll-margin-top: 60px; }
+.msec { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px 16px 14px; }
+.msec + .msec { border-top: 1px solid var(--line); }
+.mband { position: relative; height: 90px; margin: 5px 5px 0; overflow: hidden; background: #1b224c; }
+.mband canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
+.mband-t { position: absolute; z-index: 1; left: 14px; bottom: 9px; max-width: 64%; display: flex; flex-direction: column; gap: 5px; color: #2a2016; text-shadow: 0 0 2px rgb(255 250 235 / .95), 0 0 9px rgb(255 250 235 / .85); }
+.mband.night .mband-t { color: #fff6e2; text-shadow: 0 1px 0 rgb(0 0 0 / .65), 0 0 8px rgb(0 0 0 / .55); }
+.mband h3 { margin: 0; font: 600 22px/1.05 var(--display); letter-spacing: .2em; text-transform: uppercase; }
+.mb-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font: italic 15.5px/1.15 var(--serif); }
+.mb-cap { font: 500 11.5px/1 var(--sans); font-style: normal; }
+.mband .mb-sub .chip { font: 500 11.5px/20px var(--sans); text-shadow: none; background: rgb(16 14 26 / .74); border-color: transparent; color: #f3ead2; }
+/* An unreachable or paused machine's realm sits under a grey mist, as in the Middle-earth view. */
+.mcard.down .mband canvas { filter: grayscale(.85) brightness(.8); }
+.mcard.down .mband::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgb(206 210 222 / .08), rgb(206 210 222 / .42)); }
+.mh { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.mh > span, .ledger span { font: 600 10.5px/1.2 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.mh b { font: 500 13px/1.2 var(--sans); color: var(--ink); text-align: right; }
+.mh b span, .ledger b span { color: var(--ink-3); font-weight: 400; }
+.mh.warn b { color: var(--warn); }
+.seats + .mh { margin-top: 4px; }
+/* Each worker sits in an arched niche, its figure posed as in the Middle-earth view, its status gem at the foot. */
+.seats { display: flex; flex-wrap: wrap; gap: 10px 6px; }
+.seat { width: 62px; display: flex; flex-direction: column; align-items: center; gap: 1px; min-width: 0; text-align: center; }
+.seat-fig { position: relative; width: 54px; height: 62px; margin-bottom: 4px; padding: 0 0 4px; display: grid; place-items: end center; font: inherit; color: var(--ink-3); cursor: pointer;
+  border: 1px solid var(--line-2); border-radius: 27px 27px 2px 2px; box-shadow: inset 0 3px 7px rgb(0 0 0 / .2);
+  background: radial-gradient(ellipse 75% 38% at 50% 100%, color-mix(in srgb, var(--mc, var(--gold)) 30%, transparent), transparent), var(--sunk); }
+button.seat-fig:hover { border-color: color-mix(in srgb, var(--mc) 65%, var(--line-2)); }
+.seat-fig canvas { width: 40px; height: 52px; image-rendering: pixelated; }
+.seat-gem { position: absolute; right: 3px; bottom: 3px; display: grid; }
+.seat-n { max-width: 100%; font: 700 11px/1.15 var(--display); letter-spacing: .02em; color: var(--ink); overflow-wrap: break-word; }
+.seat-id { max-width: 100%; font: 500 10.5px/1.25 var(--sans); color: var(--ink-3); overflow-wrap: anywhere; }
+.seat-x { font: italic 12.5px/1.1 var(--serif); color: var(--ink-3); }
+.seat.gone canvas { opacity: .35; }
+.seat.parked .seat-fig { border-style: dashed; }
+.seat.free .seat-fig { cursor: default; place-items: center; align-content: center; gap: 3px; padding: 0; border-style: dashed; background: none; box-shadow: none; font: italic 14px/1 var(--serif); }
+.seat.free svg { width: 14px; height: 14px; }
+/* The ledger: three facts side by side, the label small above the number. */
+.ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto auto; border: 1px solid var(--line); background: color-mix(in srgb, var(--sunk) 55%, transparent); }
+.ledger > div { display: grid; grid-row: span 3; grid-template-rows: subgrid; align-content: start; row-gap: 3px; min-width: 0; padding: 7px 10px 8px; }
+.ledger span { align-self: end; }
+.ledger > div + div { border-left: 1px solid var(--line); }
+.ledger b { font: 500 15px/1.2 var(--sans); color: var(--ink); }
+.ledger small { font-size: 11.5px; line-height: 1.25; color: var(--ink-3); }
+.ledger .warn b { color: var(--warn); }
+/* Gauges are etched: a sunken groove with a tick every tenth, filled to the reading, the limit cut in as a notch. */
+.gauges { display: flex; flex-direction: column; gap: 11px; }
+.gauge { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; align-items: center; gap: 12px; font-size: 12px; color: var(--ink-3); }
+.gauge b { color: var(--ink); font-weight: 500; text-align: right; white-space: nowrap; }
+.gauge b span { color: var(--ink-3); font-weight: 400; }
+.groove { position: relative; height: 9px; border: 1px solid var(--line-2); border-radius: 1px; background: var(--sunk); box-shadow: inset 0 1px 2px rgb(0 0 0 / .22); }
+.groove::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), color-mix(in srgb, var(--ink-3) 32%, transparent) calc(10% - 1px) 10%); }
+.groove i { --c: var(--accent); position: absolute; inset: 1px auto 1px 1px; max-width: calc(100% - 2px); background: linear-gradient(color-mix(in srgb, var(--c) 62%, #fff), var(--c) 75%); }
+.groove i.ok { --c: var(--ok); } .groove i.warn { --c: var(--warn); } .groove i.bad { --c: var(--bad); }
+.groove s { position: absolute; z-index: 1; top: -6px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--ink-2); }
+.groove s::before { content: ""; position: absolute; top: -1px; left: -3px; border: 4px solid transparent; border-top: 5px solid var(--ink-2); border-bottom: 0; }
+.mnote { font-size: 12px; color: var(--warn); }
+.mwt { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-3); }
+.mwt b { color: var(--ink); font-weight: 500; white-space: nowrap; }
+.mwt .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.mwt:hover { text-decoration: none; color: var(--ink-2); }
 table.accts { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
-table.accts th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 11.5px; padding: 0 8px 6px 0; border-bottom: 1px solid var(--line); }
+/* A machine's own accounts, folded behind a toggle; the Accounts card under the machines has every account. */
+.macct > summary .chip { height: 18px; line-height: 16px; padding: 0 6px; font-size: 11px; }
+.macct > table { margin-top: 10px; }
+/* The Accounts card spans the grid under the machines: Claude's accounts, then Codex's and Grok's, each group under a
+   heading with its tally. Plan and where it is signed in get their own columns, and fold under the email when narrow. */
+.mcard.wide { grid-column: 1 / -1; }
+.mcard.wide table.accts th:first-child { width: 27%; }
+.mcard.wide table.accts th.p { width: 12%; } .mcard.wide table.accts th.w { width: 25%; }
+.mcard.wide table.accts th.u { width: 14%; } .mcard.wide table.accts th.r { width: 8%; }
+table.accts td.where { line-height: 1.5; color: var(--ink-2); }
+table.accts tr.agrp th { padding: 16px 8px 6px 0; border-bottom: 1px solid var(--line-2); font: 600 12px/1.2 var(--display); letter-spacing: .1em; color: var(--ink); }
+table.accts tr.agrp:first-child th { padding-top: 6px; }
+table.accts tr.agrp th .ai { width: 18px; height: 18px; margin: 0; }
+table.accts tr.agrp th.tally { text-align: right; font: 400 12px/1.2 var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+table.accts tr:has(+ tr.agrp) td { padding-bottom: 10px; }
+.accts .nar { display: none; }
+@media (max-width: 1100px) {
+  .accts .wide { display: none; } .accts .nar { display: block; }
+  .mcard.wide table.accts th:first-child { width: auto; } .mcard.wide table.accts th.u { width: 76px; } .mcard.wide table.accts th.r { width: 46px; }
+}
+table.accts th { text-align: left; font: 600 10.5px/1.2 var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding: 0 8px 6px 0; border-bottom: 1px solid var(--line-2); }
 table.accts th.u { width: 76px; } table.accts th.r { width: 46px; }
 table.accts td { padding: 8px 8px 8px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
 table.accts tr:last-child td { border-bottom: 0; padding-bottom: 0; }
 table.accts td.who { overflow-wrap: break-word; line-height: 1.35; color: var(--ink); }
 .sub { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; line-height: 1.35; }
 .use { display: flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 500; }
-.ring { width: 14px; height: 14px; flex: none; }
+.use.stale { opacity: 0.45; }
+.ring { width: 15px; height: 15px; flex: none; }
 .ring circle { fill: none; stroke-width: 2.2; }
 .ring .track { stroke: var(--line-2); }
 .ring .fill { stroke: var(--c, var(--accent)); }
 .ring.ok { --c: var(--ok); } .ring.warn { --c: var(--warn); } .ring.bad { --c: var(--bad); }
+/* The mark of what runs a worker or a plan (ai-marks.js): Claude's spark in its orange, Codex's cloud, Grok's mark in
+   the text colour, each sized to the text around it. */
+.ai { display: inline-block; width: 1.1em; height: 1.1em; flex: none; vertical-align: -0.18em; margin-right: 0.3em; }
+.ai-claude { color: #d97757; }
+/* Each realm's frame, with square corners throughout. Rivendell: its teal filigree at the four corners over a fine
+   inner line. The Shire: a wooden frame pegged with brass. Erebor: riveted iron. Rohan: a gold rule. The seeing-stones:
+   dark glass with a faint glow. */
+.mcard::before { position: absolute; pointer-events: none; z-index: 2; }
+.mcard[data-r="elf"] { border-color: color-mix(in srgb, var(--mc) 55%, var(--line-2)); box-shadow: var(--shadow), inset 0 0 0 3px var(--raised), inset 0 0 0 4px color-mix(in srgb, var(--mc) 38%, transparent); }
+.mcard[data-r="elf"]::before { content: ""; inset: -6px; background: var(--mc);
+  --fili-tl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'%3E%3Cg transform='matrix(1 0 0 1 0 0)'%3E%3Cpath d='M2 2H20M2 2V20'/%3E%3Cpath d='M2 2c4.6 0 7.6 2 8.4 5.4.6 2.6-1 4.4-3 3.8-1.6-.5-1.6-2.8.1-2.9'/%3E%3Cpath d='M5.5 5.5c2.4.4 3.4 1.6 3.4 3.2' stroke-width='1'/%3E%3Cpath d='M20 2c1.2-1.3 3-1.1 3.6-.2-1.2.9-2.5 1-3.6.2zM2 20c-1.3 1.2-1.1 3-.2 3.6.9-1.2 1-2.5.2-3.6z' fill='black' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  --fili-tr: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'%3E%3Cg transform='matrix(-1 0 0 1 24 0)'%3E%3Cpath d='M2 2H20M2 2V20'/%3E%3Cpath d='M2 2c4.6 0 7.6 2 8.4 5.4.6 2.6-1 4.4-3 3.8-1.6-.5-1.6-2.8.1-2.9'/%3E%3Cpath d='M5.5 5.5c2.4.4 3.4 1.6 3.4 3.2' stroke-width='1'/%3E%3Cpath d='M20 2c1.2-1.3 3-1.1 3.6-.2-1.2.9-2.5 1-3.6.2zM2 20c-1.3 1.2-1.1 3-.2 3.6.9-1.2 1-2.5.2-3.6z' fill='black' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  --fili-bl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'%3E%3Cg transform='matrix(1 0 0 -1 0 24)'%3E%3Cpath d='M2 2H20M2 2V20'/%3E%3Cpath d='M2 2c4.6 0 7.6 2 8.4 5.4.6 2.6-1 4.4-3 3.8-1.6-.5-1.6-2.8.1-2.9'/%3E%3Cpath d='M5.5 5.5c2.4.4 3.4 1.6 3.4 3.2' stroke-width='1'/%3E%3Cpath d='M20 2c1.2-1.3 3-1.1 3.6-.2-1.2.9-2.5 1-3.6.2zM2 20c-1.3 1.2-1.1 3-.2 3.6.9-1.2 1-2.5.2-3.6z' fill='black' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  --fili-br: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'%3E%3Cg transform='matrix(-1 0 0 -1 24 24)'%3E%3Cpath d='M2 2H20M2 2V20'/%3E%3Cpath d='M2 2c4.6 0 7.6 2 8.4 5.4.6 2.6-1 4.4-3 3.8-1.6-.5-1.6-2.8.1-2.9'/%3E%3Cpath d='M5.5 5.5c2.4.4 3.4 1.6 3.4 3.2' stroke-width='1'/%3E%3Cpath d='M20 2c1.2-1.3 3-1.1 3.6-.2-1.2.9-2.5 1-3.6.2zM2 20c-1.3 1.2-1.1 3-.2 3.6.9-1.2 1-2.5.2-3.6z' fill='black' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask: var(--fili-tl) top left / 30px 30px no-repeat, var(--fili-tr) top right / 30px 30px no-repeat, var(--fili-bl) bottom left / 30px 30px no-repeat, var(--fili-br) bottom right / 30px 30px no-repeat;
+  mask: var(--fili-tl) top left / 30px 30px no-repeat, var(--fili-tr) top right / 30px 30px no-repeat, var(--fili-bl) bottom left / 30px 30px no-repeat, var(--fili-br) bottom right / 30px 30px no-repeat; }
+.mcard[data-r="hobbit"] { --wood: color-mix(in srgb, #7a5230 80%, var(--panel)); border: 5px solid var(--wood);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--wood) 65%, #000), inset 0 0 0 1px color-mix(in srgb, var(--wood) 60%, #fff); }
+.mcard[data-r="hobbit"]::before { content: ""; inset: -5px; --peg: radial-gradient(circle, #f3d98e 0 .9px, #b48a35 1.5px, #5b4012 2.1px, transparent 2.5px);
+  background: var(--peg) top left / 5px 5px no-repeat, var(--peg) top right / 5px 5px no-repeat, var(--peg) bottom left / 5px 5px no-repeat, var(--peg) bottom right / 5px 5px no-repeat, var(--peg) top center / 5px 5px no-repeat, var(--peg) bottom center / 5px 5px no-repeat; }
+.mcard[data-r="dwarf"] { --iron: color-mix(in srgb, #4d4a55 82%, var(--panel)); border: 5px solid var(--iron);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--iron) 60%, #000), inset 0 0 0 1px color-mix(in srgb, var(--iron) 72%, #fff); }
+.mcard[data-r="dwarf"]::before { content: ""; inset: -5px; --rv: radial-gradient(circle, #e2dee8 0 .5px, #9a95a2 1px, #26242b 1.7px, transparent 2.1px);
+  background: var(--rv) 9px 0 / 22px 5px repeat-x, var(--rv) 9px 100% / 22px 5px repeat-x, var(--rv) 0 9px / 5px 22px repeat-y, var(--rv) 100% 9px / 5px 22px repeat-y; }
+.mcard[data-r="man"] { border: 2px solid color-mix(in srgb, var(--gold) 60%, var(--line-2)); }
+.mcard[data-r="stones"] { border-color: color-mix(in srgb, #6f7fc0 50%, var(--line-2)); box-shadow: var(--shadow), 0 0 24px -8px rgb(120 150 255 / .45); }
 
-.mnote { font-size: 12px; color: var(--warn); }
-.mwt { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-3); }
-.mwt b { color: var(--ink); font-weight: 500; white-space: nowrap; }
-.mwt .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-a.mwt:hover { text-decoration: none; color: var(--ink-2); }
+/* Middle-earth (scene.js): a pixel canvas scaled by a whole number, with crisp HTML names over it. */
+.sc-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 12px 16px 10px; }
+.sc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-3); }
+.sc-legend span { white-space: nowrap; }
+.sc-legend b { font-weight: 600; color: var(--ink-2); }
+.sc-wrap { overflow-x: auto; }
+/* The map fills the view edge to edge and down to the bottom (scene.js scFit), with a hairline under the legend. */
+.sc-stage { position: relative; margin: 0 auto; overflow: hidden; box-shadow: 0 -1px 0 var(--line-2); }
+.sc-stage canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.sc-tags { position: absolute; inset: 0; pointer-events: none; font-family: 'Silkscreen', var(--mono); font-size: var(--sc-font); }
+.sc-name { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; display: flex; align-items: center; gap: 4px; font: inherit; line-height: 1; color: #fff; background: rgb(18 16 28 / 0.74); border: 0; border-radius: 3px; padding: 3px 5px 2px; cursor: pointer; white-space: nowrap; }
+.sc-name:hover { background: rgb(18 16 28 / 0.92); }
+.sc-name.sc-road { transform: translate(0, -50%); }
+.sc-name.sc-road.sc-left { transform: translate(-100%, -50%); }
+.sc-name i { width: 6px; height: 6px; border-radius: 1px; background: var(--c); flex: none; }
+/* On a map tag the mark sits in the tag's own gap; a Codex or Grok worker's fix round follows its name. */
+.sc-name .ai { margin-right: 0; }
+.sc-eng { font: inherit; font-size: 0.86em; line-height: 1; opacity: 0.8; }
+/* A realm's name is lettered over it like a map's, no box: wide Cinzel capitals with a soft shadow to read on night or
+   day sky, its status in the scene's pixel font underneath. The block grows upward from just above the peaks. */
+.sc-realm { position: absolute; transform: translate(-50%, -100%); color: #fff6e2; text-align: center; white-space: nowrap;
+  font: 600 calc(var(--sc-font) * 1.6)/1.1 'Cinzel', var(--serif); letter-spacing: .3em; text-transform: uppercase;
+  text-shadow: 0 1px 0 rgb(0 0 0 / .6), 0 0 8px rgb(0 0 0 / .5); }
+.sc-realm small { display: block; font: 400 calc(var(--sc-font) * 0.85)/1.35 'Silkscreen', var(--mono); letter-spacing: 0; text-transform: none; opacity: .9; margin-top: 3px; }
+.sc-day .sc-realm { color: #2a2016; text-shadow: 0 0 2px rgb(255 250 235 / .95), 0 0 9px rgb(255 250 235 / .8); }
+/* Who just called (scene-call.js): the caller's name glows in its call's colour, and the bar says what the newest call was. */
+.sc-name.sc-calling { color: var(--call-ink); background: var(--call); box-shadow: 0 0 0 1px rgb(255 255 255 / .7), 0 0 8px 2px var(--call); animation: sc-calling 1.2s ease-in-out infinite; }
+@keyframes sc-calling { 50% { box-shadow: 0 0 0 1px rgb(255 255 255 / .9), 0 0 14px 5px var(--call); } }
+.sc-call { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; font: 14px/1.3 var(--serif); color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.sc-call i { align-self: center; width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--call); box-shadow: 0 0 6px 2px var(--call); animation: sc-calling 1.2s ease-in-out infinite; }
+.sc-call b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-call small { color: var(--ink-3); white-space: nowrap; }
+.sc-call:hover b { text-decoration: underline; }
+@media (prefers-reduced-motion: reduce) { .sc-name.sc-calling, .sc-call i { animation: none; } }
+
+/* Gollum (gollum-view.js): The Ring card and a card per machine, in the Machines view's grid. */
+.mcard.wide table.accts.gv-ring th:first-child { width: auto; } .mcard.wide table.accts.gv-ring th.u { width: 120px; } .mcard.wide table.accts.gv-ring th.w { width: 34%; }
+.gv .row { padding: 9px 16px; }
+.gv .rbody { gap: 5px; }
+.gv .rtitle { font: 500 14px/1.3 var(--sans); }
+.gv .empty { padding: 14px 16px; }
+@media (max-width: 1100px) { .mcard.wide table.accts.gv-ring th.u { width: 76px; } }
 
 /* Worktrees (worktrees.js) */
 .wt-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 24px; border-bottom: 1px solid var(--line); }
@@ -212,6 +371,18 @@ a.mwt:hover { text-decoration: none; color: var(--ink-2); }
 .wt .rbody { gap: 5px; }
 .wt .rid { max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
 .wt .rtitle { font-weight: 400; }
+
+/* Sessions (sessions.js) */
+.sessrow { padding-block: 9px; }
+.sessrow .rbody { gap: 3px; }
+.sessrow .rline { flex-wrap: wrap; gap: 4px 8px; }
+.sessrow .rtitle { flex: 0 1 auto; white-space: normal; }
+.sessrow .rtext { font-size: 13.5px; }
+.sess-side { flex: none; align-self: flex-start; display: flex; align-items: center; gap: 8px; }
+.sess-side .rmeta { margin-right: 4px; }
+.sessrow.handled { opacity: .6; }
+@media (max-width: 640px) { .sessrow { flex-wrap: wrap; } .sess-side { width: 100%; padding-left: 26px; } }
+.sess-new { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
 
 /* Inbox (inbox.js) */
 .ibar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 24px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 12px; }
@@ -270,13 +441,137 @@ dialog.sess::backdrop { background: rgb(0 0 0 / 0.32); }
 .sess-row { display: flex; gap: 10px; align-items: center; padding: 6px 8px 8px 12px; }
 .sess-status { flex: 1; font-size: 12px; color: var(--ink-3); }
 
-/* Narrower screens */
-@media (max-width: 1199px) {
-  .bays { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .bay-group-label, .bay { grid-row: auto; }
+/* Middle-earth theme: the shell. Paper grain and a warm vignette by day, stars by night; a double ink frame round the
+   page; Cinzel for the brand, view titles, nav sections and group headings. */
+body { background-image: var(--grain), var(--sky); background-size: var(--sky-size, auto); background-attachment: fixed; }
+main.main { background: var(--panel) var(--grain); border: 3px double var(--line-2); border-radius: 6px; }
+header.bar { background: var(--panel) var(--grain); border-bottom: 3px double var(--line-2); border-radius: 4px 4px 0 0; }
+h1 { font: 600 16px/1 var(--display); letter-spacing: 0.05em; display: flex; align-items: center; gap: 10px; }
+h1::before { content: ""; width: 8px; height: 8px; transform: rotate(45deg); background: var(--gold); box-shadow: 0 0 0 2px color-mix(in srgb, var(--gold) 25%, transparent); flex: none; }
+.ws { font: 700 14px/1.2 var(--display); letter-spacing: 0.06em; padding-bottom: 16px; }
+.nav-item { font: 500 15px/1 var(--serif); height: 31px; }
+.nav-item.view { font: 600 11.5px/1 var(--display); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-2); }
+.nav-item .count { font-family: var(--sans); }
+/* A left accent sits on square left corners, so it reads as a straight bar, never a curve (2026-11-06). */
+.nav-item.active { background: var(--active); box-shadow: inset 2px 0 0 var(--gold); border-radius: 0 6px 6px 0; }
+.stat { border-radius: 3px; border-color: var(--line-2); background: var(--raised); }
+.stat.hot, .stat.warm { --c: var(--bad); background: color-mix(in srgb, var(--c) 11%, var(--raised)); border-color: color-mix(in srgb, var(--c) 45%, var(--line-2)); color: var(--ink); }
+.stat.warm { --c: var(--warn); }
+.group.quiet h2.gh { display: none; }
+.all-clear { display: flex; align-items: center; gap: 10px; padding: 12px 24px; border-bottom: 1px solid var(--line-2); color: var(--ink-2); font: italic 15.5px/1.3 var(--serif); }
+.fresh { font-style: italic; font-family: var(--serif); font-size: 14px; }
+/* The war horn's control (horn.js), at the header's right end. */
+.horn { display: flex; align-items: center; gap: 5px; flex: none; }
+.horn button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; font: 500 12px/1 var(--sans); color: var(--ink-2); background: var(--raised); border: 1px solid var(--line-2); border-radius: 3px; cursor: pointer; white-space: nowrap; }
+.horn button:hover { color: var(--ink); background: var(--sunk); }
+.horn button[aria-pressed="false"] { color: var(--ink-3); }
+.horn svg { width: 13px; height: 13px; }
+/* The music player (music.js), just before it: Music, Next, and the track over a thin line of how far it has got. */
+.music { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; }
+.music button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; font: 500 12px/1 var(--sans); color: var(--ink-2); background: var(--raised); border: 1px solid var(--line-2); border-radius: 3px; cursor: pointer; white-space: nowrap; flex: none; }
+.music button:hover { color: var(--ink); background: var(--sunk); }
+.music button:disabled { opacity: .5; cursor: default; }
+.music svg { width: 11px; height: 11px; }
+.music .mu-next { padding: 0 6px; }
+.music .mu-play.is-on { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); background: color-mix(in srgb, var(--accent) 10%, var(--raised)); }
+.music .mu-play.is-held { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line-2)); }
+.music .mu-play.is-wait { color: var(--accent-ink); border-style: dashed; border-color: var(--accent); }
+.music .mu-now { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-width: 0; max-width: 230px; }
+.music .mu-t { font: 500 12px/1.25 var(--sans); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.music .mu-a { font: 400 10.5px/1.2 var(--sans); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.music .mu-bar { display: block; height: 2px; margin-top: 2px; background: var(--line); border-radius: 1px; overflow: hidden; }
+.music .mu-bar b { display: block; height: 100%; width: 0; background: var(--accent); }
+.music[data-state="held"] .mu-now, .music[data-state="wait"] .mu-now { opacity: .6; }
+.banner { border-radius: 4px; font-family: var(--serif); font-size: 15px; }
+.alarm { margin: 14px 24px 0; padding: 11px 14px; display: flex; gap: 11px; align-items: flex-start; border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent); border-left: 4px solid var(--bad); border-radius: 0 4px 4px 0;
+  background: color-mix(in srgb, var(--bad) 9%, var(--panel)); color: var(--ink); font: 15px/1.45 var(--serif); }
+.alarm > .ico { margin-top: 3px; }
+.alarm b { font: 700 13px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--bad); margin-right: 6px; }
+.alarm a { color: var(--bad); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Middle-earth theme: lists and cards. Group headings run into a fading rule; titles are set in Garamond; worker
+   names in Cinzel; slots and cards are vellum with their realm's colour along the top. */
+h2.gh { background: var(--group) var(--grain); font: 600 12px/1 var(--display); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); border-bottom-color: var(--line-2); }
+h2.gh::after { content: ""; flex: 1; height: 1px; margin-left: 4px; background: linear-gradient(90deg, var(--line-2), transparent 85%); }
+h2.gh .gcount { font: 500 12px/1 var(--sans); letter-spacing: 0; text-transform: none; }
+.empty { font: italic 15px/1.4 var(--serif); }
+.row { border-bottom-color: var(--line); }
+.rtitle { font: 500 15.5px/1.3 var(--serif); }
+.li .rtitle { font-weight: 400; }
+.rtext { font: 15px/1.45 var(--serif); }
+.wname { font: 700 12.5px/1.2 var(--display); letter-spacing: 0.03em; }
+.wname.col { width: 92px; overflow: hidden; text-overflow: ellipsis; }
+.mini-host { font-size: 12.5px; }
+@media (max-width: 600px) { .wname.col:empty { display: none; } .wname.col { width: auto; } }
+.bay { position: relative; background: var(--raised) var(--grain); border: 1px solid var(--line-2); border-top: 3px solid var(--mc); border-radius: 4px; box-shadow: var(--shadow), inset 0 0 14px rgb(120 85 30 / 0.06); }
+.bay .what { font: 14px/1.3 var(--serif); }
+.bay .what, .bay .when { padding-right: 30px; }
+.bay.seat { border-top-width: 1px; font: italic 14.5px/1 var(--serif); }
+.realm-head { font: 600 11.5px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink); }
+.realm-head .muted { font: 400 12px/1 var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink-3); }
+canvas.av { width: 32px; height: 44px; image-rendering: pixelated; flex: none; }
+.bay canvas.av { position: absolute; right: 4px; bottom: 5px; }
+.rline canvas.av { width: 24px; height: 33px; margin: -10px 0 -8px; }
+.build:target { box-shadow: inset 3px 0 0 var(--gold); }
+.chip { border-radius: 3px; background: var(--raised); border-color: var(--line-2); font-size: 11.5px; }
+.chip::before { width: 6px; height: 6px; border-radius: 1px; transform: rotate(45deg); }
+.chip.ok, .chip.run, .chip.warn, .chip.bad { background: color-mix(in srgb, var(--c) 9%, var(--raised)); border-color: color-mix(in srgb, var(--c) 35%, var(--line-2)); }
+.chip.engine { border-radius: 3px; }
+button.open, .show-all { font: 600 10.5px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; border-radius: 3px; background: var(--raised); border-color: var(--line-2); }
+button.open.primary { background: var(--accent); border-color: color-mix(in srgb, var(--gold) 70%, transparent); color: #fbf5e6; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12); }
+code.cmd, pre.log { border-radius: 3px; }
+
+/* Middle-earth theme: inbox, worktrees, the scene and the session panel. */
+.ibar, .wt-sum { font-family: var(--serif); font-size: 14.5px; }
+.ibar b { font-family: var(--sans); font-size: 13px; }
+.avatar { box-shadow: inset 0 -2px 0 rgb(0 0 0 / 0.22), 0 0 0 2px color-mix(in srgb, var(--av) 30%, transparent); }
+.inb .who { font: 600 15px/1.2 var(--serif); color: var(--ink); white-space: nowrap; flex: none; }
+.inb .said { font: italic 15px/1.2 var(--serif); color: var(--ink-3); white-space: nowrap; flex: none; margin-left: -4px; }
+.inb .rtitle { font-weight: 500; }
+.inb-actions .btn { height: auto; padding: 0; border: 0; background: none; font: 500 12px/1.2 var(--sans); color: var(--ink-3); }
+.inb-actions .btn:hover { background: none; color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+.sc-bar .sc-legend { font: 14px/1.3 var(--serif); }
+dialog.sess { background: var(--panel) var(--grain); border-left: 3px double var(--line-2); }
+.sess-head { background: var(--group) var(--grain); border-bottom-color: var(--line-2); }
+.sess-top h3 { font: 500 18px/1.35 var(--serif); }
+.sess-top h3 .wname { font-size: 13.5px; margin-right: 4px; }
+.sess-top h3 canvas.av { width: 20px; height: 28px; vertical-align: -6px; margin-right: 8px; }
+.ev .txt { border-radius: 4px; background: var(--raised); }
+.ev .who { font: 600 11px/1 var(--display); letter-spacing: 0.08em; text-transform: uppercase; }
+.composer { border-radius: 4px; }
+
+/* Middle-earth theme: marks across the board (2026-11-06). A realm's sigil wherever a machine is named; a wax seal on
+   every count of what waits on the owner; gold diamonds at the corners of the main panel like a map's; a double rule
+   with a gold diamond after each group heading; and a short line in the realm's voice after a plain empty state. */
+.mdot[data-r] { width: 12px; height: 12px; border-radius: 0; background: var(--mc, var(--ink-3)); -webkit-mask: var(--sig) center / contain no-repeat; mask: var(--sig) center / contain no-repeat; }
+.nav-item .mdot[data-r] { margin: 0 1px; }
+.mdot[data-r="elf"] { --sig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 .5C9.6 3 9.8 7.6 6 11.5 2.2 7.6 2.4 3 6 .5zM5.55 3.2h.9v6.9h-.9z'/%3E%3C/svg%3E"); }
+.mdot[data-r="hobbit"] { --sig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M.6 6.3a5.4 5.4 0 1 0 10.8 0a5.4 5.4 0 1 0-10.8 0zM1.7 6.3a4.3 4.3 0 1 0 8.6 0a4.3 4.3 0 1 0-8.6 0zM2.7 6.3a3.3 3.3 0 1 0 6.6 0a3.3 3.3 0 1 0-6.6 0zM6.65 6.6a.75.75 0 1 0 1.5 0a.75.75 0 1 0-1.5 0z'/%3E%3C/svg%3E"); }
+.mdot[data-r="dwarf"] { --sig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M.5 11.5 6 .6l5.5 10.9zM4.7 11.5V8.9a1.3 1.3 0 0 1 2.6 0v2.6zM4.4 4.4 6 1.9l1.6 2.5-.8-.4-.8.6-.8-.6z'/%3E%3C/svg%3E"); }
+.mdot[data-r="man"] { --sig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M1.8.6h1.3v10.9H1.8zM3.1 1.2h7.4L8.4 3.9l2.1 2.7H3.1z'/%3E%3C/svg%3E"); }
+.mdot[data-r="stones"] { --mc: color-mix(in srgb, #6f7fc0 80%, var(--ink)); --sig: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M1.6 5.2a4.4 4.4 0 1 0 8.8 0a4.4 4.4 0 1 0-8.8 0zM3.5 3.6a.9.9 0 1 0 1.8 0a.9.9 0 1 0-1.8 0zM3 11.6h6l-1.2-2.3H4.2z'/%3E%3C/svg%3E"); }
+.seal, .nav-item .count.hot, .stat b.seal, h2.gh .gcount.seal { --wax: #a3271d; --wax-l: #e0685a; --wax-d: #64110c; display: inline-grid; place-items: center; min-width: 21px; height: 21px; padding: 0 5px; border-radius: 0;
+  color: #fff1e4; font: 600 10.5px/1 var(--sans); letter-spacing: 0; text-transform: none; text-shadow: 0 -1px 0 rgb(0 0 0 / .45);
+  background: radial-gradient(circle at 36% 30%, var(--wax-l), var(--wax) 55%, var(--wax-d));
+  clip-path: polygon(100% 50%, 92.9% 59.8%, 95% 71.7%, 84.4% 77.4%, 81.2% 89.1%, 69.1% 89.6%, 61.1% 98.7%, 50% 94%, 38.9% 98.7%, 30.9% 89.6%, 18.8% 89.1%, 15.6% 77.4%, 5% 71.7%, 7.1% 59.8%, 0 50%, 7.1% 40.2%, 5% 28.3%, 15.6% 22.6%, 18.8% 10.9%, 30.9% 10.4%, 38.9% 1.3%, 50% 6%, 61.1% 1.3%, 69.1% 10.4%, 81.2% 10.9%, 84.4% 22.6%, 95% 28.3%, 92.9% 40.2%); }
+.seal.warm { --wax: #b5600f; --wax-l: #eea25a; --wax-d: #6e3606; }
+.stat b.seal { margin-left: -4px; }
+h2.gh::after { height: 7px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M5 .5 9.5 5 5 9.5.5 5z' fill='%23b08a3c'/%3E%3C/svg%3E") 0 50% / 7px 7px no-repeat,
+  linear-gradient(90deg, var(--line-2), transparent 85%) 11px 2px / calc(100% - 11px) 1px no-repeat, linear-gradient(90deg, var(--line-2), transparent 55%) 11px 4px / calc(100% - 11px) 1px no-repeat; }
+.lore { margin-left: .4em; color: var(--ink-3); font-style: italic; opacity: .8; }
+.empty::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 9px; vertical-align: -.5px; background: var(--gold); opacity: .8;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 .5C9.6 3 9.8 7.6 6 11.5 2.2 7.6 2.4 3 6 .5zM5.55 3.2h.9v6.9h-.9z'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 .5C9.6 3 9.8 7.6 6 11.5 2.2 7.6 2.4 3 6 .5zM5.55 3.2h.9v6.9h-.9z'/%3E%3C/svg%3E") center / contain no-repeat; }
+@media (min-width: 900px) {
+  main.main::before { content: ""; position: fixed; z-index: 5; pointer-events: none; top: 4px; left: 220px; right: 4px; bottom: 4px; background: var(--gold);
+    --cn: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill-rule='evenodd' d='M6 .4 11.6 6 6 11.6.4 6zM6 4.4 7.6 6 6 7.6 4.4 6z'/%3E%3C/svg%3E");
+    -webkit-mask: var(--cn) top left / 11px 11px no-repeat, var(--cn) top right / 11px 11px no-repeat, var(--cn) bottom left / 11px 11px no-repeat, var(--cn) bottom right / 11px 11px no-repeat;
+    mask: var(--cn) top left / 11px 11px no-repeat, var(--cn) top right / 11px 11px no-repeat, var(--cn) bottom left / 11px 11px no-repeat, var(--cn) bottom right / 11px 11px no-repeat; }
 }
+
+/* Narrower screens */
 @media (max-width: 899px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   .nav { flex-direction: row; align-items: center; gap: 4px; }
   .side { position: sticky; top: 0; z-index: 6; height: auto; padding: 8px 12px; overflow-x: auto; scrollbar-width: none;
     background: color-mix(in srgb, var(--frame) 92%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
@@ -288,12 +583,17 @@ dialog.sess::backdrop { background: rgb(0 0 0 / 0.32); }
   main.main { margin: 0; border: 0; border-radius: 0; height: auto; overflow: visible; box-shadow: none; }
   header.bar { position: static; height: auto; flex-wrap: wrap; padding: 14px 16px 12px; border-radius: 0; gap: 8px 12px; }
   .stats { flex-wrap: wrap; overflow: visible; order: 3; flex-basis: 100%; }
+  .horn { order: 4; }
+  /* The player shares the sound control's row and fills it; the album gives way to the title. */
+  .music { order: 4; flex: 1 1 0; }
+  .music .mu-now { max-width: none; }
+  .music .mu-a { display: none; }
   .fresh { margin-left: auto; }
   h2.gh { position: static; padding: 0 16px; }
   .group, .mcard, .build, .bay { scroll-margin-top: 54px; }
   .slots { padding: 14px 16px 16px; }
   .row { padding-inline: 16px; }
-  .more-row, .empty { padding-inline: 16px; }
+  .more-row, .empty, .all-clear { padding-inline: 16px; }
   .mview { padding: 16px 16px 24px; }
   .banner { margin-inline: 16px; }
   .ibar, .wt-sum { padding-inline: 16px; }
@@ -307,17 +607,26 @@ dialog.sess::backdrop { background: rgb(0 0 0 / 0.32); }
   .li .rbody { gap: 2px; }
   .li .rtitle { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .li .opt { display: none; }
-  .meter { grid-template-columns: 104px minmax(0, 1fr) auto; gap: 10px; }
+  .gauge { grid-template-columns: 92px minmax(0, 1fr) auto; gap: 10px; }
+  .msec { padding-inline: 12px; }
+  .mband-t { left: 11px; }
+  .mband h3 { font-size: 19px; letter-spacing: .16em; }
+  .seats { gap: 10px 3px; }
+  .seat { width: 58px; }
+  .seat-n { font-size: 10px; letter-spacing: 0; }
+  .mwt { flex-wrap: wrap; row-gap: 2px; }
+  .mwt .t { white-space: normal; }
   dialog.sess { width: 100vw; border-left: 0; }
   .composer textarea { font-size: 16px; }
 }
-@media (max-width: 480px) { .bay .pfx { display: none; } .bay { padding: 8px 8px 7px; min-height: 84px; } }
+/* Two slots a row on a phone, each realm on its own row. */
+@media (max-width: 480px) { .seat .pfx { display: none; } .realm-row, .realm-bays { width: 100%; } .realm-bays .bay:not(.seat) { width: calc(50% - 4px); } .bay .pfx { display: none; } .bay { padding: 8px 8px 7px; min-height: 86px; } }
 </style>
 </head>
 <body>
 <div class="app">
   <aside class="side">
-    <div class="ws"><span class="logo" id="wsLogo" aria-hidden="true">A</span><span id="wsName">Agents</span></div>
+    <div class="ws"><img class="logo" src="/icons/icon.svg" alt="" width="26" height="26"><span>The Forge</span></div>
     <nav class="nav" id="nav" aria-label="Sections"></nav>
   </aside>
   <main class="main" id="main">
@@ -327,10 +636,11 @@ dialog.sess::backdrop { background: rgb(0 0 0 / 0.32); }
       <div class="fresh" id="fresh"><span class="dot"></span><span id="freshText"></span></div>
     </header>
     <div id="banner"></div>
+    <div id="alarm"></div>
     <div id="view-queue">
-      <section class="slots" aria-label="Worker slots"><div class="bays" id="bays"></div></section>
+      <section class="group" id="sec-needs"><h2 class="gh"><span class="ico bad" id="gNeedsIco"></span>Needs you <span class="gcount" id="cNeeds"></span></h2><div id="needs"></div></section>
+      <section class="slots" aria-label="Worker slots"><div class="realms" id="bays"></div></section>
       <div class="lists">
-        <section class="group" id="sec-needs"><h2 class="gh"><span class="ico bad" id="gNeedsIco"></span>Needs you <span class="gcount" id="cNeeds"></span></h2><div id="needs"></div></section>
         <section class="group" id="sec-building"><h2 class="gh"><span class="ico run" id="gBuildIco"></span>Building <span class="gcount" id="cBuilding"></span></h2><div id="cards"></div></section>
         <section class="group" id="sec-adhoc"><h2 class="gh"><span class="ico run" id="gAdhocIco"></span>Outside the queue <span class="gcount" id="cAdhoc"></span></h2><div id="adhoc"></div></section>
         <section class="group" id="sec-ready"><h2 class="gh"><span class="ico todo" id="gReadyIco"></span>Ready queue <span class="gcount" id="cReady"></span></h2><div id="ready"></div></section>
@@ -340,14 +650,18 @@ dialog.sess::backdrop { background: rgb(0 0 0 / 0.32); }
     <div id="view-inbox" hidden><div id="inbox"></div></div>
     <div class="mview" id="view-machines" hidden><div class="machines" id="machines"></div></div>
     <div id="view-worktrees" hidden><div id="worktrees"></div></div>
+    <div id="view-gollum" hidden><div id="gollum"></div></div>
+    <div id="view-sessions" hidden><div id="sessions"></div></div>
+    <div id="scenes">
+      <div id="view-scene" hidden><div id="scene"></div></div>
+      <div id="view-map" hidden><div id="map"></div></div>
+    </div>
   </main>
 </div>
 <script>
 const POLL_MS = 20000;
 const MC = ['var(--m1)', 'var(--m2)', 'var(--m3)'];
 const PRI = { 1: 'Urgent', 2: 'High', 3: 'Medium', 4: 'Low' };
-// Below this width the slots wrap to 4 across, so the machine labels over them take a whole row.
-const NARROW = '(max-width: 1199px)';
 const MERGED_SHOWN = 10;
 let snap = null, lastOk = 0, failing = null, timer = null, mergedAll = false, view = null;
 const schedule = (d) => { clearTimeout(timer); timer = setTimeout(poll, d); };
@@ -355,9 +669,17 @@ const schedule = (d) => { clearTimeout(timer); timer = setTimeout(poll, d); };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const cap = (s) => String(s ?? '').replace(/^./, (c) => c.toUpperCase());
-const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// What the board calls a ticket's worker in its labels: its nickname, or "the worker" before it has one.
+const called = (t) => t?.nickname || 'the worker';
+const workerIs = (t) => `${called(t)} ${t.workerState === 'limit' ? `hit ${engineName(t)}'s limit` : ['failed', 'stopped'].includes(t.workerState) ? t.workerState : `is ${t.workerState}`}`;
+// Codex or Grok building a ticket on its own, with no Claude worker (the dispatcher's driver 'engine'; board.mjs reads its
+// registry): its engine's name, a line saying which and its round (1 the build, then one per CI or review fix) for
+// tooltips, and the round after its name over the map (its mark, ai-marks.js, says which engine).
+const engineName = (t) => (t?.engine === 'grok' ? 'Grok' : 'Codex');
+const engineLine = (t) => (t?.driver === 'engine' ? `${engineName(t)} worker${t.round ? `, ${t.round > 1 ? `fix round ${t.round}` : 'first build'}` : ''}` : '');
+const engineTag = (t) => (t?.driver === 'engine' && t.round > 1 ? `<b class="sc-eng">R${t.round}</b>` : '');
 // An account by its email and plan; the letter is only how the fleet and the dispatcher log refer to it.
-const acctText = (email, plan, label) => email ? `${email}${plan ? ` (${plan})` : ''}` : `account ${label}`;
+const acctText = (email, plan, label) => email ? `${email}${plan ? ` (${plan})` : ''}` : ['codex', 'grok'].includes(label) ? '' : `account ${label}`;
 const acctOf = (m, label) => (m.accounts || []).find((a) => a.label === label) || {};
 const ms = (t) => (t ? Date.now() - Date.parse(t) : null);
 function dur(milli) {
@@ -369,6 +691,9 @@ function dur(milli) {
   return `${Math.floor(h / 24)}d ${Math.round(h % 24)}h`;
 }
 const ago = (t) => (t ? `${dur(ms(t))} ago` : 'never');
+// Why the board can't reach a machine, in words: an SSH connect that times out means the machine is off Tailscale.
+const unreachable = (e) => (/timed out|no route|host is down|network is unreachable/i.test(e || '') ? 'Offline or asleep: it is off Tailscale, so SSH to it timed out.'
+  : /refused/i.test(e || '') ? 'It is on the network, but its SSH turned the board away.' : `Unreachable: ${e}.`);
 const link = (url, text) => (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text));
 // Links in an ask's text: a GitHub PR reads as "PR #123", any other URL as itself.
 const linkify = (s) => esc(s).replace(/(\bPR )?(https:\/\/[^\s<>"']+[^\s<>"'.,;:)])/g, (all, before, u) => {
@@ -380,24 +705,87 @@ const ticketLinks = (t) => (t.bundle?.length ? [link(t.url, t.ticket), ...t.bund
 // A bundle's other tickets, one line each, under the lead's title.
 const bundleLines = (t) => (t.bundle || []).map((b) => `<div class="rsub">With ${link(b.url, b.id)}${b.title ? `: ${esc(b.title)}` : ''}</div>`).join('');
 const machineColor = (host) => MC[Math.max(0, snap.machines.findIndex((m) => m.host === host)) % MC.length];
+// Each machine's realm in Middle-earth and its people, whose pixel figure (sprites.js) its workers wear in the slots, the
+// cards and the Middle-earth view. Workers in the Sentry slot are Rangers, workers outside the queue wizards, and a
+// machine with no realm of its own is Rohan. The table is { host: [name, folk] }, as every script that reads it expects.
+// It starts empty and fillRealms() refills it in place from snap.config.realms ({ host: { name, folk } }) as each
+// snapshot arrives, before anything renders, so a script holding the object always sees the current table. Until the
+// first snapshot every machine reads as Rohan.
+const REALMS = {};
+function fillRealms(cfg) {
+  for (const k of Object.keys(REALMS)) delete REALMS[k];
+  for (const [host, r] of Object.entries(cfg?.realms ?? {})) if (r && r.name) REALMS[host] = [r.name, r.folk || 'man'];
+}
+// The machine the board runs on (snap.config.boardHost, else the host that served the snapshot), by its display name.
+const boardHost = () => snap?.config?.boardHost ?? snap?.servedBy ?? null;
+const boardName = () => snap?.machines?.find((m) => m.host === boardHost())?.name ?? boardHost() ?? "the board's machine";
+const realmName = (host) => REALMS[host]?.[0] ?? 'Rohan';
+const realmKind = (host) => REALMS[host]?.[1] ?? 'man';
+// A worker outside the queue is one of the wise wanderers the dispatcher names it after (its nicknames.adhoc): the
+// wizards Gandalf and Radagast, and Treebeard the Ent, Tom Bombadil and Beorn, who are no wizards (2026-11-07),
+// each drawn as himself once his figure exists (sprites-wanderers.js), else as a wizard.
+const WANDERERS = { treebeard: 'ent', 'tom bombadil': 'bombadil', bombadil: 'bombadil', beorn: 'beorn' };
+function wandererKind(name) {
+  const n = String(name || '').toLowerCase();
+  const kind = Object.entries(WANDERERS).find(([k]) => n.includes(k))?.[1];
+  return kind && typeof PEOPLE !== 'undefined' && PEOPLE[kind] ? kind : 'wizard';
+}
+// The Sentry's riders are four different captains by the dispatcher's names (its nicknames.sentry; 2026-11-07):
+// Aragorn a Ranger of the North, Faramir a captain of Gondor leading the Rangers of Ithilien, Boromir a captain of Gondor,
+// and Éomer a Marshal of Rohan; each is drawn as himself once his figure exists (sprites-captains.js), else as a Ranger.
+const CAPTAINS = { faramir: 'ithilien', boromir: 'gondor', 'éomer': 'rohirrim', eomer: 'rohirrim' };
+function captainKind(name) {
+  const n = String(name || '').toLowerCase();
+  const kind = Object.entries(CAPTAINS).find(([k]) => n.includes(k))?.[1];
+  return kind && typeof PEOPLE !== 'undefined' && PEOPLE[kind] ? kind : 'ranger';
+}
+// A Codex or Grok worker is drawn as its realm's own folk like any worker; only its mark (ai-marks.js) says what runs it
+// (2026-11-09: it is just a subagent executing work, so it needs no look of its own).
+const figureOf = (t) => (t.adhoc ? wandererKind(t.nickname) : t.sentry ? captainKind(t.nickname) : realmKind(t.host));
+// A realm's sigil in its colour, wherever a machine is named: a leaf for Rivendell, a round door for the Shire, a gated
+// mountain for Erebor and a pennant for Rohan (drawn by CSS masks, .mdot[data-r]). mc overrides the colour, as red for
+// a machine that is down.
+const sigil = (host, mc) => `<span class="mdot" data-r="${realmKind(host)}"${mc ? ` style="--mc:${mc}"` : ''} aria-hidden="true"></span>`;
+const figureAvatar = (t) => `<canvas class="av" width="64" height="88" data-kind="${figureOf(t)}" data-name="${esc(t.nickname || t.label || t.id)}" aria-hidden="true"></canvas>`;
+function paintAvatars(root) {
+  if (typeof drawFigure !== 'function') return;
+  root.querySelectorAll('canvas.av').forEach((c) => {
+    const g = c.getContext('2d');
+    g.setTransform(4, 0, 0, 4, 0, 0);
+    g.imageSmoothingEnabled = false;
+    g.clearRect(0, 0, 16, 22);
+    // A figure taller than the portrait (the Ent) stands lower in it, so his head shows and his feet are cropped.
+    drawFigure(g, c.dataset.kind, c.dataset.name, 8, 20 + Math.max(0, figureTop(c.dataset.kind) - 21), 'stand', 0);
+  });
+}
+// When main is red (snap.main, from the dispatcher's main-state.json), a banner over every view; horn.js sounds the horn.
+function renderAlarm() {
+  const m = snap.main;
+  $('alarm').innerHTML = m?.status !== 'red' ? '' : `<div class="alarm" role="alert">${ico('bad', 'bad')}<div><b>Orcs at the gates</b>Main has been red for ${dur(ms(m.since))}${m.title ? `, since ${esc(m.title)}` : ''}.${m.failing?.length ? ` Failing: ${esc(m.failing.join(', '))}.` : ''}${m.run ? ` ${link(m.run, 'Open the run')}` : ''}</div></div>`;
+}
 
 // Status glyphs in the style of Linear's issue states, 14px, drawn in the surrounding text colour.
 const svg = (body) => `<svg class="ic" viewBox="0 0 14 14" aria-hidden="true">${body}</svg>`;
 const ICON = {
-  run: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 3.5a3.5 3.5 0 0 1 0 7z" fill="currentColor"/>'),
-  warn: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 3.5a3.5 3.5 0 1 1-3.5 3.5H7z" fill="currentColor"/>'),
-  ok: svg('<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path class="cut" d="M4.3 7.2l1.9 1.9 3.6-3.9" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'),
-  bad: svg('<circle cx="7" cy="7" r="6.5" fill="currentColor"/><path class="cut" d="M7 3.9v3.5" stroke-width="1.6" stroke-linecap="round"/><circle class="cutf" cx="7" cy="9.9" r="0.95"/>'),
-  free: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="1.9 1.9"/>'),
-  todo: svg('<circle cx="7" cy="7" r="5.75" fill="none" stroke="currentColor" stroke-width="1.5"/>'),
+  // Status marks are cut gems: hollow for not started, half-set while running, whole when done or broken.
+  run: svg('<path d="M7 1.5 12.5 7 7 12.5 1.5 7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 4 4 7l3 3z" fill="currentColor"/>'),
+  warn: svg('<path d="M7 1.5 12.5 7 7 12.5 1.5 7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M4 7h6l-3 3z" fill="currentColor"/>'),
+  ok: svg('<path d="M7 .8 13.2 7 7 13.2.8 7z" fill="currentColor"/><path class="cut" d="M4.6 7.1l1.7 1.7 3.2-3.4" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'),
+  bad: svg('<path d="M7 .8 13.2 7 7 13.2.8 7z" fill="currentColor"/><path class="cut" d="M7 4.1v3.3" stroke-width="1.6" stroke-linecap="round"/><circle class="cutf" cx="7" cy="9.6" r="0.9"/>'),
+  free: svg('<path d="M7 1.5 12.5 7 7 12.5 1.5 7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="1.9 1.7"/>'),
+  todo: svg('<path d="M7 1.5 12.5 7 7 12.5 1.5 7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>'),
   urgent: svg('<rect x="1" y="1" width="12" height="12" rx="3" fill="currentColor"/><path class="cut" d="M7 3.9v3.4" stroke-width="1.6" stroke-linecap="round"/><circle class="cutf" cx="7" cy="9.8" r="0.95"/>'),
-  inbox: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.75 8.25 3.4 2.9a1.2 1.2 0 0 1 1.15-.85h4.9a1.2 1.2 0 0 1 1.15.85l1.65 5.35v2.6a1.2 1.2 0 0 1-1.2 1.2H2.95a1.2 1.2 0 0 1-1.2-1.2z"/><path d="M1.75 8.25h3l.9 1.5h2.7l.9-1.5h3"/></g>'),
+  // A wax seal marks what waits on the owner (Needs you, Waiting on you, their mentions), apart from Linear's urgent priority.
+  seal: svg('<path d="M13.4 7l-.9 1.5v1.7l-1.5.8-.8 1.5H8.5L7 13.4l-1.5-.9H3.8L3 11l-1.5-.8V8.5L.6 7l.9-1.5V3.8L3 3l.8-1.5h1.7L7 .6l1.5.9h1.7L11 3l1.5.8v1.7z" fill="currentColor"/><circle class="cut" cx="7" cy="7" r="4.3" fill="none" stroke-width=".8"/><path class="cut" d="M7 4.7v2.4" stroke-width="1.5" stroke-linecap="round"/><circle class="cutf" cx="7" cy="9.1" r=".85"/>'),
+  // A scroll for the inbox, a banner for the queue, a tower for the machines.
+  inbox: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"><path d="M3.5 2.2h7.3a1.5 1.5 0 0 1 0 3H10v5.6a1.5 1.5 0 0 1-1.5 1.5H2.8"/><path d="M3.5 2.2A1.5 1.5 0 0 0 2 3.7v7.1a1.5 1.5 0 1 0 3 0V3.7a1.5 1.5 0 0 0-1.5-1.5"/><path d="M6.6 6.2h1.8M6.6 8.6h1.8"/></g>'),
   comment: svg('<path d="M2 3.2c0-.66.54-1.2 1.2-1.2h7.6c.66 0 1.2.54 1.2 1.2v5.1c0 .66-.54 1.2-1.2 1.2H6.2L3.5 11.8V9.5h-.3c-.66 0-1.2-.54-1.2-1.2z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'),
-  list: svg('<path d="M2.5 3.5h9M2.5 7h9M2.5 10.5h9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>'),
-  machine: svg('<g fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.75" y="2" width="10.5" height="4.25" rx="1.2"/><rect x="1.75" y="7.75" width="10.5" height="4.25" rx="1.2"/></g><circle cx="4.1" cy="4.1" r=".8" fill="currentColor"/><circle cx="4.1" cy="9.9" r=".8" fill="currentColor"/>'),
+  list: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"><path d="M3 13V1.2"/><path d="M3 2h8.5l-1.8 2.6 1.8 2.6H3"/></g>'),
+  machine: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M3.5 12.6V4.4h7v8.2M2.5 12.6h9M3.5 4.4V1.8h1.4v1.2h1.4V1.8h1.4v1.2h1.4V1.8h1.4v2.6"/><path d="M6.2 12.6V9.6a.8.8 0 0 1 1.6 0v3"/></g>'),
   pr: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="3.5" cy="3" r="1.5"/><circle cx="3.5" cy="11" r="1.5"/><circle cx="10.5" cy="11" r="1.5"/><path d="M3.5 4.5v5M10.5 9.5V6a2 2 0 0 0-2-2H6.5M8 2.5 6.5 4 8 5.5"/></g>'),
   branch: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="4" cy="3" r="1.5"/><circle cx="4" cy="11" r="1.5"/><circle cx="10" cy="4.5" r="1.5"/><path d="M4 4.5v5M10 6c0 2.6-6 1.4-6 3.5"/></g>'),
   sentry: svg('<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="4.4" y="4.6" width="5.2" height="7.2" rx="2.6"/><path d="M5.4 4.8a1.6 1.6 0 0 1 3.2 0M4.4 8H2.3M9.6 8h2.1M4.6 10.3l-1.7 1.1M9.4 10.3l1.7 1.1M4.7 5.9 3.1 4.7M9.3 5.9l1.6-1.2M7 7.2v3.4"/></g>'),
+  peak: svg('<path d="M1.5 11.5 5.4 4.2l2.3 3.9 1.4-2.1 3.4 5.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>'),
   spark: svg('<path d="M7 1.5c.4 2.9 1.6 4.1 4.5 4.5v1C8.6 7.4 7.4 8.6 7 11.5h-1C5.6 8.6 4.4 7.4 1.5 7V6C4.4 5.6 5.6 4.4 6 1.5z" fill="currentColor" transform="translate(.5 .5)"/>'),
 };
 const ico = (name, cls = name, label = '') => `<span class="ico ${cls}"${label ? ` role="img" aria-label="${esc(label)}" title="${esc(label)}"` : ''}>${ICON[name]}</span>`;
@@ -410,49 +798,52 @@ function priIco(p) {
     : '<path d="M2.5 7h1.6M6.2 7h1.6M9.9 7h1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>';
   return `<span class="ico" role="img" aria-label="${label}" title="${label}">${svg(body)}</span>`;
 }
-// A usage ring like Linear's cycle progress.
-function ring(pct, sev) {
-  const r = 5.5, c = 2 * Math.PI * r, p = Math.max(0, Math.min(100, pct ?? 0));
-  return `<svg class="ring ${sev}" viewBox="0 0 14 14" aria-hidden="true"><circle class="track" cx="7" cy="7" r="${r}"/>${p ? `<circle class="fill" cx="7" cy="7" r="${r}" stroke-dasharray="${(p / 100 * c).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 7 7)"/>` : ''}</svg>`;
-}
 
 // One plain read of where a live ticket stands, its severity, and the parts behind it.
 function standing(t) {
   const pr = t.pr;
   // A worker outside the queue that is done has finished its task; the session that started it drives what follows.
-  const ended = ['failed', 'stopped', 'gone'].includes(t.workerState) || (!t.adhoc && t.workerState === 'done');
-  if (t.adhoc && !pr && t.workerState === 'done') return { sev: 'ok', short: 'finished', long: 'The worker finished, no PR' };
+  const ended = ['failed', 'stopped', 'gone', 'limit'].includes(t.workerState) || (!t.adhoc && t.workerState === 'done');
+  if (t.adhoc && !pr && t.workerState === 'done') return { sev: 'ok', short: 'finished', long: `${cap(called(t))} finished, no PR` };
   if (t.adhoc && !t.branch && !t.blockedSince) return { sev: 'run', short: 'working', long: 'Working, no branch of its own' };
   if (t.status === 'merge-asked') return { sev: 'warn', short: 'needs your merge', long: 'Green, waiting on your merge (touches reviewed paths)' };
-  if (t.blockedSince) return { sev: 'bad', short: 'worker blocked', long: `Worker waiting on input for ${dur(ms(t.blockedSince))}` };
+  if (t.blockedSince) return { sev: 'bad', short: `${called(t)} is blocked`, long: `${cap(called(t))} is waiting on input for ${dur(ms(t.blockedSince))}` };
   // A green PR in main's merge queue lands once the queue's own checks pass, so it is in flight, not stalled.
   const queued = pr?.mergeQueue;
   if (queued) return { sev: 'ok', short: `#${pr.number} in merge queue`, long: `Green, in the merge queue (${queued.state.toLowerCase().replace(/_/g, ' ')}, position ${queued.position})` };
   if (t.stalledSince) return { sev: 'bad', short: 'stalled', long: `Stalled since ${ago(t.stalledSince)}` };
   if (!pr) {
-    if (ended) return { sev: 'bad', short: `worker ${t.workerState}, no PR`, long: `The worker session ${t.workerState} before opening a PR` };
+    if (ended) return { sev: 'bad', short: `${workerIs(t)}, no PR`, long: t.workerState === 'limit' ? `${cap(workerIs(t))} before opening a PR` : t.contained ? `${cap(called(t))}'s run was stopped by the containment audit before opening a PR` : `${cap(called(t))}'s ${t.driver === 'engine' ? 'run' : 'session'} ended (${t.workerState}) before opening a PR` };
     return { sev: 'run', short: t.branchCommitAt ? 'building, pushed' : 'building, no PR', long: t.branchCommitAt ? `Building, last push ${ago(t.branchCommitAt)}, no PR yet` : 'Building, nothing pushed yet' };
   }
   const bits = [];
   let sev = 'run';
   if (pr.draft) bits.push('draft');
-  const msMap = { DIRTY: 'conflicts with main', BEHIND: 'behind main', BLOCKED: 'blocked', UNSTABLE: 'checks failing', CLEAN: 'mergeable', HAS_HOOKS: 'mergeable', UNKNOWN: 'GitHub still checking' };
+  // GitHub's BLOCKED says only that something stops the merge; name what, so it never reads as a stuck worker.
+  const held = pr.review === 'fail' ? 'review failed' : pr.review !== 'pass' ? 'waiting on review' : pr.openThreads ? `${pr.openThreads} open thread${pr.openThreads > 1 ? 's' : ''}` : 'not mergeable yet';
+  const msMap = { DIRTY: 'conflicts with main', BEHIND: 'behind main', BLOCKED: held, UNSTABLE: 'checks failing', CLEAN: 'mergeable', HAS_HOOKS: 'mergeable', UNKNOWN: 'GitHub still checking' };
   if (pr.mergeState === 'DIRTY') sev = 'warn';
   if (pr.ci.fail.length) sev = 'bad';
   if (ended && sev !== 'ok') sev = 'bad';
   const green = (t.note || '').startsWith('green');
   if (green || reviewerWait(t)) sev = 'ok';
   const short = pr.ci.fail.length ? `CI failing (${pr.ci.fail.length})` : pr.ci.running.length ? 'CI running' : pr.mergeState === 'DIRTY' ? 'conflicts' : reviewerWait(t) ? `waiting on ${snap.config.reviewer}` : green ? 'green' : (msMap[pr.mergeState] || pr.mergeState || 'open').toLowerCase();
-  bits.push(msMap[pr.mergeState] || pr.mergeState);
-  if (ended) bits.push(`worker ${t.workerState}`);
+  // The card says what is happening now (the slot's word) and then what holds the merge, so slot and card agree.
+  const merge = green ? '' : (msMap[pr.mergeState] || pr.mergeState || '').toLowerCase();
+  bits.unshift(cap(short));
+  if (merge && merge !== short.toLowerCase()) bits.push(merge);
+  if (ended) bits.push(workerIs(t));
   return { sev, short: `#${pr.number} ${short}`, long: bits.filter(Boolean).join(', ') };
 }
 
-// A Sentry fix that waits on the reviewer's review (reviewer.name in the config), or on a worker addressing their
-// changes (dispatcher.mjs). The dispatcher holds it, so its finished worker is expected and never an alert.
+// A Sentry fix that waits on the reviewer's review (snap.config.reviewer, the config's reviewer.name), or on a worker
+// addressing their changes (dispatcher.mjs, 2026-11-05). The dispatcher holds it, so its finished worker is expected
+// and never an alert. With no reviewer configured nothing waits on one.
 function reviewerWait(t) {
   const r = snap.config.reviewer;
-  return Boolean(r) && new RegExp(`^(waiting on ${reEsc(r)}|${reEsc(r)} requested changes)`).test(t.note || '');
+  if (!r) return false;
+  const q = String(r).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(waiting on ${q}|${q} requested changes)`).test(t.note || '');
 }
 
 function attention() {
@@ -463,14 +854,14 @@ function attention() {
       text: a.question, sub: [a.blockedOn && `Blocked on: ${a.blockedOn}`, a.recommend && `Recommends: ${a.recommend}`, a.from && `From ${a.from}`].filter(Boolean).join('. ') });
   }
   for (const t of snap.tickets.filter((x) => x.live)) {
-    const where = `${t.machine}, ${acctText(t.accountEmail, t.accountPlan, t.account)}`;
+    const where = [t.machine, acctText(t.accountEmail, t.accountPlan, t.account)].filter(Boolean).join(', ');
     if (t.status === 'merge-asked' && !asked.has(t.id)) out.push({ sev: 'bad', kind: 'Merge', id: t.id, label: t.label, url: t.url, title: t.title, when: null, text: `PR #${t.prNumber} is green but touches paths you review yourself.`, href: t.pr?.url });
-    if (t.blockedSince && !asked.has(t.ticket)) out.push({ sev: 'bad', kind: 'Blocked', id: t.id, label: t.label, url: t.url, title: t.title || t.name, when: t.blockedSince, text: `The worker${t.adhoc ? ', started outside the queue,' : ''} is waiting on input in its session (${where}).`, cmd: t.attach, host: t.host });
+    if (t.blockedSince && !asked.has(t.ticket)) out.push({ sev: 'bad', kind: 'Blocked', id: t.id, label: t.label, url: t.url, title: t.title || t.name, when: t.blockedSince, text: t.driver === 'engine' ? `${cap(called(t))}, the ${engineName(t)} worker on ${t.machine}, stopped with a question${t.question ? `: ${t.question}` : '.'}` : `${cap(called(t))}${t.adhoc ? ', started outside the queue,' : ''} is waiting on input in its session (${where}).`, cmd: t.attach, host: t.host });
     if (t.stalledSince && !t.pr?.mergeQueue) out.push({ sev: 'warn', kind: 'Stalled', id: t.id, label: t.label, url: t.url, title: t.title, when: t.stalledSince, text: `Nothing has moved since ${ago(t.lastProgressAt)}.`, cmd: t.attach, host: t.host });
-    const ended = ['failed', 'done', 'stopped', 'gone'].includes(t.workerState);
+    const ended = ['failed', 'done', 'stopped', 'gone', 'limit'].includes(t.workerState);
     if (ended && t.status === 'building' && !(t.note || '').startsWith('green') && !reviewerWait(t)) {
-      out.push({ sev: 'warn', kind: 'Worker ended', id: t.id, label: t.label, url: t.url, title: t.title, when: t.lastProgressAt,
-        text: `The worker session ${t.workerState === 'gone' ? 'is gone' : `shows ${t.workerState}`}, but ${t.pr ? `PR #${t.pr.number} is ${t.note || 'not green'}` : 'no PR exists'}. Nothing is driving it.`, cmd: t.attach, host: t.host });
+      out.push({ sev: 'warn', kind: 'Ended', id: t.id, label: t.label, url: t.url, title: t.title, when: t.lastProgressAt,
+        text: `${cap(called(t))}'s ${t.driver === 'engine' ? 'run' : 'session'} ${t.workerState === 'gone' ? 'is gone' : t.workerState === 'limit' ? `hit ${engineName(t)}'s limit` : `shows ${t.workerState}`}, but ${t.pr ? `PR #${t.pr.number} is ${t.note || 'not green'}` : 'no PR exists'}. Nothing is driving it.`, cmd: t.attach, host: t.host });
     }
     if (t.effectErrors) out.push({ sev: 'warn', kind: 'Side effect', id: t.id, label: t.label, url: t.url, title: t.title, text: `${t.effectErrors} dispatcher side effect(s) failed on ${t.machine}; see its log.` });
   }
@@ -479,37 +870,68 @@ function attention() {
   for (const t of snap.tickets.filter((x) => x.status === 'stuck').sort((a, b) => (b.stuckAt || '').localeCompare(a.stuckAt || ''))) {
     if (seen.has(t.id) || (stuckIds && !stuckIds.has(t.id))) continue;
     seen.add(t.id);
-    out.push({ sev: 'warn', kind: 'Stuck', id: t.id, label: t.label, url: t.url, title: t.title, when: t.stuckAt, text: t.reason || 'The dispatcher gave up on it.', sub: `To re-queue: remove ${snap.config.labels.stuck} and add ${snap.config.labels.ready}.` });
+    out.push({ sev: 'warn', kind: 'Stuck', id: t.id, label: t.label, url: t.url, title: t.title, when: t.stuckAt, text: t.reason || 'The dispatcher gave up on it.', sub: `To re-queue: remove ${snap.config.labels?.stuck ?? 'agent-stuck'} and add ${snap.config.labels?.ready ?? 'agent-ready'}.` });
   }
   for (const m of snap.machines) {
-    if (!m.ok) out.push({ sev: 'bad', kind: 'Machine', title: m.name, text: `Unreachable: ${m.error}. Showing what it reported ${ago(m.fetchedAt)}.` });
-    if (m.paused) out.push({ sev: 'bad', kind: 'Paused', title: m.name, text: m.paused, sub: `Resume with: node ${m.root}/dispatcher/dispatcher.mjs resume` });
+    if (!m.ok) out.push({ sev: 'bad', kind: 'Machine', title: m.name, text: `${unreachable(m.error)} Showing what it reported ${ago(m.fetchedAt)}.` });
+    if (m.paused) out.push({ sev: 'bad', kind: 'Paused', title: m.name, text: m.paused, sub: `Resume with: node ${m.root ?? snap.config.repoDir ?? '.'}/dispatcher/dispatcher.mjs resume` });
     if (m.lastError) out.push({ sev: 'warn', kind: 'Tick error', title: m.name, text: m.lastError });
     const noTicks = m.lastTick && ms(m.lastTick) > 45 * 60000;
-    const handOff = 'the other machines build Sentry tickets until it is back.';
+    const handOff = 'Sentry tickets pass to the next machine in the Sentry cascade until it is back.';
     if (noTicks) out.push({ sev: 'warn', kind: 'No ticks', title: m.name, text: `Last tick ${ago(m.lastTick)}; it should tick every ${snap.config.tickMinutes} minutes.${m.sentryWorkers ? ` Meanwhile ${handOff}` : ''}` });
     // Ticking but stale here means the shared folder's sync is not carrying its heartbeat, so the others stop leaving it Sentry work.
     else if (m.ok && !m.paused && sentryOff(m)) out.push({ sev: 'warn', kind: 'Sentry slot', title: m.name, text: `${cap(sentryOff(m))}, so ${handOff}` });
-    for (const l of m.signedOut) { const a = acctOf(m, l); out.push({ sev: 'warn', kind: 'Signed out', title: m.name, text: `${a.email ? acctText(a.email, a.plan) : `Account ${l}`} is signed out on ${m.name}, so it gets no work there.` }); }
+    if (m.ok && swapRatio(m) >= SWAP_BAD) out.push({ sev: 'warn', kind: 'Swapping', title: m.name, text: `${swapText(m)}, so its builds and tests crawl.` });
+    // A signed-out account and how to sign it back in: account a is that machine's own login, any other its fleet folder.
+    for (const l of m.signedOut) {
+      const a = acctOf(m, l);
+      const fix = l === 'a' ? `run claude auth login in a terminal on ${m.name}${a.email ? `, as ${a.email}` : ''}`
+        : `run ${snap.config.addAccountScript ?? 'fleet/setup/add-account.sh'} ${m.host === boardHost() ? 'here' : m.name} ${l}${a.email ? ` ${a.email}` : ''}`;
+      out.push({ sev: 'warn', kind: 'Signed out', title: m.name, when: a.signedOutAt, text: `${a.email ? `Account ${l}, ${acctText(a.email, a.plan)},` : `Account ${l}`} is signed out on ${m.name}, so it gets no work there. To sign it back in, ${fix}.` });
+    }
   }
   for (const [k, v] of Object.entries(snap.errors || {})) out.push({ sev: 'warn', kind: k === 'github' ? 'GitHub' : 'Linear', title: 'Board', text: `Could not read ${k === 'github' ? 'PRs' : 'Linear'}: ${v}` });
   return out;
 }
 
+// Swap against RAM (2026-11-05). Memory free, the dispatcher's gate, can read healthy while a machine pages all day:
+// one machine read 39% free with 14 GB swapped on 24 GB of RAM, and its type-checks crawled at 4% CPU.
+const SWAP_WARN = 0.25;
+const SWAP_BAD = 0.5;
+const gb = (mb) => (mb < 1024 ? `${mb} MB` : `${+(mb / 1024).toFixed(1)} GB`);
+const ram = (m) => `${Math.round(m.ramMb / 1024)} GB`;
+const swapRatio = (m) => (m.swapUsedMb == null || !m.ramMb ? null : m.swapUsedMb / m.ramMb);
+const biggest = (m) => (m.topMemory ? `the largest process is ${m.topMemory.command} (PID ${m.topMemory.pid}) at ${gb(m.topMemory.mb)}` : '');
+const swapText = (m) => `${gb(m.swapUsedMb)} swapped on ${ram(m)} of RAM${m.topMemory ? `; ${biggest(m)}` : ''}`;
+
+// Every building ticket counts against maxConcurrent, whichever account runs it.
 const slotCap = () => Math.min(snap.machines.reduce((n, m) => n + (m.maxWorkers || 0), 0), snap.config.maxConcurrent);
-// Sentry slots: a machine with sentryWorkers keeps side slots for Sentry fix tickets (the config's sentry label),
+// A ticket holds one of its machine's slots, as the dispatcher counts them, only while it builds: a green PR waiting on
+// the orchestrator's merge (merge-asked) or parked on the reviewer's review holds none. The board still shows its worker, after
+// the slots with a note, so it is never lost. Across machines a merge-asked ticket still counts against maxConcurrent.
+const holdsSlot = (t) => t.status !== 'merge-asked' && !t.parked;
+const slotWait = (t) => (t.status === 'merge-asked' ? 'waiting on the orchestrator' : `waiting on ${snap.config.reviewer || 'the reviewer'}`);
+const buildingCount = (live) => live.filter((t) => !t.sentry && !t.parked).length;
+// A Codex or Grok worker (the dispatcher's driver 'engine'). Since 2026-11-09 it holds a slot in its machine's pool like
+// any worker (Codex is just a regular slot); it differs only in having no Claude session to attach to.
+const onEngine = (t) => t.driver === 'engine';
+// Sentry slots (2026-11-05): a machine with sentryWorkers keeps side slots for Sentry fix tickets (the config's sentry label),
 // apart from its regular maxWorkers, so the board counts them on their own: a busy one never makes a machine look
-// over-full and an idle one is never a free regular slot. While that machine's heartbeat is fresh and unpaused here, the
-// other machines leave Sentry tickets to it; once it goes stale, they build them as usual.
+// over-full and an idle one is never a free regular slot. Since 2026-11-09 every machine has one, and a Sentry ticket
+// cascades down snap.config.sentryCascade (for example Erebor, then Rivendell, then the Shire) to the first machine whose heartbeat
+// is fresh, unpaused and says it has Sentry room: a free Sentry slot, not busy, and an account with headroom.
 const beatFresh = (m) => Boolean(m.heartbeat && !m.heartbeat.paused && ms(m.heartbeat.at) < snap.config.sentryHeartbeatMinutes * 60000);
-const sentryHost = () => snap.machines.find((m) => m.sentryWorkers > 0 && beatFresh(m));
-// Why a Sentry host's slot is offline to the other machines, or null while it is live.
+const sentryOrder = () => (snap.config.sentryCascade ?? []).map((h) => snap.machines.find((m) => m.host === h)).filter(Boolean);
+// Where the next Sentry ticket goes, or null while no Sentry slot in the cascade has room.
+const sentryHost = () => sentryOrder().find((m) => beatFresh(m) && m.heartbeat.sentryRoom !== false) ?? null;
+// Why a Sentry host's slot is out of the cascade, or null while it is live.
 const sentryOff = (m) => (!m.sentryWorkers || beatFresh(m) ? null
   : !m.heartbeat ? 'it has no heartbeat yet' : m.heartbeat.paused ? 'it is paused' : `its heartbeat is ${dur(ms(m.heartbeat.at))} old`);
-// The Sentry slots in one line: idle, busy or offline for one slot, a count for more.
+// The Sentry slots in one line: idle, busy or offline for one slot, a count for more. A ticket parked on the reviewer's review
+// (its green PR waits only on them) holds no slot, so the next Sentry fix can start meanwhile.
 function sentrySlots(live) {
   const total = snap.machines.reduce((n, m) => n + (m.sentryWorkers || 0), 0);
-  const used = live.filter((t) => t.sentry).length;
+  const used = live.filter((t) => t.sentry && !t.parked).length;
   if (!total) return null;
   return { total, used, text: total === 1 ? `Sentry slot ${used ? 'busy' : sentryHost() ? 'idle' : 'offline'}` : `${used} of ${total} Sentry slots busy` };
 }
@@ -526,229 +948,183 @@ const WT_STATE = { active: ['In use', 'in use', 'in use'], open: ['PR open', 'PR
   missing: ['Folder missing', 'folder missing', 'with no folder'] };
 const wtOf = (host) => (snap.worktrees?.machines || []).find((m) => m.host === host);
 const wtCounts = (rows) => Object.keys(WT_STATE).map((s) => [s, rows.filter((r) => r.state === s).length]).filter(([, n]) => n);
-// A machine card's line about its worktrees, linking to that machine in the Worktrees view.
-function wtLine(host) {
-  const w = wtOf(host);
-  if (!w?.rows) return '';
-  const parts = wtCounts(w.rows).map(([s, n]) => `${n} ${WT_STATE[s][2]}`).join(', ');
-  return `<a class="mwt" href="#worktrees/${encodeURIComponent(host)}" data-go>${ico('branch', 'todo')}<b>${w.rows.length} worktree${w.rows.length === 1 ? '' : 's'}</b><span class="t">${esc(parts)}</span></a>`;
-}
 
-// The sidebar: the Inbox view, the Queue view with its groups, the Machines view with each machine, then the Worktrees
-// view with each machine's count. On a phone it becomes a strip of Inbox, the Queue's groups, Machines and Worktrees.
-// Inbox counts the mentions, replies and review requests.
+// The sidebar: the Inbox view, the Sessions view, the Queue view with its groups, the Machines view with each machine,
+// then the Worktrees view with each machine's count. On a phone it becomes a strip of Inbox, Sessions, the Queue's
+// groups, Machines and Worktrees. Inbox counts the mentions, replies and review requests; Sessions the sessions
+// waiting on the owner that they haven't marked handled.
 function renderNav(live, adhoc, slotted, needs, merged) {
   const hot = needs.some((n) => n.sev === 'bad');
   const item = (href, icon, text, count, cls, attrs) => `<a class="nav-item ${cls}" href="${href}" ${attrs}>${icon}<span class="nav-t">${esc(text)}</span>${count != null ? `<span class="count${cls.includes('hot') ? ' hot' : ''}">${count}</span>` : ''}</a>`;
   const viewItem = (v, href, icon, text, count = null, hot = false) => item(href, icon, text, count, `view${v === 'queue' ? ' desk' : ''}${view === v ? ' active' : ''}${hot ? ' hot' : ''}`, `data-go data-view="${v}"`);
   const wtMachines = (snap.worktrees?.machines || []).filter((m) => m.rows);
   const aimed = (snap.inbox?.forYou ?? []).filter((n) => n.kind !== 'assigned').length;
-  const plusSentry = (list) => { const n = list.filter((t) => t.sentry).length; return n ? ` +${n}` : ''; };
+  const plusSentry = (list) => { const n = list.filter((t) => t.sentry && !t.parked).length; return n ? ` +${n}` : ''; };
+  // A machine's side slots in use after its regular count: Sentry and Codex or Grok.
+  const plusSide = (list) => { const n = list.filter((t) => t.sentry && !t.parked).length; return n ? ` +${n}` : ''; };
+  const waiting = typeof sessNeedCount === 'function' ? sessNeedCount() : null;
   $('nav').innerHTML = viewItem('inbox', '#inbox', ico('inbox', 'todo'), 'Inbox', aimed || null, aimed > 0)
+    + viewItem('sessions', '#sessions', ico('comment', 'todo'), 'Sessions', waiting || null, waiting > 0)
     + viewItem('queue', '#queue', ico('list', 'todo'), 'Queue')
-    + item('#sec-needs', ico('urgent', hot ? 'bad' : needs.length ? 'warn' : 'free'), 'Needs you', needs.length, `nav-sub${hot ? ' hot' : ''}`, 'data-jump')
-    + item('#sec-building', ico('run'), 'Building', `${live.filter((t) => !t.sentry).length}/${slotCap()}${plusSentry(live)}`, 'nav-sub', 'data-jump')
+    + item('#sec-needs', ico('seal', hot ? 'bad' : needs.length ? 'warn' : 'free'), 'Needs you', needs.length, `nav-sub${hot ? ' hot' : ''}`, 'data-jump')
+    + item('#sec-building', ico('run'), 'Building', `${buildingCount(live)}/${slotCap()}${plusSentry(live)}`, 'nav-sub', 'data-jump')
     + item('#sec-adhoc', ico('run'), 'Outside the queue', adhoc.length, 'nav-sub', 'data-jump')
     + item('#sec-ready', ico('todo'), 'Ready queue', snap.ready ? snap.ready.length : '?', 'nav-sub', 'data-jump')
     + item('#sec-merged', ico('ok', 'merged'), 'Merged', merged.length, 'nav-sub', 'data-jump')
+    + viewItem('scene', '#scene', ico('peak', 'todo'), 'Middle-earth', slotted.length || null)
+    + viewItem('map', '#map', ico('peak', 'todo'), 'From above (v2)')
     + viewItem('machines', '#machines', ico('machine', 'todo'), 'Machines')
     + snap.machines.map((m) => {
       const mine = slotted.filter((t) => t.host === m.host);
       const off = !m.ok || m.paused;
-      return item(`#machines/${encodeURIComponent(m.host)}`, `<span class="mdot" style="--mc:${off ? 'var(--bad)' : machineColor(m.host)}"></span>`, m.name,
-        m.maxWorkers ? `${mine.filter((t) => !t.sentry).length}/${m.maxWorkers}${plusSentry(mine)}` : (off ? (m.ok ? 'paused' : 'down') : 'idle'), 'nav-sub desk', 'data-go');
+      return item(`#machines/${encodeURIComponent(m.host)}`, sigil(m.host, off ? 'var(--bad)' : machineColor(m.host)), realmName(m.host),
+        m.maxWorkers ? `${mine.filter((t) => !t.sentry && holdsSlot(t)).length}/${m.maxWorkers}${plusSide(mine)}` : (off ? (m.ok ? 'paused' : 'down') : 'idle'), 'nav-sub desk', 'data-go');
     }).join('')
-    + ((snap.services || []).length ? item('#machines/services', ico('spark', 'todo'), 'Codex and Grok', null, 'nav-sub desk', 'data-go') : '')
+    + acctNav(item)
     + viewItem('worktrees', '#worktrees', ico('branch', 'todo'), 'Worktrees', wtMachines.length ? wtMachines.reduce((n, m) => n + m.rows.length, 0) : null)
-    + wtMachines.map((m) => item(`#worktrees/${encodeURIComponent(m.host)}`, `<span class="mdot" style="--mc:${machineColor(m.host)}"></span>`, m.name, m.rows.length, 'nav-sub desk', 'data-go')).join('');
+    + wtMachines.map((m) => item(`#worktrees/${encodeURIComponent(m.host)}`, sigil(m.host, machineColor(m.host)), realmName(m.host), m.rows.length, 'nav-sub desk', 'data-go')).join('')
+    + (typeof grReport === 'function' ? viewItem('gollum', '#gollum', ico('warn', 'warn'), 'Gollum', grReport().n + grReport().ring.length || null, grReport().ring.length > 0) : '');
+}
+
+// The Accounts card's link (machines-accounts.js), with how many of Claude's, Codex's and Grok's accounts have room.
+function acctNav(item) {
+  if (typeof accountGroups !== 'function') return '';
+  const all = accountGroups(snap.config.headroomFloorPercent).flatMap(([, rows]) => rows);
+  if (!all.length) return '';
+  return item('#machines/accounts', '<span class="mdot" data-r="stones" aria-hidden="true"></span>', 'Accounts', `${all.filter((r) => r.room).length}/${all.length}`, 'nav-sub desk', 'data-go');
 }
 
 function renderStats(live, adhoc, needs) {
   const paused = snap.machines.filter((m) => m.paused).length;
   const hot = needs.some((n) => n.sev === 'bad');
   const sentry = sentrySlots(live);
+  // What needs the owner leads, coloured when it isn't zero; then the work in flight, the queue, and anything unusual.
   $('stats').innerHTML = [
-    `<span class="stat">${ico('run')}<span><b>${live.filter((t) => !t.sentry).length}</b> of ${slotCap()} building</span></span>`,
-    sentry ? `<span class="stat">${ico('sentry', sentry.used ? 'run' : 'todo')}<span>${esc(sentry.text)}</span></span>` : '',
-    adhoc.length ? `<span class="stat">${ico('run')}<span><b>${adhoc.length}</b> outside the queue</span></span>` : '',
+    needs.length ? `<span class="stat${hot ? ' hot' : ' warm'}"><b class="seal${hot ? '' : ' warm'}">${needs.length}</b><span>need${needs.length === 1 ? 's' : ''} you</span></span>`
+      : `<span class="stat">${ico('seal', 'free')}<span><b>0</b> need you</span></span>`,
+    paused ? `<span class="stat hot">${ico('bad')}<span><b>${paused}</b> paused</span></span>` : '',
+    `<span class="stat">${ico('run')}<span><b>${buildingCount(live)}</b> of ${slotCap()} building</span></span>`,
     `<span class="stat">${ico('todo')}<span><b>${snap.ready ? snap.ready.length : '?'}</b> ready</span></span>`,
-    `<span class="stat">${ico('urgent', hot ? 'bad' : needs.length ? 'warn' : 'free')}<span><b>${needs.length}</b> need${needs.length === 1 ? 's' : ''} you</span></span>`,
-    paused ? `<span class="stat">${ico('bad')}<span><b>${paused}</b> paused</span></span>` : '',
+    adhoc.length ? `<span class="stat">${ico('run')}<span><b>${adhoc.length}</b> outside the queue</span></span>` : '',
+    sentry ? `<span class="stat">${ico('sentry', sentry.used ? 'run' : 'todo')}<span>${esc(sentry.text)}</span></span>` : '',
   ].join('');
 }
 
+// The slots, one group per machine as its realm: the realm's name, how many of its seats are at work, a card per busy
+// worker, then one small marker for the free seats and one for the Sentry slot, so empty seats cost no room. Groups sit
+// side by side and wrap; each card links to the worker's full card below.
 function renderBays(live) {
-  let col = 1, html = '';
-  snap.machines.forEach((m) => {
+  $('bays').innerHTML = snap.machines.map((m) => {
     const mine = live.filter((t) => t.host === m.host);
-    const regular = mine.filter((t) => !t.sentry), sentry = mine.filter((t) => t.sentry);
+    const regular = mine.filter((t) => !t.sentry && holdsSlot(t));
+    const sentry = mine.filter((t) => t.sentry);
+    // Workers holding no slot (a PR waiting on a merge, or parked on the reviewer's review) come last, after the free seats.
+    const waits = mine.filter((t) => !t.sentry && !holdsSlot(t));
     const n = Math.max(m.maxWorkers || 0, regular.length);
-    // The Sentry slots sit after the regular ones in the machine's group and are counted apart in its label.
     const k = Math.max(m.sentryWorkers || 0, sentry.length);
-    if (!n && !k) return;
+    if (!n && !k && !waits.length) return '';
     const mc = machineColor(m.host);
     const off = sentryOff(m);
-    const sentryLabel = k ? `, Sentry ${sentry.length ? (k > 1 ? `${sentry.length}/${k}` : 'busy') : off ? 'offline' : 'idle'}` : '';
-    html += `<div class="bay-group-label" style="--mc:${mc};grid-column:${col} / span ${n + k}"><span class="mdot"></span>${esc(m.name)} <span class="muted">${regular.length}/${m.maxWorkers}${sentryLabel}</span></div>`;
+    const free = n - regular.length;
     const bay = (t) => {
       const s = standing(t);
-      return `<a class="bay" href="#${esc(t.id)}" style="--mc:${mc}"><span class="id">${ico(s.sev, s.sev, s.long)}<span class="ids">${esc(t.label || t.id).replace(/\b([A-Z]+-)(?=\d)/g, '<span class="pfx">$1</span>')}</span></span>
-        <span class="what" title="${esc(t.title || t.name)}">${esc(cap(t.adhoc ? `outside the queue, ${s.short}` : s.short))}</span><span class="when">${t.sentry ? `<span class="stag" role="img" aria-label="Sentry slot" title="In the Sentry slot">${ICON.sentry}</span>` : ''}${dur(ms(t.dispatchedAt))} in, moved ${dur(ms(t.lastProgressAt))} ago</span></a>`;
+      return `<a class="bay${holdsSlot(t) ? '' : ' out'}" href="#${esc(t.id)}" style="--mc:${mc}"${holdsSlot(t) ? '' : ` title="${esc(`Holds no slot: ${slotWait(t)}`)}"`}><span class="id">${ico(s.sev, s.sev, s.long)}<span class="ids">${t.nickname ? `${wname(t)} ` : aiMark(workerAi(t))}${esc(t.label || t.id).replace(/\b([A-Z]+-)(?=\d)/g, '<span class="pfx">$1</span>')}</span></span>
+        <span class="what" title="${esc(t.title || t.name)}">${esc(cap(t.adhoc ? `outside the queue, ${s.short}` : s.short))}</span><span class="when">${t.sentry ? `<span class="stag" role="img" aria-label="Sentry slot" title="In the Sentry slot">${ICON.sentry}</span>` : ''}${onEngine(t) ? `${engineTag(t)} ` : ''}${dur(ms(t.dispatchedAt))} in, moved ${dur(ms(t.lastProgressAt))} ago</span>${figureAvatar(t)}</a>`;
     };
-    for (let i = 0; i < n; i++) html += regular[i] ? bay(regular[i]) : `<div class="bay free" style="--mc:${mc}">${ico('free')}Free</div>`;
-    for (let i = 0; i < k; i++) {
-      html += sentry[i] ? bay(sentry[i]) : `<div class="bay free sentry${off ? ' off' : ''}" style="--mc:${mc}" title="${esc(off ? `Offline to the other machines (${off}), so they build Sentry tickets themselves` : 'Kept for Sentry fix tickets; regular work never takes it')}">${ico('sentry', off ? 'warn' : 'free')}Sentry ${off ? 'offline' : 'idle'}</div>`;
-    }
-    col += n + k;
-  });
-  $('bays').innerHTML = html;
-  $('bays').style.setProperty('--n', col - 1 || 8);
-  if (matchMedia(NARROW).matches) $('bays').querySelectorAll('.bay-group-label').forEach((el) => { el.style.gridColumn = '1 / -1'; });
+    const seats = `${regular.length} of ${n} at work${waits.length ? `, ${waits.length} waiting` : ''}`;
+    const sentryIdle = k && !sentry.some((t) => !t.parked) ? `<div class="bay seat${off ? ' off' : ''}" style="--mc:${mc}" title="${esc(off ? `Offline to the other machines (${off}), so they build Sentry tickets themselves` : 'Kept for Sentry fix tickets; regular work never takes it')}">${ico('sentry', off ? 'warn' : 'free')}Sentry ${off ? 'offline' : 'idle'}</div>` : '';
+    return `<section class="realm-row" style="--mc:${mc}"><h3 class="realm-head">${sigil(m.host)}${esc(realmName(m.host))}<span class="muted">${esc(m.name)}, ${seats}</span></h3>
+      <div class="realm-bays">${regular.map(bay).join('')}${free > 0 ? `<div class="bay seat" style="--mc:${mc}" title="Free seats on ${esc(m.name)}">${ico('free')}${free} free</div>` : ''}${sentry.map(bay).join('')}${sentryIdle}${waits.map(bay).join('')}</div></section>`;
+  }).join('');
+  paintAvatars($('bays'));
 }
 
 function renderNeeds(needs) {
+  const hot = needs.some((n) => n.sev === 'bad');
   $('cNeeds').textContent = needs.length;
-  $('gNeedsIco').className = `ico ${needs.some((n) => n.sev === 'bad') ? 'bad' : needs.length ? 'warn' : 'free'}`;
-  if (!needs.length) { $('needs').innerHTML = '<div class="empty">Nothing is waiting on you.</div>'; return; }
+  $('cNeeds').className = `gcount${needs.length ? ` seal${hot ? '' : ' warm'}` : ''}`;
+  $('gNeedsIco').className = `ico ${hot ? 'bad' : needs.length ? 'warn' : 'free'}`;
+  // Always first in the Queue, so the eye knows where to look; with nothing waiting it shrinks to one calm line.
+  $('sec-needs').classList.toggle('quiet', !needs.length);
+  if (!needs.length) { $('needs').innerHTML = `<div class="all-clear">${ico('ok', 'ok')}Nothing needs you right now.<span class="lore">All is quiet in the realms.</span></div>`; return; }
+  const worker = (n) => (n.id ? snap.tickets.find((t) => t.id === n.id && t.nickname) : null);
   $('needs').innerHTML = needs.map((n) => `<div class="row need">
-    ${ico('urgent', n.sev === 'warn' ? 'warn' : 'bad', n.sev === 'warn' ? 'Worth a look' : 'Needs you')}
+    ${ico('seal', n.sev === 'warn' ? 'warn' : 'bad', n.sev === 'warn' ? 'Worth a look' : 'Needs you')}
     <div class="rbody">
-      <div class="rline"><span class="chip">${esc(cap(n.kind))}</span>${n.id ? `<span class="rid">${link(n.url, n.label || n.id)}</span>` : ''}<span class="rtitle" title="${esc(n.title || '')}">${esc(n.title || '')}</span>${n.when ? `<span class="rmeta">${ago(n.when)}</span>` : ''}</div>
+      <div class="rline"><span class="chip ${n.sev === 'warn' ? 'warn' : 'bad'}">${esc(cap(n.kind))}</span>${worker(n) ? figureAvatar(worker(n)) : ''}${wname(worker(n))}${n.id ? `<span class="rid">${link(n.url, n.label || n.id)}</span>` : ''}<span class="rtitle" title="${esc(n.title || '')}">${esc(n.title || '')}</span>${n.when ? `<span class="rmeta">${ago(n.when)}</span>` : ''}</div>
       <div class="rtext">${linkify(n.text)}${n.href ? ` ${link(n.href, 'Open PR')}` : ''}</div>
       ${n.sub ? `<div class="rsub">${linkify(n.sub)}</div>` : ''}
       ${n.cmd ? openSession(n.id, n.cmd) : ''}
     </div></div>`).join('');
+  paintAvatars($('needs'));
 }
 // View session opens the history and message panel (session.js). The board server builds the attach command (with
 // ssh for a worker on another machine), and Open in terminal asks it to open that in iTerm on this Mac.
 const openSession = (id, cmd) => `<div class="open-row"><button class="open primary view" data-id="${esc(id)}">View session</button><button class="open" data-id="${esc(id)}">Open in terminal</button><span class="msg"></span></div>
   <details><summary>Command</summary><code class="cmd">${esc(cmd)}</code></details>`;
 
+// The worker's Middle-earth nickname, ahead of its ticket ID: the dispatcher's, or board.mjs nameWorkers' for a worker
+// outside the queue.
+const wname = (t) => (t?.nickname ? `<span class="wname">${aiMark(workerAi(t))}${esc(t.nickname)}</span>` : '');
 function workerChip(t) {
-  const cls = { busy: 'run', working: 'run', idle: 'warn', blocked: 'bad', failed: 'bad', done: 'warn', stopped: 'warn', gone: 'bad' }[t.workerState] || '';
-  return `<span class="chip ${cls}">worker ${esc(t.workerState)}</span>`;
+  const cls = { busy: 'run', working: 'run', idle: 'warn', blocked: 'bad', failed: 'bad', limit: 'bad', done: 'warn', stopped: 'warn', gone: 'bad' }[t.workerState] || '';
+  return `<span class="chip ${cls}">${esc(cap(workerIs(t)))}</span>`;
 }
 
 function renderCards(live) {
   const sentry = live.filter((t) => t.sentry).length;
   $('cBuilding').textContent = `${live.length - sentry} of ${slotCap()}${sentry ? `, plus ${sentry} Sentry` : ''}`;
-  if (!live.length) { $('cards').innerHTML = '<div class="empty">No workers are building right now.</div>'; return; }
+  if (!live.length) { $('cards').innerHTML = '<div class="empty">No workers are building right now.<span class="lore">Every seat in the realms stands empty.</span></div>'; return; }
   $('cards').innerHTML = live.map(cardHtml).join('');
+  paintAvatars($('cards'));
 }
 
 // Fleet workers another session started with fleet.sh dispatch, outside the queue's slots.
 function renderAdhoc(adhoc) {
   $('cAdhoc').textContent = adhoc.length;
-  if (!adhoc.length) { $('adhoc').innerHTML = '<div class="empty">No other fleet workers are running.</div>'; return; }
+  if (!adhoc.length) { $('adhoc').innerHTML = '<div class="empty">No other fleet workers are running.<span class="lore">No wanderers on the road.</span></div>'; return; }
   $('adhoc').innerHTML = adhoc.map(cardHtml).join('');
+  paintAvatars($('adhoc'));
 }
 
 function cardHtml(t) {
   const s = standing(t), pr = t.pr;
   const ci = pr ? (pr.ci.fail.length ? `<span class="chip bad">${pr.ci.fail.length} failing</span>` : '') + (pr.ci.running.length ? `<span class="chip run">${pr.ci.running.length} running</span>` : '') + `<span class="chip ${pr.ci.fail.length ? '' : 'ok'}">${pr.ci.pass} passed</span>` : '';
-  // review is null when the config names no review check.
-  const review = pr && pr.review ? `<span class="chip ${{ pass: 'ok', fail: 'bad', running: 'run' }[pr.review] || ''}">review ${pr.review === 'missing' ? 'not started' : pr.review}</span>` : '';
-  const threads = pr && pr.openThreads ? `<span class="chip warn">${pr.openThreads} open thread${pr.openThreads > 1 ? 's' : ''}</span>` : '';
+  const review = pr ? `<span class="chip ${{ pass: 'ok', fail: 'bad', running: 'run' }[pr.review] || ''}">review ${pr.review === 'missing' ? 'not started' : pr.review}</span>` : '';
+  // Left out when the status already names the open threads as what holds the merge.
+  const threads = pr && pr.openThreads && !s.long.includes('open thread') ? `<span class="chip warn">${pr.openThreads} open thread${pr.openThreads > 1 ? 's' : ''}</span>` : '';
   // A worker outside the queue may have no ticket; its session name then stands in for the title.
   const title = t.title || (t.adhoc && !t.ticket ? t.name : '');
   const named = t.adhoc && t.ticket && t.name ? `<span class="chip mono" title="worker session name">${esc(t.name)}</span>` : '';
   return `<article class="row build" id="${esc(t.id)}" style="--mc:${machineColor(t.host)}">
     ${ico(s.sev, s.sev, s.long)}
     <div class="rbody">
-      <div class="rline"><span class="rid">${ticketLinks(t)}</span><span class="rtitle">${esc(title || '')}</span></div>
+      <div class="rline">${figureAvatar(t)}${wname(t)}<span class="rid">${ticketLinks(t)}</span><span class="rtitle">${esc(title || '')}</span></div>
       ${bundleLines(t)}
-      <div class="chips">${t.engine ? `<span class="chip engine" title="${esc(t.engine)} writes the code, a Claude worker drives and reviews">built by ${esc(t.engine)}</span>` : ''}<span class="chip host">${esc(t.machine)}</span>${sentryChip(t)}<span class="chip" title="fleet account ${esc(t.account)}">${esc(acctText(t.accountEmail, t.accountPlan, t.account))}</span>${workerChip(t)}${named}<span class="chip ${s.sev}" title="${esc(s.long)}">${esc(s.long)}</span>${t.waiting ? '<span class="chip warn">waiting on your answer</span>' : ''}</div>
+      <div class="chips"><span class="chip ${s.sev}" title="${esc(s.long)}">${esc(s.long)}</span>${t.waiting ? '<span class="chip warn">waiting on your answer</span>' : ''}${workerChip(t)}${t.driver !== 'engine' && t.engine ? `<span class="chip engine" title="${esc(t.engine)} writes the code, a Claude worker drives and reviews">built by ${aiMark(t.engine)}</span>` : ''}${sentryChip(t)}${named}</div>
       ${pr ? `<div class="chips"><a class="chip" href="${esc(pr.url)}" target="_blank" rel="noopener">${ICON.pr}PR #${pr.number}</a>${pr.mergeQueue ? `<span class="chip ok">merge queue, position ${pr.mergeQueue.position}</span>` : ''}${ci}${review}${threads}</div>` : ''}
       ${pr && pr.ci.fail.length ? `<div class="fails">Failing: ${esc(pr.ci.fail.slice(0, 4).join('; '))}${pr.ci.fail.length > 4 ? '; ...' : ''}</div>` : ''}
       <dl class="facts">
         <div><dt>Running</dt><dd>${dur(ms(t.dispatchedAt))}</dd></div>
         <div><dt>${t.adhoc ? 'Last activity' : 'Last progress'}</dt><dd>${ago(t.lastProgressAt)}</dd></div>
         <div><dt>Last push</dt><dd>${ago(pr ? pr.lastCommitAt : t.branchCommitAt)}</dd></div>
+        <div><dt>On</dt><dd>${esc(realmName(t.host))} (${esc(t.machine)})${acctText(t.accountEmail, t.accountPlan, t.account) ? `, ${esc(acctText(t.accountEmail, t.accountPlan, t.account))}` : ''}</dd></div>
         <div><dt>Worker</dt><dd class="mono">${esc(t.workerId || 'n/a')}</dd></div>
       </dl>
-      ${t.note ? `<div class="note">Dispatcher: ${esc(t.note)}</div>` : ''}
-      ${t.attach ? openSession(t.id, t.attach) : ''}
+      ${t.note && !/^not green: (merge state \w+|no PR yet)$/.test(t.note) ? `<div class="note">Dispatcher: ${esc(t.note)}</div>` : ''}
+      ${t.attach ? openSession(t.id, t.attach) : onEngine(t) ? `<div class="open-row"><button class="open primary view" data-id="${esc(t.id)}">View session</button></div>` : ''}
     </div>
   </article>`;
-}
-
-// One row: label, bar (with the limit marked), then the value and its limit in muted text. A count with no limit (pct
-// null) has no bar.
-function meter(label, value, limit, pct, limitPct, sev) {
-  if (pct == null) return `<div class="meter"><span>${esc(label)}</span><span></span><b>${esc(value)}</b></div>`;
-  return `<div class="meter"><span>${esc(label)}</span>
-    <div class="bar"><i class="${sev}" style="width:${Math.max(0, Math.min(100, pct))}%"></i>${limitPct != null ? `<s style="left:calc(${Math.min(100, limitPct)}% - 1px)"></s>` : ''}</div>
-    <b>${esc(value)} <span>${esc(limit)}</span></b></div>`;
-}
-// A machine card's Sentry slot row: idle, offline, or the ticket in it.
-function sentryMeter(m, inSentry) {
-  const k = Math.max(m.sentryWorkers, inSentry.length);
-  const what = inSentry.length ? inSentry.map(ticketLinks).join(', ') : sentryOff(m) ? 'offline' : 'idle';
-  return `<div class="meter"><span>Sentry slot${k > 1 ? 's' : ''}</span><div class="bar"><i class="ok" style="width:${(inSentry.length / k) * 100}%"></i></div><b>${what}${k > 1 ? ` <span>${inSentry.length} of ${k}</span>` : ''}</b></div>`;
-}
-function usageCell(w, floor, showReset = false) {
-  if (!w) return '<span class="sub">no limit</span>';
-  const left = 100 - (w.used ?? 0);
-  const sev = left < floor ? 'bad' : left < floor + 20 ? 'warn' : 'ok';
-  const reset = showReset && w.resetsAt ? `<span class="sub">resets in ${dur(-ms(w.resetsAt))}</span>` : '';
-  return `<span class="use">${ring(w.used, sev)}${w.used ?? '?'}%</span>${reset}`;
-}
-const email = (e) => esc(e).replace('@', '@<wbr>');
-// Codex and Grok are read on every machine and shown once per account, with the machines signed in to it.
-function servicesCard(floor) {
-  const rows = snap.services || [];
-  if (!rows.length) return '';
-  const extra = (s) => [s.credits != null ? `${s.credits.toLocaleString()} credits` : '', s.freeResets ? `${s.freeResets} free reset${s.freeResets > 1 ? 's' : ''}` : '',
-    s.onDemand ? `pay as you go: ${s.onDemand.used} of ${s.onDemand.cap}` : '', s.limited ? `limit hit (${s.limited})` : ''].filter(Boolean).join(', ');
-  const who = (s) => `<td class="who">${s.account ? email(s.account) : esc(s.name)}<span class="sub">${esc([s.account ? s.name : '', s.plan, `on ${s.machines.join(', ')}`].filter(Boolean).join(' '))}${extra(s) ? `<br>${esc(extra(s))}` : ''}</span></td>`;
-  const body = rows.map((s) => s.error
-    ? `<tr>${who(s)}<td colspan="3" class="muted">${/authenticat|log ?in|sign/i.test(s.error) ? '<span class="chip bad">signed out</span> ' : ''}${esc(s.error)}</td></tr>`
-    : `<tr>${who(s)}<td>${usageCell(s.fiveHour, floor, true)}</td><td>${usageCell(s.weekly ?? s.period, floor, true)}</td><td class="muted">${dur(ms(s.at))}</td></tr>`).join('');
-  return `<div class="mcard" id="m-services" style="--mc:var(--ink-3)"><div class="mhead">${ico('spark', 'todo')}<span class="mname">Codex and Grok</span><span class="mmeta">Plan usage, read hourly</span></div>
-    <table class="accts"><thead><tr><th>Account</th><th class="u">5-hour</th><th class="u">Weekly</th><th class="r">Read</th></tr></thead><tbody>${body}</tbody></table></div>`;
-}
-function renderMachines(live) {
-  const floor = snap.config.headroomFloorPercent;
-  $('machines').innerHTML = snap.machines.map((m) => {
-    const here = live.filter((t) => t.host === m.host);
-    const mine = here.filter((t) => !t.sentry).length;
-    const inSentry = here.filter((t) => t.sentry);
-    const off = sentryOff(m);
-    const loadPerCore = m.load ? m.load.avg5 / m.load.cores : null;
-    const state = !m.ok ? '<span class="chip bad">unreachable</span>' : m.paused ? '<span class="chip bad">paused</span>' : m.enabled === false ? '<span class="chip warn">not enabled</span>' : '<span class="chip ok">ticking</span>';
-    const next = m.lastTick ? Date.parse(m.lastTick) + snap.config.tickMinutes * 60000 - Date.now() : null;
-    const name = (a) => `<td class="who">${a.email ? email(a.email) : `account ${esc(a.label)}`}<span class="sub">${a.plan ? `${esc(a.plan)}, ` : ''}account ${esc(a.label)}${a.signedIn === false ? ' <span class="chip bad">signed out</span>' : ''}</span></td>`;
-    const accts = (m.accounts || []).map((a) => a.error
-      ? `<tr>${name(a)}<td colspan="3" class="muted">${esc(a.error)}</td></tr>`
-      : `<tr>${name(a)}<td>${usageCell(a.fiveHour, floor)}</td><td>${usageCell(a.weekly, floor)}</td><td class="muted">${a.usageAt ? dur(ms(a.usageAt)) : 'n/a'}${a.otherSessions ? `<span class="sub">${a.otherSessions} other</span>` : ''}</td></tr>`).join('');
-    return `<div class="mcard" id="m-${esc(m.host)}" style="--mc:${machineColor(m.host)}">
-      <div class="mhead"><span class="mdot"></span><span class="mname">${esc(m.name)}</span>${state}${m.sentryWorkers ? `<span class="chip">${m.maxWorkers} regular + ${m.sentryWorkers} Sentry</span>` : ''}<span class="mmeta">Last tick ${ago(m.lastTick)}${next != null && m.ok && !m.paused ? `, next ${next > 0 ? `in about ${dur(next)}` : 'due now'}` : ''}</span></div>
-      <div class="meters">
-        ${meter(m.sentryWorkers ? 'Regular slots' : 'Workers', mine, `of ${m.maxWorkers}`, (mine / (m.maxWorkers || 1)) * 100, null, mine >= m.maxWorkers ? 'warn' : 'ok')}
-        ${m.sentryWorkers || inSentry.length ? sentryMeter(m, inSentry) : ''}
-        ${meter('Heartbeat', m.heartbeat ? `${dur(ms(m.heartbeat.at))} old${m.heartbeat.paused ? ', paused' : ''}` : 'none yet', '', null)}
-        ${m.maxDispatchesPerDay ? meter('Dispatched in 24h', m.dispatchedToday, `of ${m.maxDispatchesPerDay}`, (m.dispatchedToday / m.maxDispatchesPerDay) * 100, null, m.dispatchedToday >= m.maxDispatchesPerDay ? 'warn' : 'ok') : meter('Dispatched in 24h', m.dispatchedToday, '', null)}
-        ${loadPerCore != null ? meter('Load per core', loadPerCore.toFixed(2), `limit ${m.load.maxPerCore}`, (loadPerCore / (m.load.maxPerCore * 1.5)) * 100, 100 / 1.5, loadPerCore > m.load.maxPerCore ? 'bad' : 'ok') : ''}
-        ${m.memFreePercent != null ? meter('Memory free', `${m.memFreePercent}%`, `floor ${m.minMemFreePercent}%`, m.memFreePercent, m.minMemFreePercent, m.memFreePercent < m.minMemFreePercent ? 'bad' : 'ok') : ''}
-      </div>
-      ${off ? `<div class="mnote">Sentry slot offline: ${esc(off)}, so the other machines build Sentry tickets.</div>` : ''}
-      ${wtLine(m.host)}
-      <table class="accts"><thead><tr><th>Account</th><th class="u">5-hour</th><th class="u">Weekly</th><th class="r">Saved</th></tr></thead><tbody>${accts}</tbody></table>
-      <details><summary>Dispatcher log</summary><pre class="log">${esc((m.log || []).join('\n'))}</pre></details>
-    </div>`;
-  }).join('') + servicesCard(floor);
 }
 
 function renderReady() {
   $('cReady').textContent = snap.ready ? snap.ready.length : '';
   if (!snap.ready) { $('ready').innerHTML = '<div class="empty">Linear did not answer; the ready list is unknown.</div>'; return; }
-  if (!snap.ready.length) { $('ready').innerHTML = `<div class="empty">Nothing is labeled ${esc(snap.config.labels.ready)}.</div>`; return; }
+  if (!snap.ready.length) { $('ready').innerHTML = `<div class="empty">Nothing is labeled ${esc(snap.config.labels?.ready ?? 'agent-ready')}.<span class="lore">The road ahead is clear.</span></div>`; return; }
   const top = snap.ready.slice(0, 12);
-  // A Sentry ticket waiting for a live Sentry slot is queued for that slot; the other machines skip it on purpose.
-  const host = sentryHost(), offline = snap.machines.find((m) => m.sentryWorkers > 0 && sentryOff(m));
-  const labeled = `Labeled ${snap.config.labels.sentry}.`;
-  const sentry = (r) => (!r.sentry ? '' : `<span class="chip sentry" title="${esc(host ? `${labeled} The other machines leave it to ${host.name}'s Sentry slot.`
-    : offline ? `${labeled} ${offline.name}'s Sentry slot is offline, so any machine can build it.` : labeled)}">${ICON.sentry}${host ? `<span class="opt">for ${esc(host.name)}'s </span>Sentry<span class="opt"> slot</span>` : 'Sentry'}</span>`);
+  // A Sentry ticket goes to the first machine in the Sentry cascade with Sentry room; with none, it waits for one.
+  const host = sentryHost(), line = sentryOrder().map((m) => realmName(m.host)).join(', then ');
+  const sentry = (r) => (!r.sentry ? '' : `<span class="chip sentry" title="${esc(`Labeled ${snap.config.labels?.sentry ?? 'sentry-triaged'}. It goes to the first machine with Sentry room, in the order ${line}: ${host ? `now ${realmName(host.host)}` : 'none has room now, so it waits'}.`)}">${ICON.sentry}${host ? `<span class="opt">for ${esc(realmName(host.host))}'s </span>Sentry<span class="opt"> slot</span>` : 'Sentry<span class="opt">, waiting for room</span>'}</span>`);
   $('ready').innerHTML = top.map((r) => `<div class="row li">${priIco(r.priority)}<div class="rbody"><div class="rline"><span class="rid">${link(r.url, r.id)}</span><span class="rtitle" title="${esc(r.title)}">${esc(r.title)}</span>
     <span class="rmeta">${sentry(r)}${r.waitingOn ? `<span class="chip warn opt" title="Waiting on ${esc(r.waitingOn)}">waiting on ${esc(r.waitingOn)}</span>` : ''}<span>${dur(ms(r.createdAt))}</span></span></div></div></div>`).join('')
     + (snap.ready.length > top.length ? `<div class="more-row">and ${snap.ready.length - top.length} more</div>` : '');
@@ -756,23 +1132,23 @@ function renderReady() {
 
 function renderMerged(merged) {
   $('cMerged').textContent = merged.length;
-  if (!merged.length) { $('merged').innerHTML = '<div class="empty">Nothing merged in the last 48 hours.</div>'; return; }
+  if (!merged.length) { $('merged').innerHTML = '<div class="empty">Nothing merged in the last 48 hours.<span class="lore">No new tales to tell.</span></div>'; return; }
   const shown = mergedAll ? merged : merged.slice(0, MERGED_SHOWN);
-  $('merged').innerHTML = shown.map((t) => `<div class="row li">${ico('ok', 'merged', 'Merged')}<div class="rbody"><div class="rline"><span class="rid">${ticketLinks(t)}</span><span class="rtitle" title="${esc(t.title || '')}">${esc(t.title || '')}</span>
-    <span class="rmeta">${sentryChip(t)}${t.linearState ? `<span class="chip opt">${esc(t.linearState)}</span>` : ''}${t.prUrl ? `<span class="opt">${link(t.prUrl, `PR #${t.prUrl.split('/').pop()}`)}</span>` : ''}<span class="mini-host opt" style="--mc:${machineColor(t.host)}"><span class="mdot"></span>${esc(t.machine)}</span><span>${ago(t.mergedAt)}</span></span></div></div></div>`).join('')
+  // The name sits in a fixed column, empty for a worker named before nicknames, so every title starts at the same place.
+  $('merged').innerHTML = shown.map((t) => `<div class="row li">${ico('ok', 'merged', 'Merged')}<div class="rbody"><div class="rline"><span class="wname col">${esc(t.nickname || '')}</span><span class="rid">${ticketLinks(t)}</span><span class="rtitle" title="${esc(t.title || '')}">${esc(t.title || '')}</span>
+    <span class="rmeta">${sentryChip(t)}${t.linearState ? `<span class="chip opt">${esc(t.linearState)}</span>` : ''}${t.prUrl ? `<span class="opt">${link(t.prUrl, `PR #${t.prUrl.split('/').pop()}`)}</span>` : ''}<span class="mini-host opt" style="--mc:${machineColor(t.host)}" title="${esc(t.machine)}">${sigil(t.host)}${esc(realmName(t.host))}</span><span>${ago(t.mergedAt)}</span></span></div></div></div>`).join('')
     + (merged.length > MERGED_SHOWN ? `<div class="more-row"><button class="show-all merged-all" type="button">${mergedAll ? 'Show the latest 10' : `Show all ${merged.length}`}</button></div>` : '');
 }
 
 function render() {
   if (!snap) return;
-  const ws = snap.config.repo ? `${snap.config.repo} agents` : 'Agents';
-  $('wsName').textContent = ws;
-  $('wsLogo').textContent = ws[0].toUpperCase();
   const order = (t) => snap.machines.findIndex((m) => m.host === t.host);
   const byStart = (a, b) => order(a) - order(b) || (a.dispatchedAt || '').localeCompare(b.dispatchedAt || '');
   const live = snap.tickets.filter((t) => t.live && !t.adhoc).sort(byStart);
   const adhoc = snap.tickets.filter((t) => t.adhoc).sort(byStart);
   const needs = attention();
+  // Installed as an app, the board shows the Needs you count on its Dock icon; 0 clears it.
+  navigator.setAppBadge?.(needs.length).catch(() => {});
   const merged = mergedTickets();
   // The dispatcher counts a working worker outside the queue against its machine's slots, so the slots show it too.
   const slotted = [...live, ...adhoc.filter((t) => t.takesSlot)];
@@ -782,9 +1158,14 @@ function render() {
   renderNeeds(needs);
   renderCards(live);
   renderAdhoc(adhoc);
-  renderMachines(slotted);
+  if (typeof renderMachines === 'function') renderMachines(slotted);
+  if (typeof renderGollum === 'function') renderGollum();
   renderReady();
   renderMerged(merged);
+  renderAlarm();
+  if (typeof sceneSync === 'function') sceneSync();
+  // horn.js sounds the war horn when main turns red, in every view.
+  if (typeof hornWatch === 'function') hornWatch();
   freshness();
 }
 // The group headers carry fixed glyphs.
@@ -792,7 +1173,7 @@ $('gBuildIco').innerHTML = ICON.run;
 $('gAdhocIco').innerHTML = ICON.run;
 $('gReadyIco').innerHTML = ICON.todo;
 $('gMergedIco').innerHTML = ICON.ok;
-$('gNeedsIco').innerHTML = ICON.urgent;
+$('gNeedsIco').innerHTML = ICON.seal;
 
 function freshness() {
   const el = $('fresh');
@@ -813,6 +1194,8 @@ async function poll() {
     const same = snap && next.generatedAt === snap.generatedAt;
     const first = !snap;
     snap = next; lastOk = Date.now(); failing = null;
+    // The realm table comes from the config, so it is filled before anything renders.
+    fillRealms(snap.config);
     $('banner').innerHTML = '';
     same ? freshness() : render();
     // A link to one machine's card can only scroll once the cards exist.
@@ -844,8 +1227,9 @@ function copyText(text) {
   return legacy();
 }
 document.addEventListener('click', async (e) => {
+  // Open in terminal: the open-row button with a ticket, other than View session (the Sessions view's Handled has none).
   const b = e.target.closest('button.open');
-  if (!b || !b.closest('.open-row') || b.classList.contains('view')) return;
+  if (!b || !b.closest('.open-row') || b.classList.contains('view') || !b.dataset.id) return;
   const msg = b.nextElementSibling;
   b.disabled = true;
   msg.textContent = 'Opening...';
@@ -853,25 +1237,36 @@ document.addEventListener('click', async (e) => {
     const r = await fetch(`/api/open?id=${encodeURIComponent(b.dataset.id)}`, { method: 'POST', headers: { 'X-Board': 'open' } });
     const body = await r.json().catch(() => ({}));
     if (r.ok) msg.textContent = 'Opened in iTerm';
-    else if (r.status === 409 && body.cmd) msg.textContent = copyText(body.cmd) ? `This board runs on ${snap.machines.find((m) => m.host === snap.servedBy)?.name ?? snap.servedBy}, so the ssh command is copied: paste it in a terminal` : body.cmd;
-
+    else if (r.status === 409 && body.cmd) msg.textContent = copyText(body.cmd) ? `This board runs on ${boardName()}, so the ssh command is copied: paste it in a terminal` : body.cmd;
     else msg.textContent = body.error || `Could not open it (${r.status})`;
   } catch (err) {
     msg.textContent = `Could not open it: ${err.message}`;
   }
   b.disabled = false;
 });
-// The view comes from the URL: #inbox is the Inbox, #machines (or #machines/<host> for one machine's card) is Machines,
-// #worktrees (or #worktrees/<host>) is Worktrees, and anything else (a ticket anchor, the session panel's #session=) is
+// The view comes from the URL: #inbox is the Inbox, #sessions is Sessions, #machines (or #machines/<host> for one
+// machine's card) is Machines,
+// #worktrees (or #worktrees/<host>) is Worktrees, #gollum (or #gollum/<host>) is what Gollum found (gollum-view.js), and anything else (a ticket anchor, the session panel's #session=) is
 // the Queue.
-const VIEWS = { queue: 'Agent queue', inbox: 'Inbox', machines: 'Machines', worktrees: 'Worktrees' };
-const TARGET = { machines: 'm', worktrees: 'wt' };
+// #map is Middle-earth seen from above (v2, scene2.js). The view that showed both side by side (#both) is retired
+// (2026-11-09), so an old #both link opens the map.
+const VIEWS = { queue: 'Agent queue', inbox: 'Inbox', sessions: 'Sessions', machines: 'Machines', worktrees: 'Worktrees', gollum: 'Gollum', scene: 'Middle-earth',
+  map: 'Middle-earth from above' };
+const TARGET = { machines: 'm', worktrees: 'wt', gollum: 'g' };
 function applyView(fromClick = false) {
   const [name, target] = location.hash.slice(1).split('/');
-  const next = Object.hasOwn(VIEWS, name) ? name : 'queue';
+  const next = name === 'both' ? 'map' : Object.hasOwn(VIEWS, name) ? name : 'queue';
   const switched = next !== view;
   view = next;
-  for (const v of Object.keys(VIEWS)) $(`view-${v}`).hidden = view !== v;
+  for (const v of Object.keys(VIEWS)) {
+    const el = $(`view-${v}`);
+    if (el) el.hidden = view !== v;
+  }
+  // scene.js and scene2.js load after this script, so the first call, on page load, finds neither, and each starts itself.
+  if (typeof sceneShow === 'function') sceneShow(view === 'scene');
+  if (typeof mapShow === 'function') mapShow(view === 'map');
+  // Each map fits the room it has when it shows, so a switch lays it out again.
+  if (switched) window.dispatchEvent(new Event('resize'));
   $('viewTitle').textContent = VIEWS[view];
   document.querySelectorAll('.nav-item.view').forEach((el) => el.classList.toggle('active', el.dataset.view === view));
   // On a phone the sidebar is a strip that scrolls sideways; keep the open view's tab in sight.
@@ -898,14 +1293,224 @@ document.addEventListener('click', (e) => {
   }
   if (e.target.closest('.merged-all')) { mergedAll = !mergedAll; renderMerged(mergedTickets()); }
 });
-matchMedia(NARROW).addEventListener('change', render);
 // The page is rebuilt from a fresh snapshot on load, so an old scroll position would land somewhere arbitrary.
 history.scrollRestoration = 'manual';
+// A view's name in the URL (#machines) is also the id of its container, so while the page loads the browser keeps
+// scrolling to it, which hid the view's top under the sticky header; a typed #machines does the same. A bare view name
+// starts at the top once the page has loaded and after each such change of the URL.
+const atViewTop = () => { if (Object.hasOwn(VIEWS, location.hash.slice(1))) { $('main').scrollTop = 0; window.scrollTo(0, 0); } };
+window.addEventListener('load', atViewTop);
+window.addEventListener('hashchange', atViewTop);
 applyView();
 poll();
+// The service worker (sw.js) makes the board installable. Browsers allow one only in a secure context, which the board
+// has on localhost and not on its plain-HTTP tailnet names, so there the page runs as a normal tab.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
+<script src="/ai-marks.js"></script>
 <script src="/session.js"></script>
 <script src="/inbox.js"></script>
 <script src="/worktrees.js"></script>
+<script src="/gollum-data.js"></script>
+<script src="/sessions.js"></script>
+<script src="/sprites.js"></script>
+<script src="/sprites-gear.js"></script>
+<script src="/sprites-gear-stations.js"></script>
+<script src="/sprites-hd.js"></script>
+<script src="/sprites-hd-folk.js"></script>
+<script src="/sprites-qd.js"></script>
+<script src="/sprites-wanderers.js"></script>
+<script src="/sprites-wanderers-folk.js"></script>
+<script src="/sprites-wanderers-gear.js"></script>
+<script src="/sprites-captains.js"></script>
+<script src="/sprites-work.js"></script>
+<script src="/sprites-horse.js"></script>
+<script src="/sprites-horse-art.js"></script>
+<script src="/sprites-horse-post.js"></script>
+<script src="/sprites-chores.js"></script>
+<script src="/realm-art-kit.js"></script>
+<script src="/realm-art.js"></script>
+<script src="/machines-accounts.js"></script>
+<script src="/machines.js"></script>
+<script src="/gollum-view.js"></script>
+<script src="/scenery-sun.js"></script>
+<script src="/scenery.js"></script>
+<script src="/scenery-qd.js"></script>
+<script src="/scenery-sky.js"></script>
+<script src="/scenery-sky-qd.js"></script>
+<script src="/scenery-land.js"></script>
+<script src="/scenery-land-qd.js"></script>
+<script src="/scenery-rohan.js"></script>
+<script src="/scenery-falls.js"></script>
+<script src="/scenery-erebor.js"></script>
+<script src="/scenery-lights.js"></script>
+<script src="/scenery-props.js"></script>
+<script src="/scenery-props-hd.js"></script>
+<script src="/scenery-props-qd.js"></script>
+<script src="/scenery-farm.js"></script>
+<script src="/scenery-hoard.js"></script>
+<script src="/scenery-elves.js"></script>
+<script src="/scenery-heal.js"></script>
+<script src="/scenery-shire.js"></script>
+<script src="/scene-tags.js"></script>
+<script src="/scene.js"></script>
+<script src="/scene-path.js"></script>
+<script src="/scene-weather.js"></script>
+<script src="/scene-weather-fall.js"></script>
+<script src="/scenery-weather.js"></script>
+<script src="/scenery-storm.js"></script>
+<script src="/scenery-snow.js"></script>
+<script src="/scene-wind.js"></script>
+<script src="/scene-glow.js"></script>
+<script src="/scene-work.js"></script>
+<script src="/scene-jobs.js"></script>
+<script src="/scene-farm.js"></script>
+<script src="/scene-hoard.js"></script>
+<script src="/scene-elves.js"></script>
+<script src="/scene-wild.js"></script>
+<script src="/scene-duel.js"></script>
+<script src="/scene-orcs.js"></script>
+<script src="/scene-ride.js"></script>
+<script src="/scene-tower.js"></script>
+<script src="/scene-call.js"></script>
+<script src="/scene-call-light.js"></script>
+<script src="/sprites-eagle.js"></script>
+<script src="/sprites-eagle-fly.js"></script>
+<script src="/scene-eagle.js"></script>
+<script src="/sprites-gollum.js"></script>
+<script src="/scene-gollum.js"></script>
+<script src="/scene-gollum-tag.js"></script>
+<script src="/sprites-saruman.js"></script>
+<script src="/sprites-saruman-stone.js"></script>
+<script src="/scene-saruman.js"></script>
+<script src="/scene2.js"></script>
+<script src="/scene2-plan.js"></script>
+<script src="/scene2-core-places.js"></script>
+<script src="/scene2-plan-south.js"></script>
+<script src="/scene2-tiles.js"></script>
+<script src="/scene2-build.js"></script>
+<script src="/scene2-trees.js"></script>
+<script src="/scene2-rivendell.js"></script>
+<script src="/scene2-rivendell-trees.js"></script>
+<script src="/scene2-rivendell-house.js"></script>
+<script src="/scene2-rivendell-garden.js"></script>
+<script src="/scene2-shire.js"></script>
+<script src="/scene2-shire-hill.js"></script>
+<script src="/scene2-shire-holes.js"></script>
+<script src="/scene2-shire-oak.js"></script>
+<script src="/scene2-shire-props.js"></script>
+<script src="/scene2-shire-pen.js"></script>
+<script src="/scene2-shire-mill.js"></script>
+<script src="/scene2-shire-front.js"></script>
+<script src="/scene2-shire-fill.js"></script>
+<script src="/scene2-erebor.js"></script>
+<script src="/scene2-erebor-gate.js"></script>
+<script src="/scene2-erebor-river.js"></script>
+<script src="/scene2-erebor-works.js"></script>
+<script src="/scene2-erebor-yard.js"></script>
+<script src="/scene2-rohan.js"></script>
+<script src="/scene2-edoras.js"></script>
+<script src="/scene2-edoras-stable.js"></script>
+<script src="/scene2-edoras-gondor.js"></script>
+<script src="/scene2-stations.js"></script>
+<script src="/scene2-station-art.js"></script>
+<script src="/scene2-elf.js"></script>
+<script src="/scene2-folk.js"></script>
+<script src="/scene2-body-kit.js"></script>
+<script src="/scene2-body-parts.js"></script>
+<script src="/scene2-body-head.js"></script>
+<script src="/scene2-tool.js"></script>
+<script src="/scene2-body-elf.js"></script>
+<script src="/scene2-body-man.js"></script>
+<script src="/scene2-body-hobbit.js"></script>
+<script src="/scene2-body-dwarf.js"></script>
+<script src="/scene2-body-wizard.js"></script>
+<script src="/scene2-body-captains.js"></script>
+<script src="/scene2-body-ent.js"></script>
+<script src="/scene2-body-wild.js"></script>
+<script src="/scene2-body-v1.js"></script>
+<script src="/scene2-move.js"></script>
+<script src="/scene2-path.js"></script>
+<script src="/scene2-life-fx.js"></script>
+<script src="/scene2-jobs.js"></script>
+<script src="/scene2-life.js"></script>
+<script src="/scene2-life-road.js"></script>
+<script src="/scene2-haul.js"></script>
+<script src="/scene2-haul-jobs.js"></script>
+<script src="/scene2-stock.js"></script>
+<script src="/scene2-stock-art.js"></script>
+<script src="/scene2-chores.js"></script>
+<script src="/scene2-archery.js"></script>
+<script src="/scene2-life-beasts.js"></script>
+<script src="/scene2-horse-art.js"></script>
+<script src="/scene2-horse.js"></script>
+<script src="/scene2-rider.js"></script>
+<script src="/scene2-rider-draw.js"></script>
+<script src="/scene2-rider-v1.js"></script>
+<script src="/scene2-fx.js"></script>
+<script src="/scene2-orc-art.js"></script>
+<script src="/scene2-orc-body.js"></script>
+<script src="/scene2-duel.js"></script>
+<script src="/scene2-orcs.js"></script>
+<script src="/scene2-orc-draw.js"></script>
+<script src="/scene2-war.js"></script>
+<script src="/scene2-rider-fight.js"></script>
+<script src="/scene2-rider-bug.js"></script>
+<script src="/scene2-life-deer.js"></script>
+<script src="/scene2-eye.js"></script>
+<script src="/scene2-eagle-art.js"></script>
+<script src="/scene2-call.js"></script>
+<script src="/scene2-eagle.js"></script>
+<script src="/scene2-call-bar.js"></script>
+<script src="/scene2-gollum-art.js"></script>
+<script src="/scene2-gollum.js"></script>
+<script src="/scene2-gollum-lairs.js"></script>
+<script src="/scene2-foes-v1.js"></script>
+<script src="/scene2-saruman.js"></script>
+<script src="/scene2-weather.js"></script>
+<script src="/scene2-wind.js"></script>
+<script src="/scene2-weather-fall.js"></script>
+<script src="/scene2-glow.js"></script>
+<script src="/scene2-tags.js"></script>
+<script src="/scene2-notes.js"></script>
+<script src="/scene2-mist.js"></script>
+<script src="/scene2-fireworks.js"></script>
+<script src="/scene2-saruman-tag.js"></script>
+<script src="/scene2-lands.js"></script>
+<script src="/scene2-land-peaks.js"></script>
+<script src="/scene2-land-peaks-draw.js"></script>
+<script src="/scene2-places.js"></script>
+<script src="/scene2-land-eriador.js"></script>
+<script src="/scene2-land-eriador-bree.js"></script>
+<script src="/scene2-land-eriador-trolls.js"></script>
+<script src="/scene2-land-eriador-willow.js"></script>
+<script src="/scene2-land-vale.js"></script>
+<script src="/scene2-land-vale-beorn.js"></script>
+<script src="/scene2-land-vale-wild.js"></script>
+<script src="/scene2-land-lake.js"></script>
+<script src="/scene2-land-lake-town.js"></script>
+<script src="/scene2-moria.js"></script>
+<script src="/scene2-moria-east.js"></script>
+<script src="/scene2-lorien.js"></script>
+<script src="/scene2-world.js"></script>
+<script src="/scene2-gondor.js"></script>
+<script src="/scene2-mordor.js"></script>
+<script src="/scene2-mordor-gate.js"></script>
+<script src="/scene2-mordor-doom.js"></script>
+<script src="/scene2-helm.js"></script>
+<script src="/scene2-helm-caves.js"></script>
+<script src="/scene2-isengard-orthanc.js"></script>
+<script src="/scene2-isengard.js"></script>
+<script src="/scene2-gondor-city.js"></script>
+<script src="/scene2-gondor-citybuild.js"></script>
+<script src="/scene2-gondor-osgiliath.js"></script>
+<script src="/scene2-gondor-fields.js"></script>
+<script src="/scene2-gondor-river.js"></script>
+<script src="/scene2-gondor-sea.js"></script>
+<script src="/scene2-gondor-ithilien.js"></script>
+<script src="/horn.js"></script>
+<script src="/sound-ui.js"></script>
+<script src="/music.js"></script>
+<script src="/music-duck.js"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { loadConfig, ROOT, HOME } from '../lib/config.mjs';
 
 const cfg = loadConfig();
@@ -123,15 +124,16 @@ function worktreeBranch(ticket) {
 }
 
 // Each account's email, plan and the usage it saved the last time something ran 'claude -p /usage'. Only those fields
-// and the account id are read from .claude.json; the file also holds sign-in details.
+// and the account and organization ids are read from .claude.json; the file also holds sign-in details. The ids leave
+// only as key, a short hash of the pair, which tells the board when two labels (or two machines) hold the same account,
+// such as two labels signed in to one Team seat, drawing on one set of limits.
 const PLANS = { claude_max: 'Max', claude_team: 'Team', claude_pro: 'Pro', claude_enterprise: 'Enterprise' };
 function labels() {
   const found = fs.readdirSync(HOME).filter((d) => /^\.claude-[a-z]$/.test(d)).map((d) => d.slice(-1));
   if (fs.existsSync(path.join(HOME, '.claude.json'))) found.unshift(PRIMARY);
   return hostCfg.accounts ? found.filter((l) => hostCfg.accounts.includes(l)) : found;
 }
-const accounts = labels().map((label) => {
-  const file = label === PRIMARY ? path.join(HOME, '.claude.json') : path.join(HOME, `.claude-${label}`, '.claude.json');
+function readAccount(label, file) {
   try {
     const j = JSON.parse(fs.readFileSync(file, 'utf8'));
     const me = j.oauthAccount?.accountUuid ?? null;
@@ -140,6 +142,7 @@ const accounts = labels().map((label) => {
     const win = (w) => (w ? { used: w.utilization ?? null, resetsAt: w.resets_at ?? null } : null);
     return {
       label,
+      key: me ? createHash('sha256').update(`${me}:${j.oauthAccount.organizationUuid ?? ''}`).digest('hex').slice(0, 12) : null,
       email: j.oauthAccount?.emailAddress ?? null,
       plan: PLANS[j.oauthAccount?.organizationType] ?? j.oauthAccount?.organizationType ?? null,
       signedIn: Boolean(j.oauthAccount),
@@ -151,17 +154,65 @@ const accounts = labels().map((label) => {
   } catch (e) {
     return { label, error: e.code === 'ENOENT' ? 'not signed in here' : e.message };
   }
-});
+}
+const accounts = labels().map((label) => readAccount(label, label === PRIMARY ? path.join(HOME, '.claude.json') : path.join(HOME, `.claude-${label}`, '.claude.json')));
+// Claude accounts the board shows but the queue never uses, such as the human's own main account: each is a folder
+// ~/.claude-board-<name>, which the fleet skips because of the hyphen. watch-usage.mjs keeps their saved usage fresh.
+const watched = fs.readdirSync(HOME).filter((d) => /^\.claude-board-[a-z0-9]+$/.test(d) && fs.existsSync(path.join(HOME, d, '.claude.json')))
+  .map((d) => ({ ...readAccount(d.slice('.claude-board-'.length), path.join(HOME, d, '.claude.json')), watchOnly: true }));
 
 function memFree() {
   try {
-    if (process.platform === 'darwin') return Number(execFileSync('sysctl', ['-n', 'kern.memorystatus_level'], { encoding: 'utf8' }).trim());
+    // By full path: the board's ssh PATH has no /usr/sbin, so a bare 'sysctl' failed and a remote Mac read as null.
+    if (process.platform === 'darwin') return Number(execFileSync('/usr/sbin/sysctl', ['-n', 'kern.memorystatus_level'], { encoding: 'utf8' }).trim());
     const info = fs.readFileSync('/proc/meminfo', 'utf8');
     const kb = (key) => Number(info.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'))[1]);
     return Math.round((kb('MemAvailable') / kb('MemTotal')) * 100);
   } catch {
     return null;
   }
+}
+
+// Swap in use, in MB. A Mac grows its swap files as it needs them, so its swap total says little; the board weighs swap
+// used against RAM instead.
+function swapUsedMb() {
+  try {
+    if (process.platform === 'darwin') {
+      const used = execFileSync('/usr/sbin/sysctl', ['-n', 'vm.swapusage'], { encoding: 'utf8' }).match(/used = ([\d.]+)M/);
+      return used ? Math.round(Number(used[1])) : null;
+    }
+    const info = fs.readFileSync('/proc/meminfo', 'utf8');
+    const kb = (key) => Number(info.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'))[1]);
+    return Math.round((kb('SwapTotal') - kb('SwapFree')) / 1024);
+  } catch {
+    return null;
+  }
+}
+
+// The process holding the most memory. On a Mac, top's MEM counts compressed pages too, which ps leaves out; on
+// 2026-11-05 one Mac's fseventsd held 22 GB, 20 GB of it compressed, while ps showed 3.5 GB.
+function topMemory() {
+  try {
+    if (process.platform === 'darwin') {
+      const line = execFileSync('/usr/bin/top', ['-l', '1', '-o', 'mem', '-n', '1', '-stats', 'pid,mem,command'], { encoding: 'utf8', timeout: 10_000 }).trimEnd().split('\n').at(-1);
+      const [, pid, size, unit, command] = line.match(/^(\d+)\s+([\d.]+)([KMG])[+-]?\s+(.+)$/) ?? [];
+      return pid ? { pid: Number(pid), command: command.trim(), mb: Math.round(Number(size) * { K: 1 / 1024, M: 1, G: 1024 }[unit]) } : null;
+    }
+    const [pid, rss, command] = execFileSync('ps', ['-eo', 'pid=,rss=,comm=', '--sort=-rss'], { encoding: 'utf8' }).trim().split('\n')[0].trim().split(/\s+/);
+    return { pid: Number(pid), command, mb: Math.round(Number(rss) / 1024) };
+  } catch {
+    return null;
+  }
+}
+
+// The queue's Codex and Grok workers on this machine (engine-workers.mjs), loaded on its own so a machine whose copy of
+// that file is missing still reports everything else. A dispatcher that runs no engine workers leaves the folder
+// absent, which reads as none.
+let engines = [];
+try {
+  engines = (await import('./engine-workers.mjs')).readEngineWorkers(path.join(LOCAL, 'engine-workers'));
+} catch (e) {
+  errors.push(`engine workers: ${e.message}`);
 }
 
 const paused = readText(path.join(LOCAL, 'PAUSED'));
@@ -172,15 +223,22 @@ console.log(JSON.stringify({
   paused: paused ? paused.trim() : null,
   maxWorkers: hostCfg.maxWorkers ?? dc.workerCap,
   sentryWorkers: hostCfg.sentryWorkers ?? 0,
+  // The engines the dispatcher may give a ticket here as accounts in this machine's pool, beside the Claude ones, while
+  // they are on. A dispatcher with no engine workers (no dispatcher.externalBuilders) gives none.
+  engineAccounts: dc.externalBuilders?.fallback?.enabled ? dc.externalBuilders.fallback.engines ?? ['codex', 'grok'] : [],
   maxDispatchesPerDay: dc.maxDispatchesPerDay,
   load: { cores: os.cpus().length, avg5: os.loadavg()[1], maxPerCore: hostCfg.maxLoadPerCore ?? dc.maxLoadPerCore },
   memFreePercent: memFree(),
   minMemFreePercent: hostCfg.minMemoryFreePercent ?? dc.minMemoryFreePercent,
-
+  ramMb: Math.round(os.totalmem() / 1048576),
+  swapUsedMb: swapUsedMb(),
+  topMemory: topMemory(),
   state,
   workers,
   adhoc,
+  engines,
   accounts,
+  watched,
   log,
   errors,
 }));

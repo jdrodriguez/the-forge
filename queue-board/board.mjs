@@ -3,9 +3,10 @@
 // and this machine's Tailscale address when "tailscale" is listed, so the human's other machines and phone (with
 // Tailscale on it) can open it.
 // A snapshot joins collect.mjs from every queue machine (run over SSH) with the PRs on GitHub, the queue labels and
-// open asks in Linear, the human's Linear inbox (linear-inbox.mjs) and every machine's git worktrees (worktrees.mjs,
-// joined in worktree-state.mjs). It refreshes only while someone has the page open,
-// at most about once a minute, reads everything and changes nothing, and spends no Claude tokens.
+// open asks in Linear, the human's Linear inbox (linear-inbox.mjs) and every machine's git worktrees (worktrees.mjs, joined
+// in worktree-state.mjs), and every machine's Claude app sessions (sessions.mjs). It refreshes only while someone has
+// the page open, at most about once a minute, reads everything and changes nothing but its own Handled marks, and
+// spends no Claude tokens.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,12 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, linearKey as readLinearKey, ROOT, HOME } from '../lib/config.mjs';
 import { readInbox } from './linear-inbox.mjs';
+import { engineWorker } from './engine-workers.mjs';
 import { branchPrs, worktreeRows } from './worktree-state.mjs';
+import { readSettings, writeSettings, applyUpdate, readStatus, playAfterWarning, CUES } from './sound.mjs';
+import { musicList, musicFile, musicEvents, musicAlert, alertPages } from './music.mjs';
+import { weatherNow } from './weather.mjs';
+import { extRuns } from './ext-runs.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const cfg = loadConfig();
@@ -30,10 +36,13 @@ const TICK_MINUTES = 20;
 // The fleet account whose config dir is ~/.claude; every other account lives in ~/.claude-<label>.
 const PRIMARY = cfg.fleet?.primaryAccount ?? 'a';
 const HUMAN = cfg.human?.name ?? 'human';
+const ORCHESTRATOR = cfg.orchestrator?.sessionName ?? 'Specdesk';
 const LABELS = { ready: 'agent-ready', building: 'agent-building', stuck: 'agent-stuck', needsHuman: 'needs-human', sentry: 'sentry-triaged', ...(cfg.linear?.labels ?? {}) };
 // The status check that counts as the PR's review; null shows no review state.
 const REVIEW_CHECK = cfg.github?.reviewCheck ?? null;
 const REPO = cfg.github?.repo ?? '';
+const STATE_DIR = cfg.paths.stateDir;
+const SHARED = cfg.paths.sharedDir;
 const tilde = (p) => (p === HOME || p.startsWith(`${HOME}/`) ? `~${p.slice(HOME.length)}` : p);
 // Where this repo sits on the other machines (queueBoard.remoteRoot); by default the same place under their home. The
 // config loader expands a leading ~/ to this machine's home, so a path under it goes back to ~/ for the remote shell.
@@ -47,6 +56,22 @@ const MACHINES = (dc.enabledHosts ?? []).map((host) => ({
   ssh: qb.ssh?.[host] ?? host,
   root: host === HERE ? tilde(ROOT) : REMOTE_ROOT,
 }));
+
+// The Middle-earth realm each machine is drawn as (queueBoard.realms, { host: "rivendell" | "shire" | "erebor" }). With
+// none set, the first three enabled hosts get Rivendell, the Shire and Erebor in that order. Any other host is a
+// machine of Rohan, which the page draws for a host with no entry here.
+const REALM_KINDS = {
+  rivendell: { name: 'Rivendell', folk: 'elf' },
+  shire: { name: 'The Shire', folk: 'hobbit' },
+  erebor: { name: 'Erebor', folk: 'dwarf' },
+};
+const REALM_OF = qb.realms ?? Object.fromEntries((dc.enabledHosts ?? []).slice(0, 3).map((h, i) => [h, Object.keys(REALM_KINDS)[i]]));
+const REALMS = Object.fromEntries(Object.entries(REALM_OF).filter(([, k]) => REALM_KINDS[k]).map(([h, k]) => [h, REALM_KINDS[k]]));
+
+// The owner's place (queueBoard.weather) for the page's sky clock, which needs sunrise and sunset there; null when unset.
+const PLACE = Number.isFinite(Number(qb.weather?.latitude)) && Number.isFinite(Number(qb.weather?.longitude)) && qb.weather?.latitude != null && qb.weather?.longitude != null
+  ? { latitude: Number(qb.weather.latitude), longitude: Number(qb.weather.longitude), timezone: qb.weather.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone }
+  : null;
 
 process.env.PATH = [path.join(HOME, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', process.env.PATH].join(':');
 const execFileP = promisify(execFile);
@@ -67,6 +92,11 @@ const errText = (e) => String(e?.stderr || e?.message || e).trim().split('\n').s
 const hoursSince = (t) => (Date.now() - Date.parse(t)) / 3.6e6;
 const ID = /^[A-Z]+-\d+$/;
 const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Writes a file in the state folder, making the folder first.
+const writeState = (file, text) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+};
 
 // --- machines ---------------------------------------------------------------------------------------------------
 
@@ -119,6 +149,25 @@ function refreshExt() {
   }
   return extPending;
 }
+// The saved usage of the Claude accounts the board only watches (collect.mjs's watched), refreshed by watch-usage.mjs on
+// each machine that has one, every 15 minutes in the background. A refresh asks Anthropic for the windows and runs no model.
+const WATCH_MS = 15 * 60_000;
+const watchUsage = {};
+let watchPending = null;
+function refreshWatched() {
+  const due = MACHINES.filter((m) => lastGood[m.host]?.watched?.length && (!watchUsage[m.host] || Date.now() - Date.parse(watchUsage[m.host].tried) > WATCH_MS));
+  if (!watchPending && due.length) {
+    watchPending = Promise.all(due.map(async (m) => {
+      const tried = new Date().toISOString();
+      try {
+        watchUsage[m.host] = { ...JSON.parse(await onMachine(m, 'watch-usage.mjs')), tried };
+      } catch (e) {
+        watchUsage[m.host] = { tried, error: errText(e) };
+      }
+    })).finally(() => { watchPending = null; });
+  }
+}
+
 function extRows() {
   const rows = new Map();
   for (const m of MACHINES) {
@@ -136,8 +185,8 @@ function extRows() {
 }
 
 // Every machine's git worktrees (worktrees.mjs) and each branch's newest PR. A scan runs git status in every worktree
-// (about 0.1s each, and a busy machine holds dozens), so it runs in the background at most every 10 minutes and the snapshot
-// carries the last one.
+// (about 0.1s each, and a busy machine holds dozens), so it runs in the background at most every 10 minutes and the
+// snapshot carries the last one.
 const WT_MS = 10 * 60_000;
 const wtScans = {};
 let wtPrs = { prs: {}, errors: [] };
@@ -160,6 +209,84 @@ function refreshWorktrees() {
   return wtPending;
 }
 
+// Every machine's Claude app sessions (sessions.mjs), for the Sessions view: what each needs from the human. A scan
+// takes about 0.3s, so it runs in the background at most once a minute and the snapshot carries the last one. A row the
+// human marks handled stays hidden until its session does something new; the marks live here, keyed by machine and
+// session, with the activity time they covered.
+const SESS_MS = 60_000;
+const HANDLED = path.join(STATE_DIR, 'queue-board-handled.json');
+const sessScans = {};
+let sessPending = null;
+let sessRead = false;
+let handled = {};
+try { handled = JSON.parse(fs.readFileSync(HANDLED, 'utf8')); } catch { /* none marked yet */ }
+function refreshSessions() {
+  const due = MACHINES.filter((m) => !sessScans[m.host] || Date.now() - Date.parse(sessScans[m.host].tried) > SESS_MS);
+  if (!sessPending && due.length) {
+    sessPending = Promise.all(due.map(async (m) => {
+      const tried = new Date().toISOString();
+      try {
+        sessScans[m.host] = { ...JSON.parse(await onMachine(m, 'sessions.mjs')), tried };
+      } catch (e) {
+        sessScans[m.host] = { ...sessScans[m.host], tried, error: errText(e) };
+      }
+    })).finally(() => { sessPending = null; sessRead = true; });
+  }
+  return sessPending;
+}
+const sessionsSnapshot = () => ({
+  everyMinutes: SESS_MS / 60_000,
+  handled,
+  machines: MACHINES.filter((m) => !sessScans[m.host]?.none).map((m) => {
+    const s = sessScans[m.host];
+    return { host: m.host, name: m.name, at: s?.now ?? null, error: s?.error ?? null, older: s?.older ?? 0, days: s?.days ?? null, rows: s?.rows ?? null };
+  }),
+});
+// Marks a session handled up to its latest activity, or clears the mark (at=0). Same header rule as /api/send.
+async function markHandled(req, res, key, at) {
+  if (req.headers['x-board'] !== 'handled') return send(res, 403, 'text/plain', 'missing header');
+  if (!/^[\w-]+:local_[0-9a-f-]{36}$/.test(key ?? '') || !/^\d{1,15}$/.test(at ?? '')) return send(res, 400, 'text/plain', 'bad key or time');
+  if (Number(at)) handled[key] = Number(at);
+  else delete handled[key];
+  writeState(HANDLED, JSON.stringify(handled));
+  if (snap) snap = { ...snap, sessions: sessionsSnapshot() };
+  return send(res, 200, 'application/json', JSON.stringify({ ok: true }));
+}
+
+// Sound (sound.mjs, sound.json): GET answers the settings, the cue names and the herald's last report (herald.mjs
+// writes it; stale when the herald is not running here). POST with a JSON body changes the settings it names, every
+// field checked; POST with ?test=<cue> plays that cue on this Mac at the set volume, muted or not, since the human
+// clicked Test, after warning any page playing music the way the herald does. Same header rule as /api/send. One test
+// plays at a time: a new one stops the last, by its PID.
+let testing = null;
+async function soundApi(req, res, test) {
+  if (req.method === 'GET') return send(res, 200, 'application/json', JSON.stringify({ settings: readSettings(), cues: Object.keys(CUES), herald: readStatus() }));
+  if (req.method !== 'POST') return send(res, 405, 'text/plain', 'GET or POST');
+  if (req.headers['x-board'] !== 'sound' || !/^application\/json/.test(req.headers['content-type'] ?? '')) return send(res, 403, 'text/plain', 'missing header');
+  if (test != null) {
+    if (!Object.hasOwn(CUES, test)) return send(res, 400, 'application/json', JSON.stringify({ ok: false, error: `unknown cue ${test}` }));
+    if (testing?.pid) { try { process.kill(testing.pid); } catch { /* already ended */ } }
+    const child = await playAfterWarning(test, readSettings().volume, alertPages);
+    // A test clicked during this one's warning started first; this one replaces it.
+    if (testing?.pid) { try { process.kill(testing.pid); } catch { /* already ended */ } }
+    testing = child;
+    child.on('close', () => { if (testing === child) testing = null; });
+    child.on('error', (e) => console.error(`${new Date().toISOString()} could not play ${test}: ${e.message}`));
+    return send(res, 200, 'application/json', JSON.stringify({ ok: true, playing: test }));
+  }
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 4000) return send(res, 413, 'text/plain', 'too long');
+  }
+  let next;
+  try { next = applyUpdate(readSettings(), JSON.parse(body)); } catch (e) {
+    return send(res, 400, 'application/json', JSON.stringify({ ok: false, error: e instanceof SyntaxError ? 'bad JSON' : e.message }));
+  }
+  writeSettings(next);
+  return send(res, 200, 'application/json', JSON.stringify({ ok: true, settings: next, herald: readStatus() }));
+}
+
 // --- GitHub -----------------------------------------------------------------------------------------------------
 
 let ghToken;
@@ -172,19 +299,36 @@ async function gql(query) {
 
 const PR_FIELDS = `number url title state isDraft mergeStateStatus updatedAt headRefName mergeQueueEntry{ state position }
   commits(last:1){ nodes{ commit{ oid committedDate statusCheckRollup{ state contexts(first:100){ nodes{ __typename
-    ... on CheckRun{ name status conclusion } ... on StatusContext{ context state } } } } } } }
+    ... on CheckRun{ name status conclusion title startedAt } ... on StatusContext{ context state } } } } } } }
   reviewThreads(first:100){ totalCount nodes{ isResolved } }`;
 
 const PASS = ['SUCCESS', 'NEUTRAL', 'SKIPPED'];
 const FAIL = ['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'];
+// The review's own checks (github.reviewCheck, and any other check queueBoard.reviewChecks matches, such as the jobs
+// that run or re-request the review) are the review, which the snapshot reports as `review`. The CI lists leave them
+// out, so "CI failing" and an orc on the map mean a CI job failed.
+const REVIEW_CHECKS = qb.reviewChecks ? new RegExp(qb.reviewChecks) : null;
+const isReviewCheck = (name) => name === REVIEW_CHECK || Boolean(REVIEW_CHECKS?.test(name));
+// The review check can conclude FAILURE with one of these titles while the head has no review yet: after each push
+// until a re-review is requested, or while CI is red. Such a failure reads as a missing review, so it puts no orc on a
+// PR whose CI is running fine.
+const REVIEW_NOT_STARTED = (qb.reviewNotStartedTitles ?? ['^Re-review not requested', '^Review not run', '^CI not green']).map((s) => new RegExp(s));
 function shapePr(pr) {
   const commit = pr.commits.nodes[0]?.commit;
-  const checks = (commit?.statusCheckRollup?.contexts.nodes ?? []).map((c) => {
-    const name = c.name ?? c.context;
-    const result = c.__typename === 'CheckRun' ? (c.status === 'COMPLETED' ? c.conclusion : 'RUNNING') : c.state;
-    return { name, result: PASS.includes(result) ? 'pass' : FAIL.includes(result) ? 'fail' : 'running' };
-  });
-  const reviewRun = REVIEW_CHECK ? checks.find((c) => c.name === REVIEW_CHECK) : null;
+  const all = (commit?.statusCheckRollup?.contexts.nodes ?? []).map((c) => ({
+    name: c.name ?? c.context,
+    result: c.__typename === 'CheckRun' ? (c.status === 'COMPLETED' ? c.conclusion : 'RUNNING') : c.state,
+    title: c.title ?? '',
+    startedAt: c.startedAt ?? '',
+  }));
+  // A push and a PR edit seconds apart start two runs of a workflow that cancels its older run, and GitHub keeps both
+  // on the commit. Only the newer one counts, as it does for GitHub's merge check, so a cancelled run beside another
+  // run of the same check is dropped. Otherwise a PR reads as failing a check its newer run passed.
+  const checks = all
+    .filter((c) => !(c.result === 'CANCELLED' && all.some((o) => o !== c && o.name === c.name && o.result !== 'CANCELLED')))
+    .map((c) => ({ ...c, result: PASS.includes(c.result) ? 'pass' : FAIL.includes(c.result) ? 'fail' : 'running' }));
+  const ci = checks.filter((c) => !isReviewCheck(c.name));
+  const ccr = REVIEW_CHECK ? checks.filter((c) => c.name === REVIEW_CHECK).sort((x, y) => y.startedAt.localeCompare(x.startedAt))[0] : null;
   return {
     number: pr.number,
     url: pr.url,
@@ -196,11 +340,11 @@ function shapePr(pr) {
     lastCommitAt: commit?.committedDate ?? null,
     ci: {
       overall: commit?.statusCheckRollup?.state ?? null,
-      pass: checks.filter((c) => c.result === 'pass').length,
-      fail: checks.filter((c) => c.result === 'fail').map((c) => c.name),
-      running: checks.filter((c) => c.result === 'running').map((c) => c.name),
+      pass: ci.filter((c) => c.result === 'pass').length,
+      fail: ci.filter((c) => c.result === 'fail').map((c) => c.name),
+      running: ci.filter((c) => c.result === 'running').map((c) => c.name),
     },
-    review: !REVIEW_CHECK ? null : reviewRun ? reviewRun.result : 'missing',
+    review: !REVIEW_CHECK ? null : !ccr || (ccr.result === 'fail' && REVIEW_NOT_STARTED.some((re) => re.test(ccr.title))) ? 'missing' : ccr.result,
     // The base branch's merge queue: a queued PR is in flight, landing once the queue's checks pass.
     mergeQueue: pr.mergeQueueEntry ? { state: pr.mergeQueueEntry.state, position: pr.mergeQueueEntry.position } : null,
     openThreads: pr.reviewThreads.nodes.filter((n) => !n.isResolved).length,
@@ -324,37 +468,105 @@ function waitingOn(machines) {
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.on]));
 }
 
-// Each machine's heartbeat ({at, paused}), as the shared folder's sync delivered it here. The dispatchers read the same files:
-// while a Sentry host's heartbeat is under sentryHeartbeatMinutes old and unpaused, the other machines leave Sentry
-// tickets to its slot. A missing or unreadable file is null, which the dispatchers read as offline.
+// Each machine's heartbeat ({at, paused, sentryRoom}), as the shared folder's sync delivered it here. The dispatchers
+// read the same files: while a Sentry host's heartbeat is under sentryHeartbeatMinutes old and unpaused, the other
+// machines leave Sentry tickets to its slot. sentryRoom is null from a dispatcher that does not write it, which counts as
+// room. A missing or unreadable file is null, which the dispatchers read as offline.
+// The Sentry hosts in the order a Sentry ticket goes down them, as the dispatcher reads them: every enabled host with a
+// Sentry slot, in enabledHosts order.
+function sentryOrder() {
+  return (dc.enabledHosts ?? []).filter((h) => dc.hosts?.[h]?.sentryWorkers > 0);
+}
 function heartbeats() {
   return Object.fromEntries(MACHINES.map((m) => {
     try {
-      const beat = JSON.parse(fs.readFileSync(path.join(cfg.paths.sharedDir, 'heartbeats', `${m.host}.json`), 'utf8'));
-      return [m.host, { at: beat.at, paused: Boolean(beat.paused) }];
+      const beat = JSON.parse(fs.readFileSync(path.join(SHARED, 'heartbeats', `${m.host}.json`), 'utf8'));
+      return [m.host, { at: beat.at, paused: Boolean(beat.paused), sentryRoom: typeof beat.sentryRoom === 'boolean' ? beat.sentryRoom : null }];
     } catch {
       return [m.host, null];
     }
   }));
 }
 
+// Nicknames: the board shows each live worker under a Middle-earth name from the pools in queueBoard.nicknames, keyed by
+// realm (rivendell, shire, erebor), or by host, with sentry for Sentry-slot workers, adhoc for workers some session
+// started outside the queue (the wanderers), and other for every machine of Rohan. A name the dispatcher already gave a
+// ticket (its nickname) wins. A board-given name stays with its entry while the entry shows, and the least recently given
+// free name goes out next. <stateDir>/queue-board-names.json keeps them across restarts.
+const NAMES_FILE = path.join(STATE_DIR, 'queue-board-names.json');
+const names = (() => {
+  try { return JSON.parse(fs.readFileSync(NAMES_FILE, 'utf8')); } catch { return { given: {}, lastGiven: {} }; }
+})();
+function nameWorkers(tickets) {
+  const pools = qb.nicknames;
+  if (!pools) return;
+  const key = (t) => `${t.host}/${t.id}`;
+  const before = JSON.stringify(names);
+  const shown = new Set(tickets.map(key));
+  for (const k of Object.keys(names.given)) if (!shown.has(k)) delete names.given[k];
+  const live = tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
+  const taken = new Set(live.map((t) => t.nickname ?? names.given[key(t)]).filter(Boolean));
+  for (const t of live) {
+    if (t.nickname || names.given[key(t)]) continue;
+    // A Codex or Grok worker takes its realm's names like any worker.
+    const pool = (t.adhoc && pools.adhoc) || (t.sentry && pools.sentry) || pools[t.host] || pools[REALM_OF[t.host]] || pools.other;
+    if (!pool?.length) continue;
+    const free = pool.filter((n) => !taken.has(n)).sort((a, b) => (names.lastGiven[a] ?? '').localeCompare(names.lastGiven[b] ?? ''));
+    // A pool with every name in use (more live workers than names) numbers its least recently given name.
+    let name = free[0];
+    for (let i = 2; !name; i++) name = pool.map((n) => `${n} ${i}`).find((n) => !taken.has(n));
+    names.given[key(t)] = name;
+    names.lastGiven[name] = new Date().toISOString();
+    taken.add(name);
+  }
+  for (const t of tickets) t.nickname ??= names.given[key(t)] ?? null;
+  if (JSON.stringify(names) === before) return;
+  try {
+    writeState(`${NAMES_FILE}.tmp`, JSON.stringify(names, null, 2));
+    fs.renameSync(`${NAMES_FILE}.tmp`, NAMES_FILE);
+  } catch (e) {
+    console.error(`${new Date().toISOString()} could not save worker names: ${errText(e)}`);
+  }
+}
+
+// The base branch's CI as the dispatcher's main-watch.mjs last saw it (within seconds of a red run or a recovery, and
+// every few minutes as a backstop). Like the dispatchers, the board calls a missing, unreadable or over 15 minutes old
+// file unknown. The Middle-earth view and horn.js read it.
+function mainState() {
+  const unknown = { status: 'unknown', since: null, sha: null, title: null, failing: [], error: null, run: null, updatedAt: null };
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(SHARED, 'main-state.json'), 'utf8'));
+    if (!['red', 'green'].includes(s.status) || !(Date.now() - Date.parse(s.updatedAt) < 15 * 60_000)) return { ...unknown, updatedAt: s.updatedAt ?? null };
+    if (s.status === 'green') return { ...unknown, status: 'green', sha: s.greenSha ?? null, updatedAt: s.updatedAt };
+    return { status: 'red', since: s.redSince ?? null, sha: s.redSha ?? null, title: s.redTitle ?? null, failing: s.failing ?? [], error: s.error ?? null,
+      run: s.latestRun ?? null, updatedAt: s.updatedAt };
+  } catch {
+    return unknown;
+  }
+}
+
 async function build() {
   const ext = refreshExt();
+  refreshWatched();
   const inboxRead = refreshInbox();
   const wt = refreshWorktrees();
+  const sessions = refreshSessions();
   const machines = await Promise.all(MACHINES.map(collect));
   const tickets = [];
   for (const m of machines) {
     const all = m.state?.tickets ?? {};
     for (const [id, t] of Object.entries(all)) {
-      // A bundle is one worker and one PR for a lead ticket and its companions. A companion's entry
-      // names its lead in bundledInto and settles with it, so it shows on the lead's entry instead of its own.
+      // A bundle is one worker and one PR for a lead ticket and its companions. A companion's entry names its lead in
+      // bundledInto and settles with it, so it shows on the lead's entry instead of its own.
       if (t.bundledInto && all[t.bundledInto]) continue;
       const when = t.mergedAt ?? t.stuckAt ?? t.closedAt ?? t.dispatchedAt ?? t.claimedAt;
       const live = LIVE.includes(t.status);
       if (!live && !(t.status === 'merged' && hoursSince(when) < 48) && !(['stuck', 'closed'].includes(t.status) && hoursSince(when) < 7 * 24)) continue;
       const w = m.workers?.find((x) => x.label === t.account && x.id === t.workerId);
       const acct = m.accounts?.find((a) => a.label === t.account);
+      // Codex or Grok working the ticket on its own (engine-workers.mjs): no Claude session to attach to or read. A
+      // dispatcher that runs no engine workers never sets driver 'engine', so this is null for every ticket then.
+      const ew = engineWorker(t, id, m.engines, t.driver === 'engine' && fs.existsSync(path.join(SHARED, 'engine-contained', `${id}.json`)));
       const bundle = (t.bundle ?? []).map((cid) => ({ id: cid, status: all[cid]?.status ?? null }));
       tickets.push({
         id,
@@ -367,13 +579,26 @@ async function build() {
         status: t.status,
         // Dispatched into the machine's Sentry slot (hosts.<name>.sentryWorkers), apart from its regular slots.
         sentry: Boolean(t.sentry),
-        engine: t.engine ?? null,
+        // When its green PR started waiting on the reviewer, from a dispatcher that parks such a ticket; a parked ticket
+        // holds no slot.
+        parked: t.parked ?? null,
+        // The worker's Middle-earth name from the dispatcher, if it gives one; nameWorkers fills the rest. A bundle's
+        // companions show on their lead.
+        nickname: t.nickname ?? null,
+        // The engine that writes the code: for a Claude worker the builder it hands its writing to, and for an engine
+        // worker (driver 'engine') the worker itself, with its round (1 the build, then one per fix).
+        engine: ew ? ew.engine : t.engine ?? null,
+        driver: ew ? 'engine' : null,
+        contained: ew?.contained ?? false,
+        round: ew?.round ?? null,
+        workerName: ew?.workerName ?? null,
+        question: ew?.question ?? null,
         account: t.account ?? null,
-        accountEmail: acct?.email ?? null,
-        accountPlan: acct?.plan ?? null,
+        accountEmail: ew ? null : acct?.email ?? null,
+        accountPlan: ew ? null : acct?.plan ?? null,
         workerId: t.workerId ?? null,
-        workerState: live ? (w?.state ?? (m.ok ? 'gone' : 'unknown')) : null,
-        attach: t.workerId ? attachCmd(t, m) : null,
+        workerState: live ? (ew ? ew.workerState : w?.state ?? (m.ok ? 'gone' : 'unknown')) : null,
+        attach: !ew && t.workerId ? attachCmd(t, m) : null,
         branch: t.branch,
         prNumber: t.prNumber ?? null,
         prUrl: t.pr ?? null,
@@ -385,7 +610,7 @@ async function build() {
         lastProgressAt: t.lastProgressAt ?? null,
         lastOutputAt: t.lastOutputAt ?? null,
         stalledSince: t.stalledSince ?? null,
-        blockedSince: t.blockedSince ?? null,
+        blockedSince: t.blockedSince ?? ew?.blockedSince ?? null,
         mergedAt: t.mergedAt ?? null,
         stuckAt: t.stuckAt ?? null,
         closedAt: t.closedAt ?? null,
@@ -430,6 +655,7 @@ async function build() {
     }
   }
 
+  nameWorkers(tickets);
   const errors = {};
   const liveTickets = tickets.filter((t) => t.live && (t.prNumber || t.branch));
   // Live entries first: queueIssues looks up at most 40 unknown titles per snapshot.
@@ -452,14 +678,22 @@ async function build() {
   if (!extRead) await ext;
   if (!inbox) await inboxRead;
   if (!wtRead) await wt;
+  if (!sessRead) await sessions;
   return {
     generatedAt: new Date().toISOString(),
     servedBy: HERE,
-    // maxDispatchesPerDay null means no daily cap; the worker slots bound the queue then. The names and labels are for
-    // the page's own text.
+    // The real weather at the owner's place (queueBoard.weather), for the Middle-earth view (weather.mjs); null until
+    // the first answer.
+    weather: weatherNow(),
+    // The Codex and Grok calls running on this machine (ext-runs.mjs), for Saruman at his palantir.
+    seer: extRuns(),
+    // maxDispatchesPerDay null means no daily cap; the worker slots bound the queue then. The names, labels, realms and
+    // the board's own host are for the page's own text and map.
     config: { maxConcurrent: dc.maxConcurrent, maxDispatchesPerDay: dc.maxDispatchesPerDay ?? null, stallHours: dc.stallHours, spinHours: dc.spinHours, headroomFloorPercent: dc.headroomFloorPercent, tickMinutes: TICK_MINUTES,
-      sentryHeartbeatMinutes: dc.sentryHeartbeatMinutes ?? 45, human: HUMAN, reviewer: cfg.reviewer?.name ?? null, repo: REPO.split('/')[1] ?? REPO,
-      labels: { ready: LABELS.ready, building: LABELS.building, stuck: LABELS.stuck, sentry: LABELS.sentry } },
+      sentryHeartbeatMinutes: dc.sentryHeartbeatMinutes ?? 45, sentryCascade: sentryOrder(), human: HUMAN, orchestrator: ORCHESTRATOR, reviewer: cfg.reviewer?.name ?? null,
+      repo: REPO.split('/')[1] ?? REPO, boardHost: HERE, realms: REALMS, place: PLACE, repoDir: tilde(ROOT),
+      addAccountScript: path.join(ROOT, 'fleet/setup/add-account.sh'), workspaceFolder: cfg.workspaceCwd ? path.basename(cfg.workspaceCwd) : null,
+      labels: { ready: LABELS.ready, building: LABELS.building, stuck: LABELS.stuck, sentry: LABELS.sentry, needsHuman: LABELS.needsHuman } },
     machines: machines.map((m) => ({
       host: m.host,
       name: m.name,
@@ -474,14 +708,26 @@ async function build() {
       stuckStreak: m.state?.stuckStreak ?? 0,
       maxWorkers: m.maxWorkers ?? null,
       sentryWorkers: m.sentryWorkers ?? 0,
+      engineAccounts: m.engineAccounts ?? [],
       heartbeat: beats[m.host],
       dispatchedToday: (m.state?.dispatches ?? []).filter((d) => hoursSince(d) < 24).length,
       maxDispatchesPerDay: m.maxDispatchesPerDay ?? dc.maxDispatchesPerDay ?? null,
       load: m.load ?? null,
       memFreePercent: m.memFreePercent ?? null,
       minMemFreePercent: m.minMemFreePercent ?? null,
-      accounts: m.accounts ?? [],
+      ramMb: m.ramMb ?? null,
+      swapUsedMb: m.swapUsedMb ?? null,
+      topMemory: m.topMemory ?? null,
+      // The dispatcher's own sign-in check (fleet.sh accounts, each tick) marks an account signed out; the profile file
+      // collect.mjs reads keeps the account's email after its login is gone, so it alone reads a lost login as signed in.
+      accounts: (m.accounts ?? []).map((a) => (m.state?.signedOut?.[a.label] ? { ...a, signedIn: false, signedOutAt: m.state.signedOut[a.label] } : a)),
       signedOut: Object.keys(m.state?.signedOut ?? {}),
+      // A watched account whose last refresh failed carries why, so the board can say its reading is going stale.
+      watched: (m.watched ?? []).map((a) => {
+        const u = watchUsage[m.host];
+        const error = u?.error ?? u?.accounts?.[a.label]?.error;
+        return error ? { ...a, refreshError: error } : a;
+      }),
       log: (m.log ?? []).slice(-40),
       collectErrors: m.errors ?? [],
     })),
@@ -502,6 +748,8 @@ async function build() {
         return { host: m.host, name: m.name, at: s?.now ?? null, error: s?.error ?? null, rows: s?.repos ? worktreeRows(s, wtPrs.prs, live) : null };
       }),
     },
+    sessions: sessionsSnapshot(),
+    main: mainState(),
     errors,
   };
 }
@@ -553,13 +801,31 @@ async function workerFor(id) {
   const m = MACHINES.find((x) => x.host === t.host);
   return m ? { t, m } : null;
 }
+// A Claude app session (id app:<host>:<session id>, from the Sessions view) is read the same way: the app runs its
+// sessions on the primary account, and its record names the transcript (cli).
+function appSessionFor(id) {
+  const [, host, sid] = String(id).match(/^app:([\w-]+):(local_[0-9a-f-]{36})$/) ?? [];
+  const r = sessScans[host]?.rows?.find((x) => x.id === sid);
+  const m = MACHINES.find((x) => x.host === host);
+  return r && m && /^[0-9a-f]{8}/.test(r.cli ?? '') ? { t: { account: PRIMARY, workerId: r.cli.slice(0, 8) }, m } : null;
+}
+// A Codex or Grok queue worker has no Claude session; its runs are read from its machine instead (engine-history.mjs).
+async function engineFor(id) {
+  if (!snap) await refresh();
+  const t = snap?.tickets.find((x) => (x.id === id || x.bundle?.some((b) => b.id === id)) && x.driver === 'engine');
+  const m = t && /^[A-Z]+-\d+$/.test(t.id) && MACHINES.find((x) => x.host === t.host);
+  return m ? { t, m } : null;
+}
 async function history(res, id, n) {
-  const w = await workerFor(id);
-  if (!w) return send(res, 404, 'application/json', JSON.stringify({ ok: false, error: `no worker on record for ${id}` }));
+  const app = String(id).startsWith('app:');
+  const w = app ? appSessionFor(id) : await workerFor(id);
+  const e = !w && !app ? await engineFor(id) : null;
+  if (!w && !e) return send(res, 404, 'application/json', JSON.stringify({ ok: false, error: `no session on record for ${id}` }));
   const count = Math.min(Math.max(Number(n) || 150, 1), 400);
-  const key = `${id}/${w.t.workerId}/${count}`;
+  const key = `${id}/${w ? w.t.workerId : 'engine'}/${count}`;
   if (!histCache[key] || Date.now() - histCache[key].at > 8000) {
-    histCache[key] = { at: Date.now(), p: onMachine(w.m, 'history.mjs', [w.t.account, w.t.workerId, String(count)]).then(JSON.parse) };
+    const read = w ? onMachine(w.m, 'history.mjs', [w.t.account, w.t.workerId, String(count)]) : onMachine(e.m, 'engine-history.mjs', [e.t.id, String(count)]);
+    histCache[key] = { at: Date.now(), p: read.then(JSON.parse) };
   }
   try {
     return send(res, 200, 'application/json', JSON.stringify(await histCache[key].p));
@@ -613,17 +879,40 @@ function hostOk(req) {
   return [...NAMES, tailscaleIp].includes(m[1]) || (TAILSCALE && new RegExp(`^${ME}\\.[a-z0-9-]+\\.ts\\.net$`).test(m[1]));
 }
 
-const PAGE_SCRIPTS = ['/session.js', '/inbox.js', '/worktrees.js'];
+// In the order page.html loads them, so a test page built from this list loads them the same way.
+const PAGE_SCRIPTS = ['/ai-marks.js', '/session.js', '/inbox.js', '/worktrees.js', '/gollum-data.js', '/sessions.js', '/sprites.js', '/sprites-gear.js', '/sprites-gear-stations.js', '/sprites-hd.js', '/sprites-hd-folk.js', '/sprites-qd.js', '/sprites-wanderers.js', '/sprites-wanderers-folk.js', '/sprites-wanderers-gear.js', '/sprites-captains.js', '/sprites-work.js', '/sprites-horse.js', '/sprites-horse-art.js', '/sprites-horse-post.js', '/sprites-chores.js', '/realm-art-kit.js', '/realm-art.js', '/machines-accounts.js', '/machines.js', '/gollum-view.js', '/scenery-sun.js', '/scenery.js', '/scenery-qd.js', '/scenery-sky.js', '/scenery-sky-qd.js', '/scenery-land.js', '/scenery-land-qd.js', '/scenery-rohan.js', '/scenery-falls.js', '/scenery-erebor.js', '/scenery-lights.js', '/scenery-props.js', '/scenery-props-hd.js', '/scenery-props-qd.js', '/scenery-farm.js', '/scenery-hoard.js', '/scenery-elves.js', '/scenery-heal.js', '/scenery-shire.js', '/scene-tags.js', '/scene.js', '/scene-path.js', '/scene-weather.js', '/scene-weather-fall.js', '/scenery-weather.js', '/scenery-storm.js', '/scenery-snow.js', '/scene-wind.js', '/scene-glow.js', '/scene-work.js', '/scene-jobs.js', '/scene-farm.js', '/scene-hoard.js', '/scene-elves.js', '/scene-wild.js', '/scene-duel.js', '/scene-orcs.js', '/scene-ride.js', '/scene-tower.js', '/scene-call.js', '/scene-call-light.js', '/sprites-eagle.js', '/sprites-eagle-fly.js', '/scene-eagle.js', '/sprites-gollum.js', '/scene-gollum.js', '/scene-gollum-tag.js', '/sprites-saruman.js', '/sprites-saruman-stone.js', '/scene-saruman.js', '/scene2.js', '/scene2-plan.js', '/scene2-core-places.js', '/scene2-plan-south.js', '/scene2-tiles.js', '/scene2-build.js', '/scene2-trees.js', '/scene2-rivendell.js', '/scene2-rivendell-trees.js', '/scene2-rivendell-house.js', '/scene2-rivendell-garden.js', '/scene2-shire.js', '/scene2-shire-hill.js', '/scene2-shire-holes.js', '/scene2-shire-oak.js', '/scene2-shire-props.js', '/scene2-shire-pen.js', '/scene2-shire-mill.js', '/scene2-shire-front.js', '/scene2-shire-fill.js', '/scene2-erebor.js', '/scene2-erebor-gate.js', '/scene2-erebor-river.js', '/scene2-erebor-works.js', '/scene2-erebor-yard.js', '/scene2-rohan.js', '/scene2-edoras.js', '/scene2-edoras-stable.js', '/scene2-edoras-gondor.js', '/scene2-stations.js', '/scene2-station-art.js', '/scene2-elf.js', '/scene2-folk.js', '/scene2-body-kit.js', '/scene2-body-parts.js', '/scene2-body-head.js', '/scene2-tool.js', '/scene2-body-elf.js', '/scene2-body-man.js', '/scene2-body-hobbit.js', '/scene2-body-dwarf.js', '/scene2-body-wizard.js', '/scene2-body-captains.js', '/scene2-body-ent.js', '/scene2-body-wild.js', '/scene2-body-v1.js', '/scene2-move.js', '/scene2-path.js', '/scene2-life-fx.js', '/scene2-jobs.js', '/scene2-life.js', '/scene2-life-road.js', '/scene2-haul.js', '/scene2-haul-jobs.js', '/scene2-stock.js', '/scene2-stock-art.js', '/scene2-chores.js', '/scene2-archery.js', '/scene2-life-beasts.js', '/scene2-horse-art.js', '/scene2-horse.js', '/scene2-rider.js', '/scene2-rider-draw.js', '/scene2-rider-v1.js', '/scene2-fx.js', '/scene2-orc-art.js', '/scene2-orc-body.js', '/scene2-duel.js', '/scene2-orcs.js', '/scene2-orc-draw.js', '/scene2-war.js', '/scene2-rider-fight.js', '/scene2-rider-bug.js', '/scene2-life-deer.js', '/scene2-eye.js', '/scene2-eagle-art.js', '/scene2-call.js', '/scene2-eagle.js', '/scene2-call-bar.js', '/scene2-gollum-art.js', '/scene2-gollum.js', '/scene2-gollum-lairs.js', '/scene2-foes-v1.js', '/scene2-saruman.js', '/scene2-weather.js', '/scene2-wind.js', '/scene2-weather-fall.js', '/scene2-glow.js', '/scene2-tags.js', '/scene2-notes.js', '/scene2-mist.js', '/scene2-fireworks.js', '/scene2-saruman-tag.js', '/scene2-lands.js', '/scene2-land-peaks.js', '/scene2-land-peaks-draw.js', '/scene2-places.js', '/scene2-land-eriador.js', '/scene2-land-eriador-bree.js', '/scene2-land-eriador-trolls.js', '/scene2-land-eriador-willow.js', '/scene2-land-vale.js', '/scene2-land-vale-beorn.js', '/scene2-land-vale-wild.js', '/scene2-land-lake.js', '/scene2-land-lake-town.js', '/scene2-moria.js', '/scene2-moria-east.js', '/scene2-lorien.js', '/scene2-world.js', '/scene2-gondor.js', '/scene2-mordor.js', '/scene2-mordor-gate.js', '/scene2-mordor-doom.js', '/scene2-helm.js', '/scene2-helm-caves.js', '/scene2-isengard-orthanc.js', '/scene2-isengard.js', '/scene2-gondor-city.js', '/scene2-gondor-citybuild.js', '/scene2-gondor-osgiliath.js', '/scene2-gondor-fields.js', '/scene2-gondor-river.js', '/scene2-gondor-sea.js', '/scene2-gondor-ithilien.js', '/horn.js', '/sound-ui.js', '/music.js', '/music-duck.js'];
+// What makes the board installable as an app: the manifest, the service worker and the icons, each by exact path.
+const APP_FILES = {
+  '/manifest.webmanifest': 'application/manifest+json',
+  '/sw.js': 'text/javascript; charset=utf-8',
+  '/icons/icon.svg': 'image/svg+xml',
+  '/icons/icon-192.png': 'image/png',
+  '/icons/icon-512.png': 'image/png',
+  '/icons/maskable-512.png': 'image/png',
+  '/icons/apple-touch-icon.png': 'image/png',
+};
 async function handle(req, res) {
   const url = new URL(req.url, 'http://board');
   if (url.pathname === '/healthz') return send(res, 200, 'text/plain', 'ok');
   if (!hostOk(req)) return send(res, 421, 'text/plain', 'unknown host');
   if (req.method === 'POST' && url.pathname === '/api/open') return openSession(req, res, url.searchParams.get('id'));
   if (req.method === 'POST' && url.pathname === '/api/send') return sendMessage(req, res, url.searchParams.get('id'));
+  if (req.method === 'POST' && url.pathname === '/api/alert') return musicAlert(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/handled') return markHandled(req, res, url.searchParams.get('key'), url.searchParams.get('at'));
+  if (url.pathname === '/api/sound') return soundApi(req, res, url.searchParams.get('test'));
   if (req.method !== 'GET') return send(res, 405, 'text/plain', 'GET only');
   if (url.pathname === '/') return send(res, 200, 'text/html; charset=utf-8', fs.readFileSync(path.join(DIR, 'page.html')));
-  if (PAGE_SCRIPTS.includes(url.pathname)) return send(res, 200, 'text/javascript; charset=utf-8', fs.readFileSync(path.join(DIR, url.pathname.slice(1))));
+  // The map from above (v2) grows by many small files while it is built, so any scene2-*.js in this folder is served
+  // without a restart; page.html still decides which ones load.
+  const map2 = /^\/scene2-[a-z0-9-]+\.js$/.test(url.pathname) && fs.existsSync(path.join(DIR, url.pathname.slice(1)));
+  if (PAGE_SCRIPTS.includes(url.pathname) || map2) return send(res, 200, 'text/javascript; charset=utf-8', fs.readFileSync(path.join(DIR, url.pathname.slice(1))));
+  if (Object.hasOwn(APP_FILES, url.pathname)) return send(res, 200, APP_FILES[url.pathname], fs.readFileSync(path.join(DIR, url.pathname.slice(1))));
   if (url.pathname === '/api/history') return history(res, url.searchParams.get('id'), url.searchParams.get('n'));
+  // The owner's own MP3s for the header player (music.mjs, from the folder in config): the list, one file by its id,
+  // and the alert warnings.
+  if (url.pathname === '/api/events') return musicEvents(req, res);
+  if (url.pathname === '/api/music') return send(res, 200, 'application/json', JSON.stringify(musicList()));
+  if (url.pathname.startsWith('/music/')) return musicFile(req, res, url.pathname.slice('/music/'.length));
   if (url.pathname === '/api/snapshot') {
     if (!snap) await refresh();
     else refresh();
@@ -657,4 +946,3 @@ async function listenTailscale() {
   }
 }
 if (TAILSCALE) listenTailscale();
-

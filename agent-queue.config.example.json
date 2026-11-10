@@ -261,7 +261,35 @@
     "extUsage": true,
     "extUsageNote": "Show the Codex and Grok plan usage of every host (ext-usage.mjs asks each CLI's read-only billing call once an hour). false turns it off when you have neither CLI.",
     "healthUrl": null,
-    "healthUrlNote": "A URL on the environment your base branch deploys to (staging), answering JSON with a commit field. hourly-check.mjs reports when it serves an older commit than the branch head for over 2 hours. null skips that check, e.g. \"https://api.staging.example.com/health\"."
+    "healthUrlNote": "A URL on the environment your base branch deploys to (staging), answering JSON with a commit field. hourly-check.mjs reports when it serves an older commit than the branch head for over 2 hours. null skips that check, e.g. \"https://api.staging.example.com/health\".",
+    "realms": {
+      "main-mac": "rivendell",
+      "linux-box": "erebor"
+    },
+    "realmsNote": "The Middle-earth realm each host is drawn as on the map: \"rivendell\" (elves), \"shire\" (hobbits) or \"erebor\" (dwarves). A host with no entry is a machine of Rohan. Leave the key out and the first three hosts in dispatcher.enabledHosts get Rivendell, the Shire and Erebor in that order.",
+    "nicknames": {
+      "rivendell": ["Elrond", "Galadriel", "Legolas", "Arwen", "Thranduil", "Haldir", "Glorfindel", "Celeborn"],
+      "shire": ["Frodo", "Sam", "Merry", "Pippin", "Bilbo", "Rosie"],
+      "erebor": ["Gimli", "Thorin", "Balin", "Dwalin", "Fíli", "Kíli", "Bombur"],
+      "sentry": ["Aragorn", "Faramir", "Éomer", "Boromir"],
+      "adhoc": ["Gandalf", "Radagast", "Treebeard", "Tom Bombadil", "Beorn"],
+      "other": ["Théoden", "Éowyn"]
+    },
+    "nicknamesNote": "Name pools for the workers the board shows. A live worker takes the least recently given free name from the first pool that fits: adhoc for a worker started outside the queue, sentry for a Sentry-slot worker, then a pool keyed by its host name, then by its realm (realms above), then other. When every name in a pool is in use, names get a number (\"Frodo 2\"). Leave the key out and workers show without names.",
+    "reviewChecks": null,
+    "reviewChecksNote": "Optional regex source for checks that belong to the review besides github.reviewCheck (a job that runs or re-requests it, say), e.g. \"^(request-review|claude-review\\\\b)\". The board leaves them out of a PR's CI counts. null leaves out only github.reviewCheck.",
+    "reviewNotStartedTitles": ["^Re-review not requested", "^Review not run", "^CI not green"],
+    "reviewNotStartedTitlesNote": "Regex sources for the titles a failed github.reviewCheck carries when no review has run on the head yet. Such a failure shows as a missing review instead of a failing one. [] counts every failure as failing.",
+    "soundFile": null,
+    "soundFileNote": "The sound settings file (mute, volume, per-event switches, music volume). null means <paths.sharedDir>/queue-board/sound.json, in the shared folder so Mute reaches every Mac. A missing file reads as the defaults.",
+    "heraldStatusFile": null,
+    "heraldStatusFileNote": "Where the herald (herald.mjs) writes its last report, which the board's sound panel shows. null means <paths.stateDir>/queue-board/herald-status.json.",
+    "heraldNotifierApp": null,
+    "heraldNotifierAppNote": "Where install-herald.sh builds the herald's notification app (bundle id dev.agent-queue.herald-notifier). null means <paths.stateDir>/queue-board/Forge Herald.app.",
+    "musicDir": "~/Music",
+    "musicDirNote": "The folder of MP3s the header player lists and streams. The QUEUE_BOARD_MUSIC environment variable wins over it. The files stay where they are; nothing is copied.",
+    "weather": null,
+    "weatherNote": "The place whose real weather and daylight the map shows, from Open-Meteo's free API (no key): { \"latitude\": 40.0, \"longitude\": -75.0, \"timezone\": \"America/New_York\", \"place\": \"Home\" } is an example shape. timezone defaults to the board machine's, place is a label. null means no weather: the scene stays dry and the sky clock uses the board machine's time zone."
   },
 
   "learning": {

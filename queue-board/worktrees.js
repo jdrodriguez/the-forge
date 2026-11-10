@@ -1,8 +1,8 @@
 // worktrees.js: the Worktrees view, every machine's git worktrees from the snapshot's worktrees (worktree-state.mjs).
 // Each machine lists its worktrees by state, the ones that need a look first. The merged or closed ones that hold nothing
 // GitHub lacks are folded into one "safe to remove" line, since those are what a cleanup takes. Read-only: it changes
-// nothing. Loaded after page.html's own script and uses its helpers: $, esc, ago, ico, ICON, snap, machineColor, render,
-// WT_STATE, wtCounts.
+// nothing. Loaded after page.html's own script and uses its helpers: $, esc, ago, ico, ICON, snap, machineColor,
+// realmName, sigil, render, WT_STATE, wtCounts.
 const wtOpen = {};
 const WT_ICON = { active: ['run', 'run'], open: ['pr', 'todo'], local: ['warn', 'warn'], closed: ['todo', 'free'], merged: ['ok', 'merged'], nopr: ['free', 'free'], missing: ['bad', 'bad'] };
 const WT_CHIP = { active: 'run', local: 'warn', missing: 'bad' };
@@ -30,7 +30,7 @@ function wtRow(r, repo) {
 }
 
 function wtMachine(m, repo) {
-  const head = `<h2 class="gh"><span class="mdot" style="--mc:${machineColor(m.host)}"></span>${esc(m.name)} <span class="gcount">${m.rows ? m.rows.length : ''}</span></h2>`;
+  const head = `<h2 class="gh">${sigil(m.host, machineColor(m.host))}${esc(realmName(m.host))} <span class="gcount">${esc(m.name)}${m.rows ? `, ${m.rows.length}` : ''}</span></h2>`;
   const wrap = (body) => `<section class="group" id="wt-${esc(m.host)}">${head}${body}</section>`;
   if (!m.rows) return wrap(`<div class="empty">${m.error ? `Could not read its worktrees: ${esc(m.error)}` : 'Reading its worktrees...'}</div>`);
   const order = Object.keys(WT_STATE);

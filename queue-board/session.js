@@ -1,6 +1,7 @@
 // session.js: the session panel. "View session" on a building card or a "Needs you" item opens a worker's recent
 // history (from /api/history, refreshed while the panel is open) with a box that types a message into the session
-// (/api/send). Loaded after page.html's own script and uses its helpers: esc, link, ago, acctText, workerChip, snap.
+// (/api/send). On a row of the Sessions view it opens a Claude app session's history the same way, without the box.
+// Loaded after page.html's own script and uses its helpers: esc, link, ago, acctText, workerChip, snap.
 const SESSION_POLL_MS = 10000;
 const sess = { id: null, timer: null, count: 150, data: null, sig: '', open: new Set() };
 const sessEl = (() => {
@@ -24,6 +25,22 @@ const sessEl = (() => {
 const sq = (id) => sessEl.querySelector(`#${id}`);
 // A bundle's companion opens its lead's worker.
 const ticketOf = (id) => snap?.tickets.find((t) => (t.id === id || t.bundle?.some((b) => b.id === id)) && t.workerId);
+// A Claude app session from the Sessions view (sessions.js), id app:<host>:<session id>, with its machine. The panel
+// only reads one: the owner replies to it in the Claude app.
+function appOf(id) {
+  const [, host, sid] = String(id).match(/^app:([\w-]+):(local_[0-9a-f-]+)$/) ?? [];
+  const m = snap?.sessions?.machines.find((x) => x.host === host);
+  const r = m?.rows?.find((x) => x.id === sid);
+  return r ? { m, r } : null;
+}
+const APP_STATE = { needs: 'waiting on you', stopped: 'stopped mid-turn', review: 'ready for review', unseen: 'new since you looked', working: 'working', error: 'errored', quiet: 'quiet', done: 'done' };
+function renderAppHead(a) {
+  sq('sessTitle').textContent = a.r.title;
+  sq('sessChips').innerHTML = `<span class="chip host" style="--mc:${machineColor(a.m.host)}">${esc(realmName(a.m.host))} (${esc(a.m.name)})</span>
+    <span class="chip${a.r.state === 'needs' || a.r.state === 'stopped' ? ' warn' : ''}">${esc(APP_STATE[a.r.state] || a.r.state)}</span>
+    <span class="chip">last activity ${ago(new Date(a.r.activityAt).toISOString())}</span>${a.r.routine ? '<span class="chip">routine</span>' : ''}`;
+  sq('sessForm').hidden = true;
+}
 
 function clock(t) {
   const d = new Date(t);
@@ -31,18 +48,25 @@ function clock(t) {
 }
 
 function renderHead() {
+  const app = String(sess.id).startsWith('app:') ? appOf(sess.id) : null;
+  if (app) return renderAppHead(app);
   const t = ticketOf(sess.id);
-  sq('sessTitle').innerHTML = t ? `<span class="mono">${link(t.url, t.label || t.id)}</span> ${esc(t.title || (t.ticket ? '' : t.name) || '')}` : esc(sess.id);
+  sq('sessTitle').innerHTML = t ? `${figureAvatar(t)}${wname(t)} <span class="mono">${link(t.url, t.label || t.id)}</span> ${esc(t.title || (t.ticket ? '' : t.name) || '')}` : esc(sess.id);
+  paintAvatars(sq('sessTitle'));
   if (!t) return;
   const seen = sess.data?.updatedAt ? `<span class="chip">last activity ${ago(sess.data.updatedAt)}</span>` : '';
-  sq('sessChips').innerHTML = `<span class="chip host" style="--mc:${machineColor(t.host)}">${esc(t.machine)}</span>
-    <span class="chip">${esc(acctText(t.accountEmail, t.accountPlan, t.account))}</span>${t.live ? workerChip(t) : `<span class="chip">${esc(t.status)}</span>`}${seen}`;
+  // A Codex or Grok worker's mark by its name says what runs it, so it gets no account chip; it takes no messages either
+  // (it reads its brief, not a terminal), so its panel shows its runs (engine-history.mjs) with no message box.
+  const engine = onEngine(t);
+  sq('sessChips').innerHTML = `<span class="chip host" style="--mc:${machineColor(t.host)}">${esc(realmName(t.host))} (${esc(t.machine)})</span>
+    ${engine ? '' : `<span class="chip">${esc(acctText(t.accountEmail, t.accountPlan, t.account))}</span>`}${t.live ? workerChip(t) : `<span class="chip">${esc(t.status)}</span>`}${seen}`;
   const blocked = t.workerState === 'blocked';
   const form = sq('sessForm');
-  form.hidden = !t.live;
+  form.hidden = !t.live || engine;
   sq('sessText').disabled = blocked;
   sq('sessBtn').disabled = blocked;
-  sq('sessText').placeholder = `Message ${t.label || t.id}'s worker. Ctrl+Enter sends.`;
+  sq('sessText').placeholder = `Message ${t.nickname || `${t.label || t.id}'s worker`}. Ctrl+Enter sends.`;
+  sq('sessText').setAttribute('aria-label', `Message to ${called(t)}`);
   if (blocked) sq('sessStatus').textContent = 'It is waiting on a prompt in its session. Answer it with Open in terminal.';
 }
 
@@ -57,7 +81,9 @@ function eventHtml(e, i) {
     return `<div class="ev tool" data-key="${esc(key)}"><div class="ev-line"><span class="tn">${esc(e.name)}</span><span class="tl">${esc(e.label || '')}</span>${time}</div>
       ${e.detail ? `<code class="det${open}">${esc(e.detail)}</code>` : ''}</div>`;
   }
-  const who = { user: 'Sent to worker', assistant: 'Worker', error: 'Tool error', system: 'Notice' }[e.t] || e.t;
+  const name = esc(ticketOf(sess.id)?.nickname || '');
+  const who = String(sess.id).startsWith('app:') ? { user: 'You', assistant: aiMark('claude'), error: 'Tool error', system: 'Notice' }[e.t] || esc(e.t)
+    : { user: `Sent to ${name || 'worker'}`, assistant: name || 'Worker', error: 'Tool error', system: 'Notice' }[e.t] || esc(e.t);
   return `<div class="ev ${esc(e.t)}" data-key="${esc(key)}"><div class="ev-line"><span class="who">${who}</span>${time}</div>
     <div class="txt${open}">${e.t === 'error' ? esc(e.text) : marks(e.text)}</div></div>`;
 }
@@ -143,7 +169,7 @@ sq('sessForm').addEventListener('submit', async (e) => {
     if (id !== sess.id) return;
     if (body.ok) {
       sq('sessText').value = '';
-      status.textContent = body.delivered ? 'Delivered.' : 'Sent. The worker is mid-step, so it reads it at its next step.';
+      status.textContent = body.delivered ? 'Delivered.' : `Sent. ${cap(called(ticketOf(id)))} is mid-step, so it reads it at its next step.`;
       sess.sig = '';
       setTimeout(() => { if (id === sess.id) loadHistory(); }, 1500);
     } else {
@@ -168,8 +194,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && se
 // The page re-renders on every poll; keep the panel's header in step with the new snapshot.
 const sessRender = render;
 render = function () { sessRender(); if (sessEl.open) renderHead(); };
-// A shared link with #session=ENG-123 opens that panel once the first snapshot is in.
-
+// A shared link with #session=ABC-123 opens that panel once the first snapshot is in.
 (function openFromHash() {
   const m = location.hash.match(/^#session=(.+)$/);
   if (!m) return;

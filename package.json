@@ -1,14 +1,14 @@
 {
-  "name": "agent-queue",
+  "name": "the-forge",
   "version": "0.1.0",
   "private": true,
-  "description": "A spec desk and an agent queue: Linear tickets built into pull requests by Claude Code workers across several accounts and machines.",
+  "description": "The Forge: a spec desk and an agent queue. Linear tickets are built into pull requests by Claude Code workers across several accounts and machines, and a Middle-earth board shows it all.",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test lib/test/*.test.mjs dispatcher/test/*.test.mjs inbox/test/*.test.mjs learning/test/*.test.mjs",
+    "test": "node --test lib/test/*.test.mjs dispatcher/test/*.test.mjs inbox/test/*.test.mjs learning/test/*.test.mjs queue-board/*.test.mjs",
     "test:fleet": "bash fleet/test-fleet.sh && bash fleet/setup/test.sh && bash fleet/hooks/test-protect-main-checkout.sh"
   }
 }

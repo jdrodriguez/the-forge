@@ -73,8 +73,8 @@ async function findings() {
     if (t.live && ['failed', 'done', 'gone'].includes(t.workerState)) {
       add(`ticket:ended:${t.id}:${t.workerId}`, `${where}: its worker is ${t.workerState} and nothing is working on it (${t.note ?? 'no note'}).`);
     }
-    // A green PR in the base branch's merge queue is in flight, not stalled.
-    if (t.stalledSince && !t.pr?.mergeQueue) add(`ticket:stalled:${t.id}`, `${where}: stalled since ${t.stalledSince.slice(11, 16)}Z (${t.note ?? ''}).`);
+    // A green PR in the base branch's merge queue is in flight, not stalled, and a merged ticket is done.
+    if (t.stalledSince && !t.pr?.mergeQueue && t.status !== 'merged') add(`ticket:stalled:${t.id}`, `${where}: stalled since ${t.stalledSince.slice(11, 16)}Z (${t.note ?? ''}).`);
     if (t.blockedSince) add(`ticket:blocked:${t.id}`, `${where}: its worker is waiting on input since ${t.blockedSince.slice(11, 16)}Z. Attach: ${t.attach ?? ''}`);
     // A machine's state keeps "stuck" after the human re-queues the ticket; Linear's stuck label is current.
     const stillStuck = !snap.labeledStuck || snap.labeledStuck.includes(t.id);

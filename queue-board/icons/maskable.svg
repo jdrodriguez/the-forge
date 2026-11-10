@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- icon.svg without the rounded corners or the gold rim, for launchers that cut their own shape. The art is the same,
+       drawn at 80% so it sits inside the central circle every maskable icon has to keep clear. -->
+  <defs>
+    <linearGradient id="night" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b1d12"/>
+      <stop offset="1" stop-color="#100a06"/>
+    </linearGradient>
+    <radialGradient id="fire" cx="256" cy="300" r="270" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a2a" stop-opacity="0.78"/>
+      <stop offset="0.45" stop-color="#c2461a" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#5a1c0a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="flash">
+      <stop offset="0" stop-color="#fff1c2" stop-opacity="0.9"/>
+      <stop offset="0.3" stop-color="#ffb347" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#ff8a2a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbe9ad"/>
+      <stop offset="0.35" stop-color="#e3bd62"/>
+      <stop offset="1" stop-color="#96691a"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f6f1e4"/>
+      <stop offset="0.45" stop-color="#b9b1a0"/>
+      <stop offset="1" stop-color="#5f574a"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d9a45a"/>
+      <stop offset="1" stop-color="#7a4a1c"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#night)"/>
+  <rect width="512" height="512" fill="url(#fire)"/>
+  <g transform="translate(51.2 51.2) scale(0.8)">
+    <circle cx="282" cy="236" r="170" fill="url(#flash)"/>
+    <!-- Sparks thrown off the strike. -->
+    <g stroke-linecap="round" fill="none">
+      <path stroke="#ffd27a" stroke-width="9" d="M214 214L158 178"/>
+      <path stroke="#ffb347" stroke-width="7" d="M232 190L196 132"/>
+      <path stroke="#ffb347" stroke-width="7" d="M196 236L138 228"/>
+      <path stroke="#ffd27a" stroke-width="8" d="M356 224L408 202"/>
+    </g>
+    <g fill="#ffd27a">
+      <circle cx="128" cy="150" r="8"/><circle cx="176" cy="96" r="6"/><circle cx="104" cy="216" r="5"/>
+      <circle cx="238" cy="92" r="5"/><circle cx="440" cy="184" r="6"/>
+    </g>
+    <!-- The anvil: horn to the left, heel to the right, a bright face on top. -->
+    <path fill="url(#gold)" d="M84 276Q138 258 196 258L206 258L206 250L428 250L428 294Q372 298 346 320Q328 336 328 356Q328 386 372 400L392 408L392 438L158 438L158 408L178 400Q222 386 222 356Q222 328 196 316Q150 308 84 276Z"/>
+    <path fill="#fff6d6" d="M206 250L428 250L428 264L206 264Z"/>
+    <path fill="#fdefbf" d="M84 276Q138 258 196 258L206 258L206 266Q150 266 84 276Z"/>
+    <path fill="#6e4a10" fill-opacity="0.45" d="M158 408L392 408L392 438L158 438Z"/>
+    <!-- The hammer, its face on the anvil, and the flash where they meet. -->
+    <g transform="translate(276 178) rotate(-25) scale(1.15)">
+      <rect x="-44" y="-11" width="206" height="22" rx="11" fill="url(#wood)"/>
+      <rect x="-30" y="-52" width="60" height="104" rx="9" fill="url(#steel)"/>
+      <rect x="-30" y="-14" width="60" height="28" fill="#3d362c" fill-opacity="0.55"/>
+      <rect x="-30" y="38" width="60" height="14" rx="7" fill="#fffaf0" fill-opacity="0.85"/>
+    </g>
+    <path fill="#fffaf0" d="M282 190Q288 234 372 241Q288 247 282 268Q276 247 192 241Q276 234 282 190Z"/>
+  </g>
+</svg>

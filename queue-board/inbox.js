@@ -1,7 +1,6 @@
-// inbox.js: the Inbox view, the human's unread Linear notifications from the snapshot's inbox (linear-inbox.mjs).
+// inbox.js: the Inbox view, the owner's unread Linear notifications from the snapshot's inbox (linear-inbox.mjs).
 // Mentions, replies to their comments and review requests come first, then what was assigned to them, then comments on
 // issues they follow and other updates, one row per issue. Read-only: opening a notice in Linear marks it read there, and it
-
 // leaves this view at the next inbox read. Loaded after page.html's own script and uses its helpers: $, esc, ago, snap,
 // copyText, render.
 const INBOX_ROWS = 15;
@@ -18,12 +17,17 @@ function avatar(name) {
 }
 const noticeLink = (n, text, cls = '') => `<a class="${cls}" href="${esc(n.url)}" target="_blank" rel="noopener" title="${esc(n.title)}">${esc(text)}</a>`;
 
+// Reads as a sentence, who first: "Sam mentioned you on ABC-123 <title>", then what Sam wrote. Linear's own text starts
+// with the same "Sam mentioned you:", so that lead is cut. The title opens the notice in Linear.
+const SAID = { mention: 'mentioned you on', reply: 'replied on', review: 'asked for your review on', assigned: 'assigned you' };
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 function aimedRow(n) {
   const i = inboxItems.push(n) - 1;
+  const said = n.actor ? n.text.replace(new RegExp(`^${reEsc(n.actor)}\\s+[^:]{1,48}:\\s*`), '') : n.text;
   return `<div class="row inb">${avatar(n.actor)}<div class="rbody">
-    <div class="rline"><span class="chip${n.kind === 'mention' ? ' engine' : ''}">${KIND[n.kind]}</span>${n.issue ? `<span class="rid">${esc(n.issue)}</span>` : ''}${noticeLink(n, n.title, 'rtitle')}<span class="rmeta">${ago(n.at)}</span></div>
-    <div class="rtext" title="${esc(n.text)}">${esc(n.text)}</div>
-    <div class="inb-actions"><a class="btn" href="${esc(n.url)}" target="_blank" rel="noopener">Open in Linear</a><button class="btn copy-notice" type="button" data-i="${i}" title="Copies the notice and its link, to paste into a Claude session">Copy for Claude</button><span class="msg" role="status"></span></div>
+    <div class="rline"><span class="who">${esc(n.actor || 'Linear')}</span><span class="said">${SAID[n.kind] || KIND[n.kind]}</span>${n.issue ? `<span class="rid">${esc(n.issue)}</span>` : ''}${noticeLink(n, n.title, 'rtitle')}<span class="rmeta">${ago(n.at)}</span></div>
+    ${said ? `<div class="rtext" title="${esc(n.text)}">${esc(said)}</div>` : ''}
+    <div class="inb-actions"><button class="btn copy-notice" type="button" data-i="${i}" title="Copies the notice and its link, to paste into a Claude session">Copy for Claude</button><span class="msg" role="status"></span></div>
   </div></div>`;
 }
 function groupRow(g) {
@@ -34,7 +38,8 @@ function groupRow(g) {
 }
 
 function inboxGroup(id, icon, title, count, body) {
-  return `<section class="group" id="${id}"><h2 class="gh">${icon}${esc(title)} <span class="gcount">${esc(count)}</span></h2>${body}</section>`;
+  // The mentions count, what waits on the owner here, carries the wax seal the sidebar gives it.
+  return `<section class="group" id="${id}"><h2 class="gh">${icon}${esc(title)} <span class="gcount${id === 'inb-you' && count ? ' seal' : ''}">${esc(count)}</span></h2>${body}</section>`;
 }
 // Comments and updates show their newest rows; the snapshot carries up to 40 issues, and Linear has the rest.
 function grouped(key, g, empty, inboxUrl) {
@@ -55,10 +60,10 @@ function renderInbox() {
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   $('inbox').innerHTML = `<div class="ibar"><span><b>${box.unreadTotal}</b> unread in Linear</span><span>Read ${ago(box.at)}${box.error ? `, the last read failed: ${esc(box.error)}` : ''}</span>
       <a href="${esc(box.inboxUrl)}" target="_blank" rel="noopener">Open your Linear inbox</a></div>`
-    + inboxGroup('inb-you', ico('urgent', aimed.length ? 'bad' : 'free'), 'Mentions, replies and reviews', aimed.length,
-      aimed.length ? aimed.map(aimedRow).join('') : '<div class="empty">Nobody has mentioned you, replied to you or asked for your review.</div>')
+    + inboxGroup('inb-you', ico('seal', aimed.length ? 'bad' : 'free'), 'Mentions, replies and reviews', aimed.length,
+      aimed.length ? aimed.map(aimedRow).join('') : '<div class="empty">Nobody has mentioned you, replied to you or asked for your review.<span class="lore">No ravens today.</span></div>')
     + inboxGroup('inb-assigned', ico('todo'), 'Assigned to you', assigned.length,
-      assigned.length ? assigned.map(aimedRow).join('') : '<div class="empty">Nothing new is assigned to you.</div>')
+      assigned.length ? assigned.map(aimedRow).join('') : '<div class="empty">Nothing new is assigned to you.<span class="lore">No new errands.</span></div>')
     + inboxGroup('inb-comments', ico('comment', 'todo'), 'Comments on issues you follow', `${plural(box.comments.total, 'comment')} on ${plural(box.comments.issues, 'issue')}`,
       grouped('comments', box.comments, 'No new comments.', box.inboxUrl))
     + inboxGroup('inb-updates', ico('free'), 'Other updates', `${plural(box.updates.total, 'update')} on ${plural(box.updates.issues, 'issue')}`,

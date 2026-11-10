@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The queue herald: plays the board's alert cues and posts macOS notifications, kept running. Install with
+     install-herald.sh next to this file. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.agent-queue.queue-herald</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__DIR__/herald.mjs</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>WorkingDirectory</key>
+  <string>__HOME__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>__NODEDIR__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>AGENT_QUEUE_CONFIG</key>
+    <string>__CONFIG__</string>
+    <key>HERALD_BASE</key>
+    <string>__BASE__</string>
+    <key>HERALD_INTERVAL</key>
+    <string>__INTERVAL__</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>
