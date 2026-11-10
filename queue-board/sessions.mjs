@@ -59,19 +59,22 @@ function stateOf(s) {
   return 'done';
 }
 
+// What a row sends goes into the page's markup, and a session file is only as trustworthy as the machine it sits on.
+// So a time goes out only if it is a number, and a PR link only if it is an https address.
+const when = (t) => (Number.isFinite(t) ? t : null);
 function row(s) {
   const ps = s.postTurnSummary ?? {};
-  const prs = (s.prs ?? []).filter((p) => p?.url).slice(-3).map((p) => ({ url: p.url, number: p.prNumber, state: p.state }));
+  const prs = (s.prs ?? []).filter((p) => /^https:\/\//.test(p?.url ?? '')).slice(-3).map((p) => ({ url: p.url, number: p.prNumber, state: p.state }));
   return {
     id: s.sessionId,
     cli: s.cliSessionId ?? null,
     title: clip(s.title || 'Untitled session', 120),
     folder: s.cwd ?? s.originCwd ?? null,
     state: stateOf(s),
-    createdAt: s.createdAt ?? null,
-    activityAt: s.lastActivityAt ?? null,
-    focusedAt: s.lastFocusedAt ?? null,
-    userAt: s.latestUserFrameAt ?? null,
+    createdAt: when(s.createdAt),
+    activityAt: when(s.lastActivityAt),
+    focusedAt: when(s.lastFocusedAt),
+    userAt: when(s.latestUserFrameAt),
     ask: ps.needs_action ? clip(ps.needs_action, 400) : null,
     detail: clip(ps.status_detail, 160) || null,
     report: clip(s.lastTurnReport, 400) || null,

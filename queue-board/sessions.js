@@ -51,12 +51,12 @@ function sessRow({ m, r, group, handled }) {
     r.parent ? `<span class="chip">${(() => { const p = m.rows.find((x) => x.id === r.parent); return p ? `from ${esc(p.title)}` : 'side session'; })()}</span>` : '',
     r.remote ? '<span class="chip">remote</span>' : '',
     folder ? `<span class="chip" title="${esc(r.folder)}">${esc(folder)}</span>` : '',
-    ...r.prs.map((p) => `<a class="chip" href="${esc(p.url)}" target="_blank" rel="noopener">${ICON.pr}#${esc(p.number)} ${esc(String(p.state || '').toLowerCase())}</a>`),
+    ...r.prs.filter((p) => /^https:\/\//.test(p.url)).map((p) => `<a class="chip" href="${esc(p.url)}" target="_blank" rel="noopener">${ICON.pr}#${esc(p.number)} ${esc(String(p.state || '').toLowerCase())}</a>`),
   ].join('');
   const said = group === 'needs' ? r.ask || r.detail || 'Its last turn ended waiting on you.' : group === 'error' ? r.error : r.detail || r.report || '';
   const fresh = (r.activityAt ?? 0) > (r.focusedAt ?? 0) + 60_000;
   const [, , icon, cls] = SESS_GROUPS.find((g) => g[0] === group);
-  const act = group === 'quiet' || group === 'done' || group === 'working' ? '' : `<button class="open sess-done" type="button" data-key="${esc(sessKey(m, r))}" data-at="${handled ? 0 : r.activityAt}">${handled ? 'Show again' : 'Handled'}</button>`;
+  const act = group === 'quiet' || group === 'done' || group === 'working' ? '' : `<button class="open sess-done" type="button" data-key="${esc(sessKey(m, r))}" data-at="${handled ? 0 : Number(r.activityAt) || 0}">${handled ? 'Show again' : 'Handled'}</button>`;
   // Two lines: the title with its chips, then what it said; its age and buttons sit at the right end of the first.
   return `<div class="row sessrow${handled ? ' handled' : ''}">${ico(icon, cls)}<div class="rbody">
     <div class="rline">${fresh && group !== 'working' ? '<span class="sess-new" title="Changed since you last opened it"></span>' : ''}<span class="rtitle" title="${esc(r.title)}">${esc(r.title)}</span>${chips}</div>
