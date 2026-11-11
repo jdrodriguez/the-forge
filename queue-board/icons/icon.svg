@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
   <!-- The Forge's icon, "The Anvil Door": a shining arch on pillars, an anvil in outline, five stars and one ember
-       spark, in the manner of Middle-earth's door emblems. Drawn in VectorCraft on 2026-11-10 (the editable file and
-       the other candidates are in options/). The page's tab and sidebar use this file, and build.sh renders the PNGs
+       spark, in the manner of Middle-earth's door emblems. Original art, drawn as vectors on 2026-11-10. The page's tab and sidebar use this file, and build.sh renders the PNGs
        and the Mac icon from it. maskable.svg is the full-bleed copy. -->
   <defs>
     <linearGradient id="linear-gradient-1" x1="256" y1="0" x2="256" y2="512" gradientUnits="userSpaceOnUse">
