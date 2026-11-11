@@ -31,11 +31,14 @@ document.body.append(phoneVeil);
 
 const phoneMoreOpen = () => phoneSheet.classList.contains('on');
 // Every sidebar link the bar has no room for, in the sidebar's order. The Queue's groups come first; their heading is the
-// Queue tab's own name, since the tab itself stays in the bar.
+// Queue tab's own name, since the tab itself stays in the bar. A copy made while the sheet is open replaces its links,
+// so the link that held the keyboard's focus takes it again.
 function phoneMoreFill() {
   const rest = [...document.querySelectorAll('#nav > .nav-item')].filter((a) => !PHONE_BAR.includes(a.dataset.view));
   const queue = document.querySelector('#nav > .nav-item[data-view="queue"] .nav-t')?.textContent ?? 'Queue';
+  const held = phoneSheet.contains(document.activeElement) ? document.activeElement.getAttribute('href') : null;
   phoneSheet.innerHTML = `<h4>${esc(queue)}</h4>${rest.map((a) => a.outerHTML).join('')}`;
+  if (held) [...phoneSheet.querySelectorAll('a.nav-item')].find((a) => a.getAttribute('href') === held)?.focus();
 }
 function phoneMoreSet(open) {
   if (open) phoneMoreFill();

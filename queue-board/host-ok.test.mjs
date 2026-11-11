@@ -20,15 +20,24 @@ test('the HTTPS address behind tailscale serve: the ts.net name with no port or 
 test('nothing wider passes without the port', () => {
   for (const h of ['localhost', '127.0.0.1', 'main-mac', '100.64.0.7', 'localhost:443', 'main-mac:443', '127.0.0.1:80',
     'evil.example', 'evil.example:443', 'evil.example:8787', 'other-mac.example-tailnet.ts.net', 'other-mac.example-tailnet.ts.net:443',
-    'other-mac.example-tailnet.ts.net:8787', 'main-mac.other-net.ts.net', 'main-mac.other-net.ts.net:443', `${TS}.evil.example`,
+    'other-mac.example-tailnet.ts.net:8787', 'main-mac.other-net.ts.net', 'main-mac.other-net.ts.net:443', 'main-mac.other-net.ts.net:8787',
+    `${TS}.evil.example`, `${TS}.evil.example:8787`,
     `${TS}:80`, `${TS}:8443`, `x${TS}`, '', undefined, 'a:b:c']) assert.equal(ok(h), false, String(h));
 });
 
-test('with no ts.net name known, no port means refused', () => {
+test('with no ts.net name known, no port means refused, and the port takes the short name under any tailnet', () => {
   const o = { ...board, tsName: null };
   assert.equal(ok(TS, o), false);
   assert.equal(ok(`${TS}:443`, o), false);
   assert.equal(ok(`${TS}:8787`, o), true);
+  assert.equal(ok('main-mac.other-net.ts.net:8787', o), true);
+  assert.equal(ok('other-mac.example-tailnet.ts.net:8787', o), false);
+});
+
+test('a machine whose Tailscale name differs from its host name answers to the name Tailscale gives', () => {
+  const o = { ...board, tsName: 'main-mac-1.example-tailnet.ts.net' };
+  for (const h of ['main-mac-1.example-tailnet.ts.net:8787', 'main-mac-1.example-tailnet.ts.net', 'main-mac-1.example-tailnet.ts.net:443', 'main-mac:8787']) assert.equal(ok(h, o), true, h);
+  for (const h of [`${TS}:8787`, TS, `${TS}:443`, 'main-mac-1:8787']) assert.equal(ok(h, o), false, h);
 });
 
 test('queueBoard.bind decides the rest: a literal address is a name, and ts.net names need "tailscale"', () => {

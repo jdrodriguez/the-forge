@@ -7,9 +7,10 @@
 //   tailscaleIp  its Tailscale address, once known
 //   tsName       its full Tailscale name (<machine>.<tailnet>.ts.net), read from Tailscale itself, once known
 // On the board's port it answers to loopback, the short name, each literal address it listens on, the Tailscale address
-// and, when it listens on Tailscale, the machine's ts.net name. With no port, or 443, it answers to tsName alone: that
-// is how `tailscale serve` hands on an HTTPS request, and the HTTPS address is the one a phone can install the app
-// from. Any other name, another machine's ts.net name included, is refused.
+// and, when it listens on Tailscale, the machine's ts.net name: tsName exactly once that is known, and until then the
+// short name under any tailnet. With no port, or 443, it answers to tsName alone: that is how `tailscale serve` hands
+// on an HTTPS request, and the HTTPS address is the one a phone can install the app from. Any other name, another
+// machine's ts.net name included, is refused.
 export function hostAllowed(host, { port, me, bind = [], tailscaleIp = null, tsName = null }) {
   const m = String(host ?? '').toLowerCase().match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
   if (!m) return false;
@@ -17,7 +18,8 @@ export function hostAllowed(host, { port, me, bind = [], tailscaleIp = null, tsN
   if (Number(m[2] ?? 80) !== port) return false;
   const literal = bind.filter((a) => a !== 'tailscale').map((a) => (a.includes(':') ? `[${a}]` : a).toLowerCase());
   if (['127.0.0.1', 'localhost', me, tailscaleIp, ...literal].includes(m[1])) return true;
-  return bind.includes('tailscale') && new RegExp(`^${me}\\.[a-z0-9-]+\\.ts\\.net$`).test(m[1]);
+  if (!bind.includes('tailscale')) return false;
+  return tsName ? m[1] === tsName : new RegExp(`^${me}\\.[a-z0-9-]+\\.ts\\.net$`).test(m[1]);
 }
 
 // The machine's own ts.net name out of `tailscale status --json` (CertDomains, set once the tailnet has HTTPS on), or null.
