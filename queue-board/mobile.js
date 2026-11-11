@@ -40,8 +40,10 @@ function phoneMoreFill() {
   phoneSheet.innerHTML = `<h4>${esc(queue)}</h4>${rest.map((a) => a.outerHTML).join('')}`;
   if (held) [...phoneSheet.querySelectorAll('a.nav-item')].find((a) => a.getAttribute('href') === held)?.focus();
 }
+// Closing hides the sheet's links, so keyboard focus held by one of them goes back to the More button.
 function phoneMoreSet(open) {
   if (open) phoneMoreFill();
+  else if (phoneSheet.contains(document.activeElement)) phoneMore.focus();
   phoneSheet.classList.toggle('on', open);
   phoneVeil.classList.toggle('on', open);
   phoneMore.setAttribute('aria-expanded', String(open));
