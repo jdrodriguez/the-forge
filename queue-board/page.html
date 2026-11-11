@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>The Forge</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
@@ -20,7 +20,7 @@
    Middle-earth view is the same workers as pixel art (scene.js); the Machines view has a card per machine plus Codex
    and Grok; the Worktrees view lists every machine's git worktrees and their state (worktrees.js); the Gollum view shows
    the forgotten worktrees and the accounts near their limits (gollum-view.js).
-   Below 900px the sidebar becomes a tab strip and the panel fills the page.
+   Below 900px the panel fills the page and the sidebar becomes a bar along the bottom (mobile.css, linked in <body>).
    The look is Middle-earth (2026-11-06): parchment and iron-gall ink by day, Rivendell's night sky in dark mode.
    Cinzel sets headings and names, EB Garamond titles, and Inter stays for small data so numbers read cleanly.
    Each machine keeps its realm's colour: Rivendell teal, Shire green, Erebor bronze. The config says which machine
@@ -569,7 +569,7 @@ h2.gh::after { height: 7px; background: url("data:image/svg+xml,%3Csvg xmlns='ht
     mask: var(--cn) top left / 11px 11px no-repeat, var(--cn) top right / 11px 11px no-repeat, var(--cn) bottom left / 11px 11px no-repeat, var(--cn) bottom right / 11px 11px no-repeat; }
 }
 
-/* Narrower screens */
+/* Narrower screens. The phone layout proper is mobile.css and mobile-views.css, which load after this and win. */
 @media (max-width: 899px) {
   .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   .nav { flex-direction: row; align-items: center; gap: 4px; }
@@ -624,6 +624,8 @@ h2.gh::after { height: 7px; background: url("data:image/svg+xml,%3Csvg xmlns='ht
 </style>
 </head>
 <body>
+<link rel="stylesheet" href="/mobile.css">
+<link rel="stylesheet" href="/mobile-views.css">
 <div class="app">
   <aside class="side">
     <div class="ws"><img class="logo" src="/icons/icon.svg" alt="" width="26" height="26"><span>The Forge</span></div>
@@ -950,9 +952,9 @@ const wtOf = (host) => (snap.worktrees?.machines || []).find((m) => m.host === h
 const wtCounts = (rows) => Object.keys(WT_STATE).map((s) => [s, rows.filter((r) => r.state === s).length]).filter(([, n]) => n);
 
 // The sidebar: the Inbox view, the Sessions view, the Queue view with its groups, the Machines view with each machine,
-// then the Worktrees view with each machine's count. On a phone it becomes a strip of Inbox, Sessions, the Queue's
-// groups, Machines and Worktrees. Inbox counts the mentions, replies and review requests; Sessions the sessions
-// waiting on the owner that they haven't marked handled.
+// then the Worktrees view with each machine's count. On a phone it is a bar along the bottom (Inbox, Sessions, Queue,
+// Middle-earth) with the rest behind More (mobile.css, mobile.js). Inbox counts the mentions, replies and review
+// requests; Sessions the sessions waiting on the owner that they haven't marked handled.
 function renderNav(live, adhoc, slotted, needs, merged) {
   const hot = needs.some((n) => n.sev === 'bad');
   const item = (href, icon, text, count, cls, attrs) => `<a class="nav-item ${cls}" href="${href}" ${attrs}>${icon}<span class="nav-t">${esc(text)}</span>${count != null ? `<span class="count${cls.includes('hot') ? ' hot' : ''}">${count}</span>` : ''}</a>`;
@@ -1269,7 +1271,7 @@ function applyView(fromClick = false) {
   if (switched) window.dispatchEvent(new Event('resize'));
   $('viewTitle').textContent = VIEWS[view];
   document.querySelectorAll('.nav-item.view').forEach((el) => el.classList.toggle('active', el.dataset.view === view));
-  // On a phone the sidebar is a strip that scrolls sideways; keep the open view's tab in sight.
+  // Where the sidebar is a strip that scrolls sideways, keep the open view's tab in sight (a phone has a bar: mobile.css).
   const strip = document.querySelector('.side'), tab = document.querySelector('.nav-item.view.active');
   if (tab && strip.scrollWidth > strip.clientWidth) strip.scrollLeft = tab.offsetLeft - 12;
   const card = TARGET[view] && target && $(`${TARGET[view]}-${decodeURIComponent(target)}`);
@@ -1307,6 +1309,7 @@ poll();
 // has on localhost and not on its plain-HTTP tailnet names, so there the page runs as a normal tab.
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
+<script src="/mobile.js"></script>
 <script src="/ai-marks.js"></script>
 <script src="/session.js"></script>
 <script src="/inbox.js"></script>
