@@ -43,13 +43,21 @@ const m2Season = () => SEASONS[sceneNow(m2Date()).month];
 
 // The largest whole-number scale (at least 2) at which the realms get the room they need (m2Plan), then a world that
 // fills the column's width and the window's height down to the bottom at that scale, so every pixel stays square. A
-// screen too small even at 2 scrolls sideways, as the side view does on a phone.
+// window too small even at 2 scrolls sideways; a phone pans the map inside its frame (README "On a phone").
 function m2Fit() {
   const availW = m2Stage.parentElement.clientWidth;
   if (availW < 40) return null;
   m2.fitTop = m2Stage.getBoundingClientRect().top + $('main').scrollTop + window.scrollY;
   const inset = getComputedStyle($('main')).overflowY === 'visible' ? 0 : 11;
-  const availH = Math.max(150, window.innerHeight - m2.fitTop - inset);
+  // On a phone the map sits in a frame the finger pans (mobile-views.css), and the room is that frame's height. No
+  // phone has room for the realms even at 2, and a plan squeezed under 480 by 300 throws at some sizes (placing the
+  // eyries, or an array of infinite length), so there the world is never smaller than that and pans in its frame.
+  const room = typeof phoneMapRoom === 'function' ? phoneMapRoom(m2Stage.parentElement) : null;
+  const availH = Math.max(150, room ?? window.innerHeight - m2.fitTop - inset);
+  if (room !== null) {
+    m2.scale = 2;
+    return m2Plan(Math.max(480, Math.floor(availW / 2)), Math.max(300, Math.floor(availH / 2)));
+  }
   for (let s = 6; s >= 2; s -= 1) {
     const plan = m2Plan(Math.floor(availW / s), Math.floor(availH / s));
     if (plan.fits || s === 2) { m2.scale = s; return plan.fits || plan.W >= plan.minW ? plan : m2Plan(plan.minW, Math.floor(availH / s)); }

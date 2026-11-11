@@ -94,18 +94,18 @@ function scLayout() {
   });
 }
 
-// The largest whole-number scale (at least 2) at which the realms fit across the view, then a world that fills the view
-// at that scale: wider than the realms need, and taller by sc.dy rows of sky above the SCENE_H-row scene, so the ground stays
-// at the bottom. Pixels stay square, so up to one scaled pixel is left over at the edges. A phone, too narrow for the
-// realms at 2, scrolls sideways. inset is the main panel's bottom margin and frame (none on a phone, where the page scrolls).
+// The largest whole-number scale (at least 2) at which the realms fit across the view, then a world that fills the view at that
+// scale: wider than the realms need, and taller by sc.dy rows of sky above the SCENE_H-row scene, so the ground stays at the bottom.
+// Pixels stay square, so up to one scaled pixel is left over at the edges. A phone pans the map in its frame (README "On a phone").
 const scTop = () => scStage.getBoundingClientRect().top + $('main').scrollTop + window.scrollY;
 function scFit(natural) {
   const availW = scStage.parentElement.clientWidth;
   sc.scale = Math.max(2, Math.floor(availW / natural) || 2);
   sc.W = Math.max(natural, Math.floor(availW / sc.scale));
   sc.fitTop = scTop();
-  const inset = getComputedStyle($('main')).overflowY === 'visible' ? 0 : 11;
-  sc.H = Math.max(SCENE_H, Math.floor((window.innerHeight - sc.fitTop - inset) / sc.scale));
+  const inset = getComputedStyle($('main')).overflowY === 'visible' ? 0 : 11; // the main panel's bottom margin and frame
+  const room = typeof phoneMapRoom === 'function' ? phoneMapRoom(scStage.parentElement) : null; // a phone's frame height (mobile.js)
+  sc.H = Math.max(SCENE_H, Math.floor((room ?? window.innerHeight - sc.fitTop - inset) / sc.scale));
   sc.dy = sc.H - SCENE_H;
 }
 

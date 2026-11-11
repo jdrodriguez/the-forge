@@ -1,0 +1,107 @@
+/* mobile-views.css: each view on a phone. The frame (bar, header, sheets, touch sizes) is mobile.css; README "On a phone". */
+@media (max-width: 899px), (pointer: coarse) and (max-height: 540px) {
+  /* The two maps. The world keeps its scale, so it is wider than the screen and the finger pans it inside its frame
+     (mobile.js picks where it opens). Names are 11px, and each name's touch area is 44px tall. */
+  .sc-bar { padding: 8px var(--gut) 6px; gap: 4px 10px; }
+  .sc-call { position: relative; flex: 1 1 100%; min-height: 26px; font-size: 15px; }
+  .sc-call::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
+  .sc-bar .sc-legend, .m2-bar .sc-legend { flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; font-size: 13.5px; line-height: 26px; margin-inline: calc(-1 * var(--gut)); padding-inline: var(--gut); }
+  .sc-legend::-webkit-scrollbar { display: none; }
+  main.main:has(#scenes > :not([hidden])) { height: calc(100dvh - var(--bar-h) - var(--sab)); min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  main.main:has(#scenes > :not([hidden])) > header, main.main:has(#scenes > :not([hidden])) > #banner, main.main:has(#scenes > :not([hidden])) > #alarm { flex: none; }
+  #scenes, #scenes > :not([hidden]), #scene, #map { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .sc-bar { flex: none; }
+  .sc-wrap { flex: 1 1 0; min-height: 150px; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; }
+  .sc-wrap::-webkit-scrollbar { display: none; }
+  .sc-stage { --sc-font: 11px !important; margin: 0; }
+  .sc-name { padding: 4px 6px 3px; }
+  .sc-realm small { font-size: 11px; }
+  .sc-name::after { content: ""; position: absolute; left: -3px; right: -3px; top: 50%; height: 44px; transform: translateY(-50%); }
+
+  /* Lists (Queue, Inbox, Sessions, Worktrees). A row's title takes its own line and wraps in full, so nothing is cut to
+     an ellipsis that only a hover could open; chips wrap too. */
+  .rline { flex-wrap: wrap; row-gap: 4px; }
+  .rtitle, .need .rtitle, .inb .rtitle, .wt .rtitle, .build .rtitle, .li .rtitle { flex-basis: 100%; order: 3; display: block; white-space: normal; overflow: visible; -webkit-line-clamp: unset; font-size: 16px; }
+  /* A session has no ID line: its name leads, beside the dot that marks it as changed, and its chips follow. */
+  #sessions .rline .rtitle { order: 0; flex: 1 1 calc(100% - 20px); }
+  .li { height: auto; padding-block: 10px; align-items: flex-start; }
+  .li > .ico { margin-top: 3px; }
+  .li .rbody { gap: 2px; }
+  .li .rmeta { margin-left: auto; }
+  #merged .rmeta { flex-basis: 100%; margin-left: 0; }
+  .li .opt { display: inline-block; }
+  .rmeta { font-size: 12.5px; flex: 0 1 auto; min-width: 0; max-width: 100%; flex-wrap: wrap; white-space: normal; row-gap: 4px; }
+  .wname.col:empty { display: none; } .wname.col { width: auto; }
+  .chips { gap: 7px; }
+  .chip { height: auto; min-height: 24px; line-height: 1.3; padding: 3px 8px; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+  .open-row { gap: 8px; }
+  .open-row .msg { font-size: 13px; flex-basis: 100%; }
+  code.cmd { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* The Queue's slots: two to a row in an even grid, a free-seat marker the size of a slot. */
+  .realms { gap: 16px; }
+  .realm-row, .realm-bays { width: 100%; }
+  .realm-head { white-space: normal; flex-wrap: wrap; font-size: 12.5px; }
+  .realm-bays { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .realm-bays .bay, .realm-bays .bay.seat, .realm-bays .bay:not(.seat) { width: auto; min-height: 88px; padding: 9px 9px 8px; }
+  .bay .pfx, .seat .pfx { display: none; }
+  .bay .id { font-size: 12.5px; } .bay .what { font-size: 13.5px; } .bay .when { font-size: 12px; }
+  .bay.seat { font-size: 13px; }
+
+  /* Machines: four seats a row so a name fits on one line, gauges with a narrower label, tables as stacked rows. */
+  .msec { padding-inline: 12px; }
+  .mband-t { left: 11px; }
+  .mband h3 { font-size: 19px; letter-spacing: .16em; }
+  .seats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 4px; }
+  .seat { width: auto; }
+  .seat-fig { width: 54px; }
+  .seat-n { font-size: 11px; letter-spacing: 0; overflow-wrap: normal; }
+  .seat-id { font-size: 11.5px; }
+  .gauge { grid-template-columns: 96px minmax(0, 1fr) auto; gap: 10px; font-size: 12.5px; }
+  .mwt { flex-wrap: wrap; row-gap: 2px; min-height: 44px; font-size: 13px; }
+  .mwt .t { white-space: normal; }
+  .sub { font-size: 12.5px; }
+  .mh > span, .ledger span { font-size: 11px; }
+
+  /* The account tables (a machine's accounts, the Accounts card, Gollum's Ring) are stacked rows: the account on its
+     own line, then its 5-hour, weekly and read cells side by side, each under its own small label. The labels repeat
+     the table's header, which a stacked row no longer sits under. */
+  table.accts, table.accts tbody { display: block; width: 100%; }
+  table.accts thead { display: none; }
+  table.accts tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  table.accts tr:last-child { border-bottom: 0; padding-bottom: 2px; }
+  table.accts td { display: block; min-width: 0; }
+  table.accts td, table.accts tr:last-child td, table.accts tr:has(+ tr.agrp) td { padding: 0; border: 0; }
+  table.accts td.wide { display: none; }
+  table.accts td.who, table.accts td[colspan] { grid-column: 1 / -1; font-size: 14.5px; }
+  table.accts td[colspan] { font-size: 13px; }
+  table.accts td.who + td:not(.wide, [colspan])::before, table.accts td.where + td:not([colspan])::before { content: "5-hour"; }
+  table.accts td.who + td:not(.wide, [colspan]) + td::before, table.accts td.where + td:not([colspan]) + td::before { content: "Weekly"; }
+  table.accts td.who + td:not(.wide, [colspan]) + td + td.muted::before { content: "Saved"; }
+  table.accts td.where + td:not([colspan]) + td + td.muted::before { content: "Read"; }
+  table.accts td:not(.who, .wide, [colspan])::before { display: block; margin-bottom: 4px; font: 600 11px/1.2 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+  table.accts tr.agrp { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 14px 0 8px; border-bottom-color: var(--line-2); }
+  table.accts tr.agrp th { display: block; padding: 0; border: 0; }
+  table.accts tr.agrp th.wide { display: none; }
+  table.accts tr.agrp th.tally { text-align: right; font-size: 13px; }
+  .mcard.wide table.accts th:first-child { width: auto; }
+  pre.log { font-size: 12px; }
+
+  /* Inbox. */
+  .avatar { width: 24px; height: 24px; font-size: 11px; }
+  .inb a.rtitle { padding-block: 2px; }
+  .ibar a { margin-left: 0; }
+
+  /* A link in a line of text keeps its look; its touch area is 44px tall. */
+  #main a:not(.bay, .mwt, .chip), dialog.sess a:not(.chip) { position: relative; }
+  #main a:not(.bay, .mwt, .chip)::after, dialog.sess a:not(.chip)::after { content: ""; position: absolute; left: -3px; right: -3px; top: 50%; height: 44px; min-height: 100%; transform: translateY(-50%); }
+}
+
+/* A phone on its side: the page scrolls, and a map's frame is the whole screen (mobile.js brings it to the top). */
+@media (max-width: 899px) and (max-height: 540px) and (orientation: landscape), (pointer: coarse) and (max-height: 540px) and (orientation: landscape) {
+  main.main:has(#scenes > :not([hidden])) { height: auto; min-height: 100dvh; display: block; overflow: visible; }
+  #scenes, #scenes > :not([hidden]), #scene, #map { display: block; }
+  .sc-wrap { height: 100dvh; min-height: 0; }
+  .sc-bar .sc-legend, .m2-bar .sc-legend { flex: 1 1 auto; }
+  .sc-call { flex: 1 1 40%; }
+}

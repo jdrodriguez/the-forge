@@ -243,7 +243,7 @@
     "port": 8787,
     "portNote": "The board's port. The QUEUE_BOARD_PORT environment variable wins over it.",
     "bind": ["127.0.0.1"],
-    "bindNote": "Addresses the board listens on. Literal addresses are bound at start; the word \"tailscale\" binds this machine's Tailscale address (tailscale ip -4) once Tailscale is up, so your other devices on the tailnet can open the board. Keep it off the LAN and 0.0.0.0: anyone who can reach the board can type into a worker's session.",
+    "bindNote": "Addresses the board listens on. Literal addresses are bound at start; the word \"tailscale\" binds this machine's Tailscale address (tailscale ip -4) once Tailscale is up, so your other devices on the tailnet can open the board. With it the board also answers at the machine's HTTPS name once you run tailscale serve (queue-board/README.md, \"Over HTTPS, for a phone\"). Keep it off the LAN and 0.0.0.0: anyone who can reach the board can type into a worker's session.",
     "ssh": {
       "linux-box": "you@linux-box"
     },

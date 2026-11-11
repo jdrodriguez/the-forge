@@ -132,9 +132,9 @@ function callOf(c) {
 }
 
 // POST /api/alert from the herald: only from this Mac itself, with the board's X-Board header rule, and a known cue.
-export async function musicAlert(req, res) {
+// from is the caller as board.mjs reads it (callerOf in host-ok.mjs), so a phone on the HTTPS address is not this Mac.
+export async function musicAlert(req, res, from) {
   const answer = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json', ...noStore }); res.end(JSON.stringify(body)); };
-  const from = String(req.socket.remoteAddress).replace(/^::ffff:/, '');
   if (from !== '127.0.0.1' && from !== '::1') return answer(403, { ok: false, error: 'only from this Mac' });
   if (req.headers['x-board'] !== 'alert' || !/^application\/json/.test(req.headers['content-type'] ?? '')) return answer(403, { ok: false, error: 'missing header' });
   let body = '';
