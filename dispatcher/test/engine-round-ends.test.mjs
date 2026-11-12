@@ -96,7 +96,7 @@ test('a busy engine worker is never called stalled, however long it is quiet', (
   assert.match(ticket(box).note, /^Codex round 1 running/);
 });
 
-test('an engine claim a crashed run left behind is adopted from the registry row, not undone', () => {
+test('an engine claim a crashed run left behind is adopted from the registry row instead of undone', () => {
   const claimedAt = new Date(Date.now() - 60_000).toISOString();
   const box = engineBox({ tickets: { 'ENG-9': { status: 'claiming', claimedAt, branch: 'agent/eng-9', driver: 'engine', engine: 'codex', round: 1 } },
     registry: { status: 'busy', id: 'e7', startedAt: new Date().toISOString() } });

@@ -6,7 +6,7 @@
 #
 # Three parts, each counted:
 #  1. Kernel probes, with no model in the loop: each escape runs as a plain command inside the exact sandbox an engine
-#     gets (ext-worker.sh sandbox-run), and the result is read from the real disk, not from the command's exit code.
+#     gets (ext-worker.sh sandbox-run), and the result is read from the real disk instead of the command's exit code.
 #     A model can decline in words without trying, and a pass from that proves nothing.
 #  2. Audit probes: recorded event streams of every escape, in each CLI's format, must each be flagged.
 #  3. Model probes (skipped with --no-model): the CLI is asked to try the escapes, then to do the allowed work. The

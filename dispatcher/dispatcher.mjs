@@ -1421,7 +1421,7 @@ async function reconcileClaims(st, m) {
     if (t.status !== 'claiming') continue;
     let worker;
     try {
-      // An engine claim's worker is the run in its registry row, not a fleet session.
+      // An engine claim's worker is the run in its registry row; the fleet's session list never shows it.
       worker = engineDriven(t) ? await engines.call(`reading ${id}'s engine claim`, 'unknown', (e, c) => e.adopt(c, id, t)) : fleetWorker(workerName(t.bundledInto ?? id));
       if (worker === 'unknown') throw new Error('its engine registry could not be read');
     } catch (e) {

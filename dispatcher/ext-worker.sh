@@ -63,7 +63,7 @@
 #    code runs outside a sandbox. The audit fails a run whose branch touches workflows, hooks or agent settings, but only
 #    after the push.
 #  - The command guard (ext-worker-guard.sh) is a speed bump: an absolute path skips it. The audit reads the event
-#    stream after the run, as text, so it catches attempts it can read, not ones it can't.
+#    stream after the run, as text, so it catches only the attempts it can read.
 set -uo pipefail
 
 usage() { sed -n '7,12p' "$0" >&2; exit 2; }

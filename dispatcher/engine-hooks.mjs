@@ -6,7 +6,7 @@
 //   mergedAlone(st, id, t, pr)    an engine PR that merged without the orchestrator: ALERT, stop the run, ask the human
 //   leave(t)                      a ticket a Claude worker takes over drops its engine fields; engineHistory keeps them
 //   guard(id, t)                  the brief note that keeps a Claude worker out of the engine's clone
-// The two merge rules live here and in dispatcher.mjs, not in engine-workers.mjs, so they hold even when that file
+// The two merge rules live here and in dispatcher.mjs, outside engine-workers.mjs, so they hold even when that file
 // fails to load.
 import path from 'node:path';
 

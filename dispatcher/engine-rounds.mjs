@@ -218,7 +218,7 @@ export async function advanceTicket(c, st, m, id, t, { pr }) {
     c.saveState(st);
     c.log(`${id}: ${t.engine} hit its plan or rate limit`);
     await startRound(c, st, m, id, t, { pr, keepRound: true, exclude: [t.engine], summary: `${t.engine} hit its plan limit, so the round continues`,
-      note: { lead: `${label(t.engine)} stopped mid-round on its plan or rate limit, not because the work was finished. Continue its work from the worktree and branch instead of starting over.`,
+      note: { lead: `${label(t.engine)} stopped mid-round on its plan or rate limit before the work was finished. Continue its work from the worktree and branch instead of starting over.`,
         parts: t.lastRoundNote ? [`## What the stopped round was doing\n\n${t.lastRoundNote.slice(0, 12_000)}`] : [] } });
     return true;
   }

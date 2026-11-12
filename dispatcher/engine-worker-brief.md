@@ -13,7 +13,7 @@ Build Linear ticket {{ID}} in {{REPO_NAME}} as one pull request. You are {{ENGIN
 ## Where you are
 
 You run inside a sandbox the queue set up. It is not something to work around.
-- You can read and write this clone and its temp folder ($TMPDIR). You can't read anything else in the home folder: not other repos, not the main checkout's files, not credentials. Everything you need is in the clone.
+- You can read and write this clone and its temp folder ($TMPDIR). Everything else in the home folder is closed to you, including other repos, the main checkout's files and credentials. Everything you need is in the clone.
 - The network reaches GitHub and the package registry through a proxy that is already set in your environment, plus the loopback ports listed at the end of this brief. Nothing else. You can't browse docs on the web.
 - `gh` and `git push` work with the token in your environment. You have no Linear access and no Slack.
 - These are refused, and an attempt fails your run and keeps engines off this ticket for good: secrets managers, reading credentials or files outside the clone, `gh pr merge` or merging any other way, `gh workflow run`, `gh release`, `gh secret`, pushing to {{BASE}}, force pushes, `--no-verify`, and changes to CI workflows, git hooks, agent settings or `.mcp.json`. Calling a tool by its full path to get around a refusal counts as the same attempt.
@@ -37,7 +37,7 @@ You run inside a sandbox the queue set up. It is not something to work around.
 3. Build the full spec with tests. Write each acceptance scenario's test first, at a real boundary.
 4. Run the gates below until they pass. Commit with messages that say what changed. Commit working checkpoints as you go.
 5. Push: `gated-push origin {{BRANCH}}` (it is on your PATH). It runs the repo's pre-push gates, then pushes. A failing gate fails the push: fix it, commit, and push again.
-6. Open the PR, not as a draft: `gh pr create --base {{BASE}} --head {{BRANCH}} --title "{{ID}}: <what it does>" --body-file <file>`. Fill the body from the repo's pull request template if it has one, and keep its sections. Add your inventory, the related work you folded in, any dependency you added and why, and this exact line:
+6. Open the PR ready for review: `gh pr create --base {{BASE}} --head {{BRANCH}} --title "{{ID}}: <what it does>" --body-file <file>`. Fill the body from the repo's pull request template if it has one, and keep its sections. Add your inventory, the related work you folded in, any dependency you added and why, and this exact line:
    Built and driven by {{ENGINE}} as a queue engine worker, waiting on the orchestrator's review
 7. Check `gh pr view {{BRANCH}} --json number,url,mergeStateStatus`. If it reads DIRTY, merge origin/{{BASE}} into your branch, resolve the conflicts, run the gates again, and push. Then stop with `RESULT: DONE`. Don't wait for CI: the dispatcher watches it and starts the next round with what failed.
 

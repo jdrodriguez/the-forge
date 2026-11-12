@@ -1,8 +1,8 @@
 // The containment selftest, run in a throwaway world with fake CLIs (engine-fixture.mjs) under macOS's /bin/bash 3.2
 // when there is one: every kernel, audit and model probe must pass. The fakes stand in for the models in the model
-// probes and try each escape for real, so the probes prove the launcher and the audit, not a model's choices. Run the
-// selftest itself against the real CLIs on each machine that runs engines (ext-worker.sh selftest). The one probe that
-// needs the internet is skipped here. Run with: npm run test:engines
+// probes and try each escape for real, so the probes prove the launcher and the audit; a model's own choices are for
+// the real-CLI run. Run the selftest itself against the real CLIs on each machine that runs engines (ext-worker.sh
+// selftest). The one probe that needs the internet is skipped here. Run with: npm run test:engines
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';

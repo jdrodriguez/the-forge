@@ -61,7 +61,7 @@ write_prompt() {
     cat <<EOF
 
 --- THIS MACHINE (written by ext-worker.sh) ---
-Worktree: $WT (branch $BRANCH). TMPDIR: $RUN_TMP. HOME is a scratch folder, not the real home.
+Worktree: $WT (branch $BRANCH). TMPDIR: $RUN_TMP. HOME is a scratch folder for this run.
 To ask a question, write it to $RUN_TMP/ENGINE_QUESTION.md and stop.
 Push with: gated-push origin $BRANCH (it is on your PATH; it runs the repo's pre-push gates, then pushes).
 Blocked here, so don't try: reading outside this worktree and the toolchain; any network except $hosts through the proxy already set in HTTPS_PROXY; loopback ports other than these: $ports; secrets managers; merging; workflow runs; releases; pushes to $EW_BASE; force pushes; --no-verify. Tests that open their own local server may not run here, and CI runs them.
