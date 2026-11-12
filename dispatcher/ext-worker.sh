@@ -90,6 +90,8 @@ REG_DIR="${EXT_WORKER_REGISTRY_DIR:-$EW_STATE/engine-workers}"
 mkdir -p "${EXT_WORKER_ROOT:-$HOME/.cache/agent-queue-ext-worker}"
 EW=$(abspath "${EXT_WORKER_ROOT:-$HOME/.cache/agent-queue-ext-worker}")
 CACHE_DIR=$EW_STATE
+# The sandbox profiles are built from word-split path lists, so a space would split a path into two rules.
+case "$MAIN$EW$HOME" in *[[:space:]]*) die "repoPath, the home folder and EXT_WORKER_ROOT must have no spaces in their paths" ;; esac
 LOOPBACK_PORTS=$EW_LOOPBACK
 # codeload.github.com serves a lockfile's git dependencies.
 ALLOWED_HOSTS="github.com api.github.com codeload.github.com *.githubusercontent.com registry.npmjs.org"
