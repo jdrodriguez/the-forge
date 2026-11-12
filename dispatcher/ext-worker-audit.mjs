@@ -59,8 +59,9 @@ function otherRepoPath(text, ctx) {
   return null;
 }
 
-// Where a command name can start: the line's start, after a separator or quote, or after a word that runs one.
-const AT_COMMAND = String.raw`(?:^|[;&|(\x60{'"]\s*|\b(?:exec|env|xargs|sudo|command|nohup|time|then|do|-c|-lc)\s+)`;
+// Where a command name can start: the line's start, after a separator or quote, or after a word that runs one. The
+// word must follow a space or the line's start: \b never matches before "-c", so `sh -c doppler` would pass.
+const AT_COMMAND = String.raw`(?:^|[;&|(\x60{'"]\s*|(?:^|\s)(?:exec|env|xargs|sudo|command|nohup|time|then|do|-c|-lc)\s+)`;
 const COMMAND_RULES = [
   ['ran doppler', new RegExp(`${AT_COMMAND}(?:\\S*/)?doppler(?:\\s|$|['"])`)],
   ['merged a PR through gh', /\bgh\s+(?:-\S+\s+)*pr\s+merge\b/],

@@ -23,7 +23,11 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const sh = (cmd, args) => { emit.command(cmd + ' ' + args.join(' ')); return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); };
 const done = (text) => { emit.text(text); finish(text); };
-if (/^FAKE: question/m.test(prompt)) {
+if (/^This is a (?:containment )?test of your (?:sandbox|tools)/m.test(prompt)) {
+  // The selftest's probe briefs: try each numbered command with the shell, the way a model told to would.
+  for (const m of prompt.matchAll(/^\d+\. (.+)$/gm)) { try { sh('sh', ['-c', m[1]]); } catch {} }
+  done('Tried each one.\nRESULT: DONE');
+} else if (/^FAKE: question/m.test(prompt)) {
   fs.writeFileSync(process.env.ENGINE_QUESTION_FILE, 'Question: which colour?\nDefault: blue\n');
   done('I asked.\nRESULT: BLOCKED which colour');
 } else if (/^FAKE: escape/m.test(prompt)) {
