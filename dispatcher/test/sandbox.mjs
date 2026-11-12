@@ -24,8 +24,11 @@ export function makeBox(name, { preload, fleet, gh = '#!/bin/sh\necho "[]"\n', d
   fs.mkdirSync(dir, { recursive: true });
   fs.mkdirSync(path.join(root, 'lib'));
   fs.copyFileSync(path.join(REPO_ROOT, 'lib/config.mjs'), path.join(root, 'lib/config.mjs'));
+  // The dispatcher's sibling modules (engine-hooks.mjs and the engine files it loads), then the copy under test.
+  for (const f of fs.readdirSync(path.join(REPO_ROOT, 'dispatcher'))) {
+    if (/\.(?:mjs|md)$/.test(f)) fs.copyFileSync(path.join(REPO_ROOT, 'dispatcher', f), path.join(dir, f));
+  }
   fs.copyFileSync(SRC, path.join(dir, 'dispatcher.mjs'));
-  fs.copyFileSync(path.join(REPO_ROOT, 'dispatcher/worker-brief.md'), path.join(dir, 'worker-brief.md'));
   const cfg = { ...EXAMPLE, ...config, dispatcher: { ...EXAMPLE.dispatcher, notify: false, ...dispatcher } };
   const configFile = path.join(root, 'agent-queue.config.json');
   fs.writeFileSync(configFile, JSON.stringify(cfg));

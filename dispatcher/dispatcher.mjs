@@ -27,6 +27,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadConfig, linearKey, ROOT } from '../lib/config.mjs';
+import { engineBuilt, engineDriven, makeEngineHooks } from './engine-hooks.mjs';
 
 const HOME = os.homedir();
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +72,10 @@ const LIVE = ['building', 'merge-asked'];
 const CLOSED_STATES = ['completed', 'canceled', 'duplicate'];
 const RISKY = (cfg.riskyPathPatterns ?? []).map((rx) => new RegExp(rx, 'i'));
 const hostCfg = cfg.hosts?.[HOST] ?? {}; // this machine's limits: maxWorkers, accounts, maxLoadPerCore, minMemoryFreePercent
+// Codex and Grok as queue accounts (engine-workers.mjs): the launcher that holds them in its lockdown, and the board's
+// plan-usage reader, which the dispatcher ranks them by.
+const EXT_WORKER = path.join(DIR, 'ext-worker.sh');
+const EXT_USAGE = path.join(ROOT, 'queue-board/ext-usage.mjs');
 
 fs.mkdirSync(LOCAL, { recursive: true });
 
@@ -149,7 +154,9 @@ async function notify(subtitle, text, { id = null, link = null, progress = false
 }
 
 // The command that opens a worker's session, for the blocked-worker ask. Fleet account a is the default config dir.
-const attachCmd = (t) => `${t.account === 'a' ? 'env -u CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=~/.claude-${t.account}`} claude attach ${t.workerId}`;
+// An engine worker has no session to open, so its command prints its registry row, which names its logs and clone.
+const attachCmd = (t) => (engineDriven(t) ? `cat ${t.engineRegistry ?? path.join(LOCAL, 'engine-workers', '<ticket>.json')}`
+  : `${t.account === 'a' ? 'env -u CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=~/.claude-${t.account}`} claude attach ${t.workerId}`);
 
 // Side effects after a transition is recorded: each runs once, a failure is logged and kept on the ticket.
 async function effects(t, id, steps) {
@@ -403,11 +410,12 @@ function riskyPaths(pr) {
 }
 
 const MERGE_REQUESTS = path.join(SHARED, 'merge-requests');
-function requestMerge(id, pr, risky) {
+// extra: an engine-built PR's request also says who built it and that no Claude has reviewed it (driver, engine, review).
+function requestMerge(id, pr, risky, extra = {}) {
   if (DRY) return log(`would request the orchestrator's merge of ${id}`);
   fs.mkdirSync(MERGE_REQUESTS, { recursive: true });
   fs.writeFileSync(path.join(MERGE_REQUESTS, `${id}.json`), `${JSON.stringify({
-    id, pr: pr.number, url: pr.url, head: pr.headRefOid, risky, host: HOST, at: iso(),
+    id, pr: pr.number, url: pr.url, head: pr.headRefOid, risky, host: HOST, at: iso(), ...extra,
   }, null, 2)}\n`);
 }
 const clearMergeRequest = (id) => fs.rmSync(path.join(MERGE_REQUESTS, `${id}.json`), { force: true });
@@ -930,7 +938,8 @@ async function finishMerged(st, m, id, t, pr) {
   await settleCompanions(st, m, id, t, 'merged', { pr });
 }
 
-async function markStuck(st, m, id, t, reason) {
+// ask: an engine containment stop replaces the usual question with its own (ask, recommend, fallback).
+async function markStuck(st, m, id, t, reason, ask = null) {
   Object.assign(t, { status: 'stuck', stuckAt: iso(), reason });
   st.stuckStreak = (st.stuckStreak ?? 0) + 1;
   saveState(st);
@@ -939,12 +948,14 @@ async function markStuck(st, m, id, t, reason) {
   await notify(`${withBundle} is stuck`, reason);
   const iid = await issueId(id);
   await effects(t, id, [
+    // An engine run still going would keep pushing to a ticket nobody watches any more.
+    ...(engineDriven(t) ? [[`stop ${id}'s ${t.engine} run`, () => run(EXT_WORKER, ['stop', id], { timeout: 60_000 })]] : []),
     [`label ${id} agent-stuck`, () => addLabel(iid, m.label.stuck)],
     [`remove agent-building from ${id}`, () => removeLabel(iid, m.label.building)],
-    [`comment why ${id} is stuck`, () => comment(iid, `Agent dispatcher gave up: ${reason}. Labeled ${L.stuck}. Worker ${t.account}/${t.workerId} may still be running.`)],
-    [`ask ${HUMAN} about ${id}`, () => askHuman(id, 'blocked', `${withBundle} is stuck: ${reason}. Re-queue it, take it over, or rescope it?`,
-      `Read the PR and its threads; if the spec holds, remove ${L.stuck} and add ${L.ready} to re-queue`,
-      `it stays ${L.stuck} and the dispatcher leaves it alone`)],
+    [`comment why ${id} is stuck`, () => comment(iid, `Agent dispatcher gave up: ${reason}. Labeled ${L.stuck}. Worker ${t.account}/${t.workerId} ${engineDriven(t) ? 'was stopped' : 'may still be running'}.`)],
+    [`ask ${HUMAN} about ${id}`, () => askHuman(id, 'blocked', ask?.ask ?? `${withBundle} is stuck: ${reason}. Re-queue it, take it over, or rescope it?`,
+      ask?.recommend ?? `Read the PR and its threads; if the spec holds, remove ${L.stuck} and add ${L.ready} to re-queue`,
+      ask?.fallback ?? `it stays ${L.stuck} and the dispatcher leaves it alone`)],
   ]);
   saveState(st);
   await settleCompanions(st, m, id, t, 'stuck', { reason });
@@ -985,6 +996,7 @@ async function advance(st, m, workers) {
     }
 
     if (pr?.state === 'MERGED') {
+      if (engineDriven(t) && t.status !== 'merge-asked' && !t.mergedWithoutReview) await engines.mergedAlone(st, id, t, pr);
       await finishMerged(st, m, id, t, pr);
       continue;
     }
@@ -1051,6 +1063,26 @@ async function advance(st, m, workers) {
       }
     }
     t.note = notGreen ? `not green: ${notGreen}` : 'green';
+    // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
+    // its round has ended, it goes to the orchestrator the way a risky-path PR does. That includes a PR an engine built
+    // and a Claude worker finished, since the engine's code has had no review.
+    if (!notGreen && engineDriven(t)) {
+      const ready = await engines.call(`checking ${id}'s engine run`, 'hold', (e, c) => e.greenState(c, st, m, id, t, pr));
+      if (ready === 'ready' && t.status !== 'stuck') await engines.toOrchestrator(st, id, t, pr);
+      saveState(st);
+      continue;
+    }
+    if (!notGreen && engineBuilt(t)) {
+      await engines.toOrchestrator(st, id, t, pr, `built by ${t.engineHistory.map((x) => x.engine).join(', ')} and finished by a Claude worker, no orchestrator review of the engine's code yet`);
+      continue;
+    }
+    if (notGreen && engineDriven(t)) {
+      // An engine's next round, question, limit or failure (engine-rounds.mjs). A module that fails to load holds the
+      // ticket for the tick instead of letting the stall rules judge a worker they can't see.
+      const handled = await engines.call(`advancing ${id}`, true, (e, c) => e.advanceTicket(c, st, m, id, t, { pr }));
+      saveState(st);
+      if (handled || t.status !== 'building') continue;
+    }
     if (!notGreen && path === 'unknown') {
       t.note = 'green, held: the Sentry merge-path labels could not be read';
       continue;
@@ -1213,7 +1245,8 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
 // A worker blocked on input in its session has stopped, and the stall check would only notice it hours later.
 // The human hears once per block; the mark clears when the worker moves again. Runs while paused, too.
 async function watchWorkers(st, workers) {
-  const live = Object.entries(st.tickets).filter(([, t]) => t.status === 'building' && t.workerId);
+  // An engine worker that reads blocked has asked a question and exited; engine-rounds.mjs relays it.
+  const live = Object.entries(st.tickets).filter(([, t]) => t.status === 'building' && t.workerId && !engineDriven(t));
   if (!live.length || !workers) return;
   for (const [id, t] of live) {
     const w = workers.find((x) => x.label === t.account && x.id === t.workerId);
@@ -1311,18 +1344,26 @@ function machineBusy() {
 const fallbackAccounts = hostCfg.fallbackAccounts ?? [];
 const usedHere = (label) => fallbackAccounts.includes(label) || !hostCfg.accounts || hostCfg.accounts.includes(label);
 
-function pickAccount(accounts) {
+// The account a new worker runs on: the one with the most weekly usage left among those with at least
+// headroomFloorPercent left in both windows and fewer than workerCap working sessions, or null. `engines` are
+// engine-workers.mjs's rows for Codex and Grok, in the same shape and ranked by the same figures, with two differences.
+// An engine whose plan usage could not be read is still a candidate, ranked after every account with a reading: its
+// own limit stop and limitCooldownMinutes keep a spent engine off. And on an exact tie an engine goes first (Grok, then
+// Codex), since it is listed first. Callers that start a Claude worker pass no engines.
+function pickAccount(accounts, engines = []) {
   const floor = cfg.headroomFloorPercent;
   // A plan with no 5-hour window reports five_hour as null once its usage is known; that is no limit, not an empty
   // one. The weekly window is still required.
   const fiveHourOk = (u) => u.five_hour == null || (u.five_hour.remaining_percentage ?? -1) >= floor;
-  const usable = (a) => a.signed_in && a.working < cfg.workerCap && a.usage?.available
-    && fiveHourOk(a.usage) && (a.usage.weekly?.remaining_percentage ?? -1) >= floor;
-  // Spread usage away from the primary account, which the human's own sessions use.
-  const best = (pool) => pool.filter(usable)
-    .sort((x, y) => (x.label === PRIMARY) - (y.label === PRIMARY) || y.usage.weekly.remaining_percentage - x.usage.weekly.remaining_percentage)[0] ?? null;
-  const regular = accounts.filter((a) => usedHere(a.label) && !fallbackAccounts.includes(a.label));
-  return best(regular) ?? best(accounts.filter((a) => fallbackAccounts.includes(a.label)));
+  const roomy = (u) => fiveHourOk(u) && (u.weekly?.remaining_percentage ?? -1) >= floor;
+  const usable = (a) => a.signed_in && a.working < cfg.workerCap && a.usage?.available && roomy(a.usage);
+  const engineUsable = (a) => a.working < cfg.workerCap && !a.usage?.limited && (!a.usage?.available || roomy(a.usage));
+  const left = (a) => (a.usage?.available ? a.usage.weekly.remaining_percentage : -1);
+  // Spread usage away from the primary account, which the human's own sessions use. The sort is stable, so a tie keeps
+  // the engines' place ahead of the Claude accounts.
+  const best = (pool) => pool.sort((x, y) => (x.label === PRIMARY) - (y.label === PRIMARY) || left(y) - left(x))[0] ?? null;
+  const regular = accounts.filter((a) => usedHere(a.label) && !fallbackAccounts.includes(a.label) && usable(a));
+  return best([...engines.filter(engineUsable), ...regular]) ?? best(accounts.filter((a) => fallbackAccounts.includes(a.label) && usable(a)));
 }
 
 // The worker brief's config placeholders, filled once before the ticket placeholders.
@@ -1337,7 +1378,16 @@ const fillConfig = (text) => text
   .replaceAll('{{GATED_PUSH}}', GATED_PUSH)
   .replaceAll('{{REVIEW_CHECK}}', REVIEW_CHECK ?? 'the AI review check')
   .replaceAll('{{REVIEWER}}', RV)
-  .replaceAll('{{JUDGMENT_LABEL}}', L.judgment);
+  .replaceAll('{{JUDGMENT_LABEL}}', L.judgment)
+  .replaceAll('{{GATES}}', GATES)
+  .replaceAll('{{MAX_ROUNDS}}', String(cfg.externalBuilders?.fallback?.maxRounds ?? 5));
+// The repo's own checks, for the engine brief: push.gates, then premerge.checkCommand when it differs.
+const GATES = (() => {
+  const list = [...(conf.push?.gates ?? [])];
+  const check = conf.premerge?.checkCommand;
+  if (Array.isArray(check) && check.length && !list.some((g) => g.join(' ') === check.join(' '))) list.push(check);
+  return list.length ? list.map((g) => `    ${g.join(' ').replaceAll('{base}', `origin/${BASE}`)}`).join('\n') : '    (none configured: run the checks the repo documents)';
+})();
 
 // The worker brief for one ticket, or for a bundle: the lead first, then its companions. A bundle gets one header,
 // a note on building the tickets together, and one ticket section per ticket.
@@ -1371,9 +1421,11 @@ async function reconcileClaims(st, m) {
     if (t.status !== 'claiming') continue;
     let worker;
     try {
-      worker = fleetWorker(workerName(t.bundledInto ?? id));
+      // An engine claim's worker is the run in its registry row, not a fleet session.
+      worker = engineDriven(t) ? await engines.call(`reading ${id}'s engine claim`, 'unknown', (e, c) => e.adopt(c, id, t)) : fleetWorker(workerName(t.bundledInto ?? id));
+      if (worker === 'unknown') throw new Error('its engine registry could not be read');
     } catch (e) {
-      log(`${id}: could not list fleet workers to reconcile its claim (${errText(e)})`);
+      log(`${id}: could not list its workers to reconcile its claim (${errText(e)})`);
       continue;
     }
     if (worker) {
@@ -1484,6 +1536,7 @@ async function dispatch(st, m) {
   if (slots <= 0) return log(`no slots for ${ready.length} ready: ${active}/${cfg.maxConcurrent} building across machines, ${local}/${hostCfg.maxWorkers ?? 'no limit'} on this machine${sentrySlots ? `, Sentry slot ${sentrySlots - sentryRoom}/${sentrySlots}` : ''}${outside ? ` (${outside} outside the queue)` : ''}, ${st.dispatches.length}${Number.isFinite(dailyCap) ? `/${dailyCap}` : ''} dispatched today`);
 
   let accounts = null;
+  let engineRows = null; // Codex and Grok as account rows, read when the first ticket an engine may take comes up
   const taken = new Set(); // companions this tick bundled, so they are never dispatched on their own as well
   for (const issue of ready) {
     if (slots <= 0) break;
@@ -1500,8 +1553,18 @@ async function dispatch(st, m) {
     const useSentrySlot = isSentry(issue) && sentrySlots > 0;
     if (useSentrySlot ? sentryRoom <= 0 : room <= 0) continue;
     accounts ??= JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 }));
-    const acct = pickAccount(accounts);
+    // Every account with room is a candidate, Claude, Codex or Grok, ranked by weekly usage left. Codex and Grok take
+    // part only while the engines are on and the ticket is one an engine may take (engine-workers.mjs skipReason).
+    const notForEngine = !engines.on() ? 'the engines are off'
+      : await engines.call(`checking ${issue.identifier} for an engine`, 'the engine module could not be read', (e, c) => e.skipReason(c, issue));
+    if (!notForEngine) engineRows ??= await engines.call('reading the engine accounts', [], (e, c) => e.accounts(c, st));
+    const acct = pickAccount(accounts, notForEngine ? [] : engineRows);
     if (!acct) {
+      // A ticket only Claude may take waits, and the next one may still go to an engine with room.
+      if (engines.on() && notForEngine && (engineRows === null || pickAccount([], engineRows))) {
+        log(`${issue.identifier}: not for an engine worker: ${notForEngine}; no Claude account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom, trying next tick`);
+        continue;
+      }
       log(`${issue.identifier}: no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom, trying next tick`);
       break;
     }
@@ -1511,6 +1574,20 @@ async function dispatch(st, m) {
     const now = await gql('query($id:String!){ issue(id:$id){ labels{ nodes{ name } } } }', { id });
     if (!now.issue.labels.nodes.some((l) => l.name === L.ready)) {
       log(`${id}: another machine claimed it first`);
+      continue;
+    }
+    if (acct.engine) {
+      // An engine ticket takes one slot in the same pool as a Claude one, and is never bundled.
+      const out = await engines.call(`starting ${acct.engine} on ${id}`, 'failed', (e, c) => e.startEngine(c, st, m, issue, acct));
+      if (out === 'paused') return;
+      // An engine that failed to start is not offered again this tick, so one broken launcher can't churn the queue.
+      if (out === 'failed') {
+        engineRows = engineRows.filter((x) => x !== acct);
+        continue;
+      }
+      slots -= 1;
+      room -= 1;
+      acct.working += 1;
       continue;
     }
     const mates = [];
@@ -1579,10 +1656,19 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   const [issue] = members;
   const acct = pickAccount(JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 })));
   if (!acct) return null;
-  const note = `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
+  // An engine ticket a Claude worker takes over (a redispatch by hand, or the round cap that made it stuck): the engine's
+  // clone is engine-written throughout, so the worker is told to cut its own worktree from the branch instead.
+  const fromEngine = engineDriven(t);
+  const note = fromEngine
+    ? `${engines.guard(id, t)}Continue the work on ${id} from origin/${t.branch} instead of starting over. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`
+    : `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
     '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
     ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+  if (fromEngine) {
+    engines.leave(t);
+    if (t.status === 'merge-asked') clearMergeRequest(id);
+  }
   const wasStuck = t.status === 'stuck';
   // lastOutputAt too: the spin check measures a busy worker's quiet time from it, and the old worker's last commit
   // made every replacement read as stalled on its first tick.
@@ -1623,7 +1709,10 @@ async function redispatch(id) {
   try {
     const st = loadState();
     const t = st.tickets[id];
-    if (!['building', 'stuck'].includes(t?.status)) return console.log(`${id} is not building or stuck on ${HOST} (status ${t?.status ?? 'none'})`);
+    if (!['building', 'stuck', ...(engineDriven(t) ? ['merge-asked'] : [])].includes(t?.status)) return console.log(`${id} is not building or stuck on ${HOST} (status ${t?.status ?? 'none'})`);
+    // An engine run still going would share the branch with the Claude worker that takes the ticket over.
+    const run1 = engineDriven(t) ? (await engines.call('reading the engine registry', [], (e, c) => e.rows(c))).find((r) => r.ticket === id && r.id === t.workerId) : null;
+    if (run1?.status === 'busy') return console.log(`${id}: its ${t.engine} run ${t.workerId} is still busy; stop it first with ext-worker.sh stop ${id}`);
     const w = fleetWorkers().find((x) => x.label === t.account && x.id === t.workerId);
     if (w && ACTIVE.includes(w.status || w.state)) return console.log(`${id}: its worker ${t.account}/${t.workerId} is still ${w.status || w.state}`);
     const out = await replaceWorker(st, id, t);
@@ -1650,6 +1739,19 @@ async function sentryTriage() {
     log(`sentry triage failed, the tick goes on (${errText(e)})`);
   }
 }
+
+// --- engine workers ------------------------------------------------------------------------------------
+
+// Codex and Grok as queue accounts. The logic is in engine-workers.mjs and engine-rounds.mjs, loaded on first use and
+// only while the engines are on (externalBuilders.fallback.enabled) or a ticket is engine-driven, so a syntax error or a
+// throw there costs one log line. The context hands them the dispatcher's own helpers, so an engine ticket is claimed,
+// commented on, asked about and marked stuck exactly the way a Claude ticket is.
+const engines = makeEngineHooks(() => ({
+  cfg, log, errText, iso, saveState, effects, notify, run, askHuman, attachCmd, riskyPaths, requestMerge, EXT_WORKER, HUMAN, WORKTREES,
+  ctx: () => ({ cfg, conf, DIR, ROOT, LOCAL, SHARED, HOST, DRY, REPO, BASE, HUMAN, L, EXT_WORKER, EXT_USAGE, ASK, WORKTREES,
+    log, run, gh, gql, iso, hoursSince, errText, saveState, isPaused, notify, effects, comment, issueId, addLabel, removeLabel, setState,
+    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig }),
+}));
 
 // --- commands ------------------------------------------------------------------------------------------
 
@@ -1681,6 +1783,8 @@ async function tick() {
     } catch (e) {
       log(`could not list fleet workers, so worker states are unknown this tick (${errText(e)})`);
     }
+    // Engine workers' registry rows join the list shaped like fleet rows, so progress and stall logic read them the same.
+    if (workers && engines.wanted(st)) workers = [...workers, ...await engines.call('reading the engine registry', [], (e, c) => e.rows(c))];
     await advance(st, m, workers);
     await watchWorkers(st, workers);
     await watchSignIns(st);
@@ -1721,7 +1825,8 @@ async function status() {
     const errs = t.effectErrors?.length ? `  [${t.effectErrors.length} side effect(s) failed]` : '';
     const bundle = t.bundledInto ? `  (rides on ${t.bundledInto})` : t.bundle?.length ? `  (+ ${t.bundle.join(', ')})` : '';
     if (t.status === 'bundled' && !LIVE.includes(st.tickets[t.bundledInto]?.status) && st.tickets[t.bundledInto]?.status !== 'claiming') continue;
-    console.log(`  ${id.padEnd(10)} ${t.status.padEnd(12)} ${t.account ?? '-'}/${t.workerId ?? '-'}  ${t.pr ?? t.branch}${bundle}${t.reason ? `  (${t.reason})` : ''}${errs}`);
+    const eng = engineDriven(t) ? `  (${t.engine} round ${t.round ?? 1}, ${t.engineStatus ?? 'unknown'})` : '';
+    console.log(`  ${id.padEnd(10)} ${t.status.padEnd(12)} ${t.account ?? '-'}/${t.workerId ?? '-'}  ${t.pr ?? t.branch}${bundle}${eng}${t.reason ? `  (${t.reason})` : ''}${errs}`);
   }
 }
 

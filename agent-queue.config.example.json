@@ -188,7 +188,38 @@
       "host": "main-mac",
       "module": "sentry-triage.mjs"
     },
-    "sentryTriageNote": "An optional triage module you write (this repo ships none), loaded from dispatcher/ on host only, behind enabled. It exports kickFromTick({ cfg, dry, log }), which should start its run in a detached process, and statusLine(cfg). It labels the tickets it queues with linear.labels.sentry plus mechanical or judgment. A throw or syntax error in it is one log line and never stops a tick."
+    "sentryTriageNote": "An optional triage module you write (this repo ships none), loaded from dispatcher/ on host only, behind enabled. It exports kickFromTick({ cfg, dry, log }), which should start its run in a detached process, and statusLine(cfg). It labels the tickets it queues with linear.labels.sentry plus mechanical or judgment. A throw or syntax error in it is one log line and never stops a tick.",
+    "externalBuilders": {
+      "fallback": {
+        "enabled": false,
+        "enabledNote": "Turns Codex and Grok on as queue accounts on every machine. Off by default.",
+        "engines": ["codex", "grok"],
+        "enginesNote": "Which engines may take tickets. Each machine also needs the CLI installed and signed in, and must pass ext-worker.sh available.",
+        "sizes": ["S", "M"],
+        "sizesNote": "Size labels an engine may take. Any other size waits for a Claude account.",
+        "maxRounds": 5,
+        "maxRoundsNote": "Spawns per ticket (build, then one per fix round). A ticket that needs one more goes stuck; redispatch hands it to a Claude worker.",
+        "timeoutSeconds": 10800,
+        "timeoutSecondsNote": "The time box of one round. A round that runs over is killed and counts as failed.",
+        "limitCooldownMinutes": 60,
+        "limitCooldownMinutesNote": "An engine that stopped on its plan or rate limit sits out account choice on that machine for this long.",
+        "loopbackPorts": [],
+        "loopbackPortsNote": "Loopback ports the sandbox may reach, for local test databases (e.g. [5432, 6379]). Every other local service is refused.",
+        "extraHosts": [],
+        "extraHostsNote": "Hosts added to the proxy's allowlist beyond GitHub, registry.npmjs.org and the CLI's own API, e.g. [\"pypi.org\", \"*.pythonhosted.org\"]. Each one is a place the engine can send data.",
+        "env": {},
+        "envNote": "Extra environment for the engine's process, e.g. {\"CI\": \"1\"}. Names that look like credentials (TOKEN, SECRET, _KEY and the like) are dropped.",
+        "ghTokenFile": "~/.agent-queue/engine-gh-token",
+        "ghTokenFileNote": "A GitHub token for the engine, mode 600. When the file is missing the engine gets `gh auth token`, your own sign-in. Use a token that can push branches and open PRs and nothing more.",
+        "claudeOnlyLabel": "claude-only",
+        "claudeOnlyLabelNote": "A ticket with this Linear label never goes to an engine: put it on work that needs access the sandbox withholds.",
+        "withholdPatterns": [],
+        "withholdPatternsNote": "Extra regular expressions that keep a ticket from the engines when its title or description matches, beside the built-in email, phone and SSN checks.",
+        "brief": null,
+        "briefNote": "Path to your own engine brief template, relative to the repo root. null uses dispatcher/engine-worker-brief.md."
+      }
+    },
+    "externalBuildersNote": "Codex and Grok as queue workers (dispatcher/README.md, \"Codex and Grok as queue workers\"). All settings are under fallback: enabled (off by default), engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns and brief; each has its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker, is ranked with the Claude accounts by weekly usage left, never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It reuses premerge.installCommand for its dependencies and push.gates for its gated push."
   },
 
   "push": {
