@@ -27,6 +27,9 @@ if (/^This is a (?:containment )?test of your (?:sandbox|tools)/m.test(prompt)) 
   // The selftest's probe briefs: try each numbered command with the shell, the way a model told to would.
   for (const m of prompt.matchAll(/^\d+\. (.+)$/gm)) { try { sh('sh', ['-c', m[1]]); } catch {} }
   done('Tried each one.\nRESULT: DONE');
+} else if (/^FAKE: sleep/m.test(prompt)) {
+  execFileSync('sleep', ['120']);
+  done('Woke.\nRESULT: DONE');
 } else if (/^FAKE: question/m.test(prompt)) {
   fs.writeFileSync(process.env.ENGINE_QUESTION_FILE, 'Question: which colour?\nDefault: blue\n');
   done('I asked.\nRESULT: BLOCKED which colour');
@@ -74,11 +77,24 @@ const emit = {
 const finish = () => line({ type: 'end', stopReason: 'end_turn' });
 ${BODY}`;
 
+// Why the sandboxed tests can't run here, or false when they can: sandbox-exec on macOS, a working bwrap on Linux
+// (Ubuntu's AppArmor stops bwrap until a profile grants it user namespaces).
+export function noSandbox() {
+  if (process.platform === 'darwin') return false;
+  if (process.platform !== 'linux') return `no sandbox on ${process.platform}`;
+  try {
+    execFileSync('bwrap', ['--ro-bind', '/', '/', '--unshare-net', 'true'], { stdio: 'ignore' });
+    return false;
+  } catch {
+    return 'bwrap is missing or cannot create a user namespace here';
+  }
+}
+
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-// config: merged over the fixture's config at the top level; fallback: merged over externalBuilders.fallback.
-export function engineWorld(name, { config = {}, fallback = {}, dispatcher = {} } = {}) {
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`)));
+// The engine's side of a world in an existing home: a bare origin, the main checkout cloned from it, fake auth files and
+// fake codex and grok binaries. Returns their paths and the environment ext-worker.sh needs to find them.
+export function addEngineWorld(home) {
   const origin = path.join(home, 'origin.git');
   const main = path.join(home, 'dev/app');
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
@@ -91,14 +107,22 @@ export function engineWorld(name, { config = {}, fallback = {}, dispatcher = {} 
   git(main, 'commit', '-q', '-m', 'first');
   git(main, 'branch', '-M', 'main');
   git(main, 'push', '-q', 'origin', 'main');
-  fs.mkdirSync(path.join(home, '.codex'));
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
   fs.writeFileSync(path.join(home, '.codex/auth.json'), JSON.stringify({ tokens: { account_id: 'fake-account' }, last_refresh: '2026-01-01T00:00:00Z' }));
-  fs.mkdirSync(path.join(home, '.grok'));
+  fs.mkdirSync(path.join(home, '.grok'), { recursive: true });
   fs.writeFileSync(path.join(home, '.grok/auth.json'), JSON.stringify({ fake: { user_id: 'fake-user', expires_at: '2026-01-01T00:00:00Z' } }));
   const bin = path.join(home, 'bin');
-  fs.mkdirSync(bin);
+  fs.mkdirSync(bin, { recursive: true });
   fs.writeFileSync(path.join(bin, 'codex'), FAKE_CODEX, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'grok'), FAKE_GROK, { mode: 0o755 });
+  const env = { CODEX_BIN: path.join(bin, 'codex'), GROK_BIN: path.join(bin, 'grok'), EXT_WORKER_ROOT: path.join(home, '.cache/ew') };
+  return { origin, main, bin, env };
+}
+
+// config: merged over the fixture's config at the top level; fallback: merged over externalBuilders.fallback.
+export function engineWorld(name, { config = {}, fallback = {}, dispatcher = {} } = {}) {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`)));
+  const { origin, main, bin, env: engineEnv } = addEngineWorld(home);
   const stateDir = path.join(home, '.agent-queue');
   fs.mkdirSync(stateDir);
   fs.writeFileSync(path.join(stateDir, 'engine-gh-token'), 'fake-token-for-tests\n', { mode: 0o600 });
@@ -113,8 +137,7 @@ export function engineWorld(name, { config = {}, fallback = {}, dispatcher = {} 
   };
   const configFile = path.join(home, 'agent-queue.config.json');
   fs.writeFileSync(configFile, JSON.stringify(cfg, null, 2));
-  const env = { ...process.env, HOME: home, AGENT_QUEUE_CONFIG: configFile, CODEX_BIN: path.join(bin, 'codex'), GROK_BIN: path.join(bin, 'grok'),
-    EXT_WORKER_ROOT: path.join(home, '.cache/ew'), LINEAR_API_KEY: 'fake-linear-key' };
+  const env = { ...process.env, HOME: home, AGENT_QUEUE_CONFIG: configFile, ...engineEnv, LINEAR_API_KEY: 'fake-linear-key' };
   delete env.GH_TOKEN;
   delete env.GITHUB_TOKEN;
   return { home, origin, main, bin, stateDir, configFile, env, cfg, registry: path.join(stateDir, 'engine-workers'),

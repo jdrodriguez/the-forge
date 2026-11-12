@@ -82,7 +82,7 @@ const COMMAND_RULES = [
 export function pushViolation(line, base = 'main') {
   const m = line.match(/\bgit\s+(?:-[Cc]\s+\S+\s+|--?[\w-]+(?:=\S+)?\s+)*push\b(.*)$/);
   if (!m) return null;
-  const rest = m[1].replace(/\s(?:&&|\|\||;|\|).*$/, '');
+  const rest = m[1].replace(/\s(?:&&|\|\||;|\||#).*$/, '');
   const words = rest.split(/\s+/).map((w) => w.replace(/^['"]+|['"]+$/g, '')).filter(Boolean);
   if (words.some((w) => /^(?:-f|--force|--force-with-lease(?:=.*)?|--force-if-includes|--mirror|--all|--delete|-d|--prune)$/.test(w))) return 'force-pushed, deleted or pushed every branch';
   if (words.includes('--no-verify')) return 'pushed with --no-verify';

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "node --test lib/test/*.test.mjs dispatcher/test/*.test.mjs inbox/test/*.test.mjs learning/test/*.test.mjs queue-board/*.test.mjs",
+    "test:engines": "node --test dispatcher/test/sandboxed/*.test.mjs",
     "test:fleet": "bash fleet/test-fleet.sh && bash fleet/setup/test.sh && bash fleet/hooks/test-protect-main-checkout.sh"
   }
 }
