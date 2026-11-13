@@ -21,6 +21,8 @@ test('off, each host has its own realm; on, one host holds all four', () => {
   assert.deepEqual(realmsByHost(['solo'], null, false), { solo: ['rivendell'] });
   assert.deepEqual(realmsByHost(['solo'], null, true), { solo: ['rivendell', 'shire', 'erebor', 'rohan'] });
   assert.deepEqual(realmsByHost(['solo'], { solo: 'erebor' }, true), { solo: ['erebor', 'rivendell', 'shire', 'rohan'] });
+  // A realm the config gives a host that is not enabled is free (the example config names one).
+  assert.deepEqual(realmsByHost(['main-mac'], { 'main-mac': 'rivendell', 'linux-box': 'erebor' }, true), { 'main-mac': ['rivendell', 'shire', 'erebor', 'rohan'] });
 });
 
 test('on with several hosts, the free realms are dealt round them and a host with no realm gets none', () => {

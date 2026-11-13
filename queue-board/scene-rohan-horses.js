@@ -39,16 +39,19 @@ function rohanHorseStep(h, r, P, st, herd) {
   }
   if (h.mode === 'gone' || h.mode === 'bolt') {
     if (sc.war > 0.3) return;
-    Object.assign(h, { mode: 'back', tx: I.x0 + ((I.x1 - I.x0) * (h.i + 0.5)) / herd.horses.length, ty: I.y0 + h.i * 2 });
+    // Back in through the gate, as after a lead.
+    Object.assign(h, { mode: 'home', out: false });
   }
   // A Man's lead: called to the gate, following him, or tied at the stables; let go (or his round dropped), it goes home.
   const led = workDoing(r, (s) => s.horse && s.h === h.i);
   const want = led?.s.horse;
   if (want) {
     h.leader = led.b;
-    if (want === 'call') { h.mode = 'call'; if (go(I.x1, p.gate.y, 0.5)) h.face = 1; return; }
+    // Called, it comes to the fence by the gate on its own side; led, it goes out through the gate before it follows.
+    if (want === 'call') { h.mode = 'call'; if (go(I.x1, Math.min(I.y1, Math.max(I.y0, p.gate.y)), 0.5)) h.face = 1; return; }
     if (want === 'tie') { h.mode = 'tied'; if (go(P.tie.x, P.tie.y, 0.6)) h.face = 1; return; }
     h.mode = 'led';
+    if (!h.out) { if (go(p.gate.x, p.gate.y, 0.6)) h.out = true; return; }
     const L = h.leader;
     const d = Math.hypot(L.x - h.x, (L.y - h.y) * 2.2);
     if (d > 13) go(h.x + ((L.x - h.x) * (d - 13)) / d, h.y + ((L.y - h.y) * (d - 13)) / d, 0.9);
@@ -57,7 +60,7 @@ function rohanHorseStep(h, r, P, st, herd) {
   }
   if (h.leader || h.mode === 'call') Object.assign(h, { leader: null, mode: h.x < p.x + p.w - 2 && h.y >= p.y + 4 ? 'look' : 'home', n: 20 });
   // Home is through the gate: to just outside it, then in.
-  if (h.mode === 'home' && go(p.gate.x, p.gate.y, 0.5)) Object.assign(h, { mode: 'back', tx: I.x1, ty: p.gate.y });
+  if (h.mode === 'home' && go(p.gate.x, p.gate.y, 0.5)) Object.assign(h, { mode: 'back', out: false, tx: I.x1, ty: Math.min(I.y1, Math.max(I.y0, p.gate.y)) });
   if (h.mode === 'home') return;
   if (h.mode === 'back') {
     if (go(h.tx, h.ty, 0.6)) Object.assign(h, { mode: 'look', n: span(h.rng, 10, 30), tx: null, ty: null });

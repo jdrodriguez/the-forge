@@ -18,10 +18,10 @@ export function realmKeys(hosts, configured) {
   return Object.fromEntries((hosts ?? []).slice(0, REALM_ORDER.length).map((h, i) => [h, REALM_ORDER[i]]));
 }
 
-// The table the page reads, { host: { key, name, folk } }. An entry with an unknown key is left out, so that host is
-// drawn as the fallback.
+// The table the page reads, { host: { key, name, folk } }, for the enabled hosts. An entry with an unknown key is left
+// out, so that host is drawn as the fallback.
 export function realmTable(hosts, configured) {
   return Object.fromEntries(Object.entries(realmKeys(hosts, configured))
-    .filter(([, k]) => REALM_KINDS[k])
+    .filter(([h, k]) => REALM_KINDS[k] && (hosts ?? []).includes(h))
     .map(([h, k]) => [h, { ...REALM_KINDS[k] }]));
 }

@@ -129,10 +129,18 @@ test('the header and the Queue view count the machine\'s own slots, and the othe
 
 test('with spreadRealms false the same machine draws one realm, as before', { skip: NO_CHROME }, async () => {
   for (const v of ['scene', 'map']) {
-    const r = await load(oneMachine(Date.now(), 8, { spread: false }), v);
+    const fix = oneMachine(Date.now(), 8, { spread: false });
+    const r = await load(fix, v);
     shot(`one-plain-${v}-1790x1260`, r.png);
     assert.deepEqual(r.errors, [], v);
     assert.deepEqual(r.value.realms.map((x) => x.title), ['Rivendell'], v);
-    assert.ok(r.value.workers.filter((w) => !w.adhoc).every((w) => w.realm === HOST), v);
+    // Every live worker is drawn, and the regular ones sit at stations in the one realm.
+    const live = fix.tickets.filter((t) => t.live);
+    assert.deepEqual(r.value.workers.map((w) => w.id).sort(), live.map((t) => t.id).sort(), v);
+    for (const t of live.filter((x) => !x.sentry)) {
+      const w = r.value.workers.find((x) => x.id === t.id);
+      assert.equal(w.realm, HOST, `${v}: ${t.id}`);
+      assert.ok(w.station, `${v}: ${t.id} has a station`);
+    }
   }
 });

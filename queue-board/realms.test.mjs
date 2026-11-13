@@ -31,6 +31,7 @@ test('the config can name Rohan, and an unknown key leaves that host as the fall
   assert.equal(t['box-b'].name, 'Erebor');
   assert.equal(t['box-c'], undefined);
   assert.equal(t['box-d'], undefined, 'a map given in full leaves the rest unnamed');
+  assert.deepEqual(Object.keys(realmTable(['box-a'], { 'box-a': 'shire', 'off-box': 'erebor' })), ['box-a'], 'a host that is not enabled has no entry');
 });
 
 test('entries are copies, so a caller cannot change the kinds', () => {

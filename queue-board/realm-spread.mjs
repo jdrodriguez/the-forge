@@ -18,7 +18,8 @@ export function spreadOn(setting, hosts) {
 // realms no host holds, dealt in REALM_ORDER round the hosts that have a realm, in host order. A host with no realm
 // (a fifth machine) gets none either way.
 export function realmsByHost(hosts, configured, spread) {
-  const own = Object.fromEntries(Object.entries(realmKeys(hosts, configured)).filter(([, k]) => REALM_KINDS[k]));
+  // Only enabled hosts hold a realm: one the config names for a host that is not enabled is free to spread into.
+  const own = Object.fromEntries(Object.entries(realmKeys(hosts, configured)).filter(([h, k]) => REALM_KINDS[k] && (hosts ?? []).includes(h)));
   const out = Object.fromEntries((hosts ?? []).map((h) => [h, own[h] ? [own[h]] : []]));
   if (!spread) return out;
   const held = new Set(Object.values(own));
