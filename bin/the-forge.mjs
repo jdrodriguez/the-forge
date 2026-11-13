@@ -162,7 +162,9 @@ async function update(o) {
   const node = process.execPath;
   const self = path.join(dest, 'bin/the-forge.mjs');
   // The config is the lasting copy's, also when this runs from a newer package in npm's cache.
-  process.env.AGENT_QUEUE_CONFIG ??= path.join(dest, 'agent-queue.config.json');
+  const own = path.join(dest, 'agent-queue.config.json');
+  if (process.env.AGENT_QUEUE_CONFIG && path.resolve(process.env.AGENT_QUEUE_CONFIG) !== own) warn(`ignoring AGENT_QUEUE_CONFIG: update reinstalls the jobs with ${tilde(own)}`);
+  process.env.AGENT_QUEUE_CONFIG = own;
   if (anyInstalled()) {
     if (dry) say(`would run: node ${self} install`);
     else if (!runLive(node, [self, 'install']).ok) return 1;

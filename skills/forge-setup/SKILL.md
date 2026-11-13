@@ -20,7 +20,8 @@ format of the answers file.
   or the command's status form). Every sign-in command below is theirs to run.
 - **Never ask for, read, print or store a password, token, key or webhook address.** Not in the answers file, not in a
   command you run, not in this conversation. The Linear key and the Slack files are saved by the person, with the
-  commands in docs/setup.md, which read from the clipboard and print nothing. Never `cat` a file under
+  commands in docs/setup.md: the person pastes the key into their own terminal, where it does not show, and presses
+  Enter. Never `cat` a file under
   `~/.agent-queue`.
 - **Only `the-forge init` writes the config.** You write the answers file; init turns it into
   `agent-queue.config.json`. Never edit the config by hand. To change something, change the answers and run init again.
@@ -125,7 +126,7 @@ wherever its CLI is signed in, so on a computer the answers leave it off, it sta
 ## 6. Linear, Slack and the GitHub side
 
 - The person makes a Linear personal API key (Linear, Settings, Security and access) and saves it with the
-  clipboard command in docs/setup.md, on each computer. Or they set `linear.apiKeyCommand` in the answers for a
+  command in docs/setup.md (they paste the key when it asks, then press Enter), on each computer. Or they set `linear.apiKeyCommand` in the answers for a
   secrets manager. Never see the key.
 - In Linear the team needs the workflow states In Progress and Verifying, a label group Size with S, M and L, and the
   labels agent-ready, agent-building, agent-stuck and needs-human. Walk them through it, or use a Linear connector
