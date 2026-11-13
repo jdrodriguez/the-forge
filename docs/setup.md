@@ -69,7 +69,8 @@ https://x.ai/docs/build/overview, Tailscale https://tailscale.com/docs/install. 
 
 Each Claude account on a computer lives in its own config folder. Your main account, the one you use yourself, is
 `~/.claude` and has the label `a`. Every other account gets a short label (`b`, `c`, `d`) and the folder
-`~/.claude-<label>`. With one account, that account is both your own and the worker, on every computer.
+`~/.claude-<label>`. With one account, that account is both your own and the worker on every computer, so sign it in
+on each one.
 
 - Sign the main account in on each computer by running `claude` once and `/login`. Over SSH, run
   `ssh -t <computer> claude auth login`: it prints a link, you open it in this computer's browser, sign in, and paste
@@ -89,8 +90,8 @@ Each Claude account on a computer lives in its own config folder. Your main acco
 ## Codex and Grok
 
 One Codex or Grok sign-in serves one computer. On each computer that should run them: install the CLI, then sign in
-with `codex login` and `grok login`. The dispatcher runs an engine on every computer where its CLI is signed in, so
-keep it signed out on a computer the answers leave it off; doctor warns when it finds one signed in there. Over SSH, use `codex login --device-auth` and `grok login --device-auth`. The
+with `codex login` and `grok login`. Init writes each computer's choice as `dispatcher.hosts.<name>.engines`, so an
+engine runs only on the computers the answers give it, even where its CLI happens to be signed in. Over SSH, use `codex login --device-auth` and `grok login --device-auth`. The
 dispatcher gives them only small tickets (sizes S and M by default), never Sentry tickets and never tickets labelled
 `claude-only`. `dispatcher/README.md` says what their sandbox does and does not protect.
 

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { configPath, loadConfig, ROOT } from '../lib/config.mjs';
 import { buildConfig, checkAnswers } from '../lib/setup/answers.mjs';
-import { copyDirFor, copyPackage, copyTo, linkSkills, refresh, reportLinks } from '../lib/setup/copy.mjs';
+import { copyDirFor, copyPackage, copyTo, foreignFolder, linkSkills, refresh, reportLinks } from '../lib/setup/copy.mjs';
 import { unknownKeys } from '../lib/setup/coverage.mjs';
 import { doctor, printDoctor, toolChecks } from '../lib/setup/doctor.mjs';
 import { anyInstalled, install, jobsHere, open, startStop, status, uninstall } from '../lib/setup/jobs.mjs';
@@ -45,19 +45,18 @@ into ~/.local/bin, and starts Claude Code on the forge-setup skill, which interv
 
 Writes agent-queue.config.json from the answers file the forge-setup skill writes (docs/setup.md, "The answers
 file"). It asks no questions. An existing config is kept as <file>.bak-<time> first, and the answers are kept next
-to the config as forge-answers.json, where doctor and the next init find them.
+to the config as forge-answers.json, where the next init (adding a computer, say) starts from.
 
   --out <file>  write here (default: AGENT_QUEUE_CONFIG, else agent-queue.config.json in the lasting copy)
   --dry-run     print the config instead of writing it`,
-  doctor: `Usage: the-forge doctor [--json] [--answers <file>]
+  doctor: `Usage: the-forge doctor [--json]
 
 Checks node, git, jq, curl, perl, gh and its sign-in, Claude Code, each Claude account this computer uses, Codex and
-Grok where this computer runs them, Tailscale and ssh to each other computer (from the board's computer), the Linear
+Grok where this computer runs them (hosts.<name>.engines), Tailscale and ssh to each other computer (from the board's computer), the Linear
 key, the config against the example, and the skill links. It only reads, apart from the engine check's own
 10-minute cache. Exits 1 when something is missing.
 
-  --json            print the checks as JSON
-  --answers <file>  the answers file (default forge-answers.json next to the config)`,
+  --json  print the checks as JSON`,
   install: `Usage: the-forge install [--dry-run]
 
 Installs this computer's jobs from the lasting copy: the dispatcher on every queue computer, and on the board's
@@ -97,6 +96,8 @@ function setup(o) {
   const dry = Boolean(o['dry-run']);
   const dest = o.here ? ROOT : copyDirFor(ROOT, o.dir);
   if (dest !== ROOT) {
+    const why = foreignFolder(dest);
+    if (why) return warn(why), 1;
     const n = copyPackage(ROOT, dest, { dry });
     say(`${dry ? 'would copy' : 'copied'} ${n} files to ${tilde(dest)}, the lasting copy`);
   } else if (isTemporary(dest)) {
@@ -187,7 +188,7 @@ async function main() {
     case 'setup': return setup(o);
     case 'init': return init(o);
     case 'doctor': {
-      const res = doctor(o.answers ? { answersFile: o.answers } : {});
+      const res = doctor();
       if (o.json) say(JSON.stringify(res, null, 2));
       else printDoctor(res);
       return res.ok ? 0 : 1;

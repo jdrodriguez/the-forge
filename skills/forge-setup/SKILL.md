@@ -40,7 +40,8 @@ Ask these, in this order, one at a time:
 5. With more than one Claude account: which one is your main account, the one you use yourself? It lives in
    `~/.claude` and gets label `a`. The others get labels `b`, `c`, `d`, each in its own folder `~/.claude-<label>`.
 6. With more than one Claude account: which accounts should build tickets (the workers)? The main one can be a
-   worker too. With one account, say that it is both main and worker, and skip this question.
+   worker too. With one account, say that it is both main and worker on every computer (so it is
+   signed in on each), and skip this question.
 
 Then what the config needs, still one at a time:
 
@@ -120,8 +121,8 @@ For one computer, skip to step 4. Otherwise, for each other computer:
 ## 5. Codex and Grok
 
 On each computer the answers give them: install (docs/setup.md), then the person signs in: `codex login` and
-`grok login` here, or with `--device-auth` over `ssh -t <dest>`. Doctor checks them. The dispatcher runs an engine
-wherever its CLI is signed in, so on a computer the answers leave it off, it stays signed out (doctor warns).
+`grok login` here, or with `--device-auth` over `ssh -t <dest>`. Doctor checks them. Init writes each computer's
+engines from the answers (`dispatcher.hosts.<name>.engines`), so an engine runs only where the answers put it.
 
 ## 6. Linear, Slack and the GitHub side
 
