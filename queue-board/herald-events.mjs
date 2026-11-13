@@ -10,11 +10,18 @@
 // part keeps the previous read's, and a part seen for the first time only sets the baseline, so a board restart, a
 // machine coming back or a failed read never sounds a burst of old news. The first read of all announces nothing.
 // Each realm has its own merge cue, chosen by the folk that live there. snap.config.realms maps a host to its realm
-// ({ name, folk }); a machine with no realm is a machine of Rohan and sounds Rivendell's cue under its own name.
-const MERGE_CUE = { elf: 'merge-rivendell', hobbit: 'merge-shire', dwarf: 'merge-erebor' };
+// ({ key, name, folk }). A machine with no realm (a fifth machine) is drawn as Men, so it sounds Rohan's horn under its
+// own name. A ticket that carries its own realm (tickets[].realm, a realm key: with spreadRealms one machine's workers
+// sit in every realm) sounds that realm's cue, so a merge is heard in the voice of the realm its worker sat in.
+const MERGE_CUE = { elf: 'merge-rivendell', hobbit: 'merge-shire', dwarf: 'merge-erebor', man: 'merge-rohan' };
+const REALM_VOICE = { rivendell: ['Rivendell', 'elf'], shire: ['the Shire', 'hobbit'], erebor: ['Erebor', 'dwarf'], rohan: ['Rohan', 'man'] };
 const realmOf = (snap, host, name) => {
   const r = snap.config?.realms?.[host];
-  return r ? [r.name.replace(/^The /, 'the '), MERGE_CUE[r.folk] ?? 'merge-rivendell'] : [name, 'merge-rivendell'];
+  return r ? [r.name.replace(/^The /, 'the '), MERGE_CUE[r.folk] ?? MERGE_CUE.man] : [name, MERGE_CUE.man];
+};
+const mergeRealm = (snap, t, name) => {
+  const v = REALM_VOICE[t.realm];
+  return v ? [v[0], MERGE_CUE[v[1]]] : realmOf(snap, t.host, name);
 };
 // A merge older than this is old news even if the herald never saw it before.
 const MERGE_FRESH_MS = 60 * 60_000;
@@ -87,13 +94,12 @@ export function facts(snap, now) {
     // A machine the board never reached this run has no tickets in the snapshot, which is not the same as none.
     const known = Boolean(m.fetchedAt);
     const mine = (snap.tickets ?? []).filter((t) => t.host === m.host);
-    const realm = realmOf(snap, m.host, m.name);
     parts[`needs:tickets:${m.host}`] = known ? ticketNeeds(mine, snap.asks) : null;
     parts[`stuck:${m.host}`] = known ? Object.fromEntries(mine.filter((t) => t.status === 'stuck').map((t) => [`stuck:${t.id}:${t.stuckAt}`,
       { head: `${who(t)} is stuck · ${t.label || t.id}`, body: clip(t.reason || 'The dispatcher gave up on it.', 200), who: whose(t) }])) : null;
     parts[`ci:${m.host}`] = known && ghOk ? Object.fromEntries(mine.filter((t) => t.live && t.pr?.ci?.fail?.length).map((t) => [`ci:${t.id}:${t.pr.number}`,
       { head: `An orc attacks ${who(t)} · ${t.label || t.id}`, body: clip(`CI failing on PR #${t.pr.number}: ${t.pr.ci.fail.join(', ')}`, 200), who: whose(t) }])) : null;
-    parts[`merge:${m.host}`] = known ? Object.fromEntries(mine.filter((t) => t.status === 'merged' && now - ms(t.mergedAt) < MERGE_FRESH_MS).map((t) => [`merged:${t.id}`,
+    parts[`merge:${m.host}`] = known ? Object.fromEntries(mine.filter((t) => t.status === 'merged' && now - ms(t.mergedAt) < MERGE_FRESH_MS).map((t) => [t, mergeRealm(snap, t, m.name)]).map(([t, realm]) => [`merged:${t.id}`,
       { head: `${who(t)} merged ${t.label || t.id} · ${realm[0]}`, body: clip(t.title || `PR #${t.prNumber}`, 200), cue: realm[1], who: whose(t) }])) : null;
   }
   parts['needs:asks'] = snap.asks ? askNeeds(snap) : null;

@@ -68,7 +68,7 @@ function m2SthLeast(plan, keep, want, room, score) {
 
 function m2PlanSouth(plan) {
   const { W, H, places: P, zones: Z } = plan;
-  const men = plan.realms.some((r) => r.kind === 'man');
+  const men = Boolean(plan.edoras);
   const own = new Set(['isengard', 'helmsDeep']);
   // The realms with the room their walkers use round them, and each station with its worker: no place stands there.
   const realms = [

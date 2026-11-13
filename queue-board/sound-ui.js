@@ -10,11 +10,11 @@ const SOUND_ROWS = [
   ['reminder', 'Reminder', 'While anything still waits on you', ['reminder']],
   ['trouble', 'Trouble', 'A ticket stuck, a machine out of reach or paused', ['trouble']],
   ['ci', 'CI failing', 'An orc attacks: a live PR fails its checks', ['ci']],
-  ['merge', 'Merged', 'Each realm calls in its own voice', ['merge-rivendell', 'merge-shire', 'merge-erebor']],
+  ['merge', 'Merged', 'Each realm calls in its own voice', ['merge-rivendell', 'merge-shire', 'merge-erebor', 'merge-rohan']],
   ['mainRed', 'Main red', 'The war horn, again every 15 minutes while red', ['main-red']],
   ['mainGreen', 'Main green again', 'A short victory call', ['main-green']],
 ];
-const SOUND_TEST = { 'merge-rivendell': 'Rivendell', 'merge-shire': 'Shire', 'merge-erebor': 'Erebor' };
+const SOUND_TEST = { 'merge-rivendell': 'Rivendell', 'merge-shire': 'Shire', 'merge-erebor': 'Erebor', 'merge-rohan': 'Rohan' };
 
 const soundStyle = document.createElement('style');
 soundStyle.textContent = `

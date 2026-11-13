@@ -10,7 +10,7 @@ const M2B_MAN = {
   robe: { end: 92, hem: 15.5, front: 11, back: 10, short: true },
   R: { body: M2B.cloth, sleeve: M2B.cloth, legs: 'ACIJKL', boot: M2B.leather },
   mats: { ACIJKL: ['#4a4038', '#2f2924'], MNPQRS: ['#3f7a3a', '#2a5428'] },
-  depthF: 10, depthB: 9, mouth: 31, tool: 'quill', rides: true,
+  depthF: 10, depthB: 9, mouth: 31, tool: 'hammer', rides: true,
   robeTex: m2bFolds([], 0.3),
   behind(G, K) { if (K.facing !== 'up' && !K.ride) m2bCloak(G, K, 100, 15, 18, 'MNPQRS'); },
   head(G, K) {

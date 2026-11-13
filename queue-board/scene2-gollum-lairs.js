@@ -46,7 +46,7 @@ function m2eGolPlan(plan) {
       const mz = r.y + r.h - 16;
       at = { x: (wheel + pool) / 2 + 6.5, y: mz + 19 };
       below = 32;
-    } else if (r.kind === 'man' && r === plan.realms.find((q) => q.kind === 'man') && r.y + r.h + 6 <= plan.H - 4) {
+    } else if (r.kind === 'man' && r === plan.edoras && r.y + r.h + 6 <= plan.H - 4) {
       // Edoras: its hall, barrows, stables and paddock fill the land round its stations, so he lives at the foot of the
       // White Mountains behind them (the range's peaks keep out of his zone, scene2-land-peaks.js), under the middle of
       // the stations, where the Paths of the Dead go into the same mountains.

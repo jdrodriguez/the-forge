@@ -56,11 +56,11 @@ function m2Fit() {
   const availH = Math.max(150, room ?? window.innerHeight - m2.fitTop - inset);
   if (room !== null) {
     m2.scale = 2;
-    return m2Plan(Math.max(480, Math.floor(availW / 2)), Math.max(300, Math.floor(availH / 2)));
+    return m2Tall(m2Plan(Math.max(480, Math.floor(availW / 2)), Math.max(300, Math.floor(availH / 2))));
   }
   for (let s = 6; s >= 2; s -= 1) {
     const plan = m2Plan(Math.floor(availW / s), Math.floor(availH / s));
-    if (plan.fits || s === 2) { m2.scale = s; return plan.fits || plan.W >= plan.minW ? plan : m2Plan(plan.minW, Math.floor(availH / s)); }
+    if (plan.fits || s === 2) { m2.scale = s; return m2Tall(plan.fits || plan.W >= plan.minW ? plan : m2Plan(plan.minW, Math.floor(availH / s))); }
   }
   return null;
 }

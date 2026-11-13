@@ -10,7 +10,7 @@
 // session panel. It animates at about 10 frames a second only while this view is open and the tab visible; with reduced
 // motion it draws one still frame per snapshot. Uses page.html's snap, view, standing, mergedTickets, esc and $, and
 // session.js's openPanel. Alert sounds are the herald's (herald.mjs), on the Mac itself; this view plays none.
-const scRealm = (host) => { const r = snap?.config?.realms?.[host]; return r ? [r.folk, r.name] : null; }; // a machine's [folk, realm]; none: a machine of Rohan
+const scRealm = (host) => { const r = realmsFor(snap?.config, snap?.machines)[host]; return r ? [r[1], r[0], r[2]] : null; }; // [folk, realm name, key]; a machine with no realm is Men with no key (page.html's realmsFor)
 const SC_COL = 30;
 // The rows of stations, far enough apart that a front-row worker's bubble and name clear the back row's figures.
 const SC_ROWS = [126, 160];
@@ -68,7 +68,7 @@ function scLayout() {
     const n = Math.max(m.maxWorkers || 0, live.filter((t) => !t.sentry).length);
     const k = Math.max(m.sentryWorkers || 0, live.filter((t) => t.sentry).length);
     const cols = Math.max(1, Math.ceil(n / 2));
-    const pad = kind === 'elf' ? 24 : kind === 'dwarf' ? 28 : 12;
+    const pad = { elf: 24, dwarf: 28, man: 34 }[kind] ?? 12;
     // One post for all its Sentry riders: a second (one parked on a person's review) waits beside it, not widening the realm.
     return { m, kind, title, n, k, cols, pad, w: Math.max(92, pad + cols * SC_COL + 10 + (k ? 30 : 0)) };
   });
