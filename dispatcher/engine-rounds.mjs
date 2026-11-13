@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { askRerun, roundWork } from './engine-round-note.mjs';
-import { ENGINES, available, containedFile, fb, label, markBuilt, maxRounds, piiKinds, readRow, spawn, writeBrief } from './engine-workers.mjs';
+import { ENGINES, available, containedFile, engineAllowedHere, label, markBuilt, maxRounds, piiKinds, readRow, spawn, writeBrief } from './engine-workers.mjs';
 
 const other = (e) => ENGINES.find((x) => x !== e);
 const NOTE_LIMIT = 40_000;
@@ -47,7 +47,7 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
     return 'stuck';
   }
   const text = noteFor(c, id, t, pr, { round, lead: note.lead, parts: note.parts });
-  const engine = [t.engine, other(t.engine)].find((e) => e && !exclude.includes(e) && (fb(c).engines ?? ENGINES).includes(e) && available(c, st, e));
+  const engine = [t.engine, other(t.engine)].find((e) => e && !exclude.includes(e) && engineAllowedHere(c, e) && available(c, st, e));
   if (!engine) return requeue(c, st, m, id, t, `no engine can run its next round on ${c.HOST} (${exclude.length ? `${exclude.join(', ')} hit its limit` : 'ext-worker.sh available passed none'})`);
   const { issue } = await c.gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id });
   if (piiKinds(c, `${issue.title ?? ''}\n${issue.description ?? ''}`).length) {
