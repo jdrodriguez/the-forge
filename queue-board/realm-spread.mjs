@@ -20,7 +20,7 @@ export function spreadOn(setting, hosts) {
 export function realmsByHost(hosts, configured, spread) {
   // Only enabled hosts hold a realm: one the config names for a host that is not enabled is free to spread into.
   const own = heldRealms(hosts, configured, { spread });
-  const out = Object.fromEntries((hosts ?? []).map((h) => [h, own[h] ? [own[h]] : []]));
+  const out = Object.fromEntries((hosts ?? []).map((h) => [h, Object.hasOwn(own, h) ? [own[h]] : []]));
   if (!spread) return out;
   const held = new Set(Object.values(own));
   const takers = (hosts ?? []).filter((h) => out[h].length);

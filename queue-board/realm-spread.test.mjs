@@ -112,3 +112,13 @@ test('a ticket still on the board keeps its realm however old the memory, and on
   assert.equal(next['solo/ABC-GONE'], undefined);
   assert.equal(next[`solo/${t.id}`].seen, T0);
 });
+
+test('a host named like an inherited property with an unknown realm gets no realm, spread off and on', () => {
+  const hosts = ['solo', 'constructor'];
+  const realms = { solo: 'shire', constructor: 'constructor' };
+  assert.deepEqual(realmsByHost(hosts, realms, false), { solo: ['shire'], constructor: [] });
+  assert.deepEqual(realmsByHost(hosts, realms, true), { solo: ['shire', 'rivendell', 'erebor', 'rohan'], constructor: [] });
+  const ts = [live('constructor'), live('solo'), live('toString')];
+  assignRealms(ts, realmsByHost(hosts, realms, true), {}, T0);
+  assert.deepEqual(ts.map((t) => t.realm), [null, 'shire', null]);
+});

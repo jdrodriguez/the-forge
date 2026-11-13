@@ -13,14 +13,15 @@ function drawSnap() {
   const s = snap;
   if (!s?.config?.spread || !s.config.spreadRealms) return s;
   if (RV.src === s) return RV.out;
-  const by = s.config.spreadRealms;
-  const many = (host) => (by[host]?.length ?? 0) > 1;
-  const vhost = (host, key) => (!key || !many(host) || by[host][0].key === key ? host : `${host}~${key}`);
+  // A host's realms by own key only, so a host named like an inherited property ("constructor") has none.
+  const listOf = (host) => (Object.hasOwn(s.config.spreadRealms, host) && Array.isArray(s.config.spreadRealms[host]) ? s.config.spreadRealms[host] : []);
+  const many = (host) => listOf(host).length > 1;
+  const vhost = (host, key) => (!key || !many(host) || listOf(host)[0].key === key ? host : `${host}~${key}`);
   const realms = { ...(s.config.realms ?? {}) };
   const machines = [];
   for (const m of s.machines) {
     if (!many(m.host)) { machines.push(m); continue; }
-    const list = by[m.host];
+    const list = listOf(m.host);
     const share = (n, i) => Math.floor((n || 0) / list.length) + (i < (n || 0) % list.length ? 1 : 0);
     list.forEach((r, i) => {
       const host = vhost(m.host, r.key);

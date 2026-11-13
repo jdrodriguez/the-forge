@@ -722,7 +722,7 @@ function realmsFor(cfg, machines) {
   for (const [host, r] of Object.entries(cfg?.realms ?? {})) if (r && r.name) out[host] = [r.name, r.folk || 'man', r.key ?? null];
   let rohan = Object.values(out).some((r) => r[2] === 'rohan');
   for (const m of machines ?? []) {
-    if (out[m.host]) continue;
+    if (Object.hasOwn(out, m.host)) continue;
     out[m.host] = [rohan ? 'Gondor' : 'Rohan', 'man', null];
     rohan = true;
   }
@@ -735,8 +735,10 @@ function fillRealms(cfg, machines) {
 // The machine the board runs on (snap.config.boardHost, else the host that served the snapshot), by its display name.
 const boardHost = () => snap?.config?.boardHost ?? snap?.servedBy ?? null;
 const boardName = () => snap?.machines?.find((m) => m.host === boardHost())?.name ?? boardHost() ?? "the board's machine";
-const realmName = (host) => REALMS[host]?.[0] ?? 'Rohan';
-const realmKind = (host) => REALMS[host]?.[1] ?? 'man';
+// Read by own key only, so a host named like an inherited property ("constructor") reads as unnamed.
+const realmOfHost = (host) => (Object.hasOwn(REALMS, host) ? REALMS[host] : null);
+const realmName = (host) => realmOfHost(host)?.[0] ?? 'Rohan';
+const realmKind = (host) => realmOfHost(host)?.[1] ?? 'man';
 // A worker outside the queue is one of the wise wanderers the dispatcher names it after (its nicknames.adhoc): the
 // wizards Gandalf and Radagast, and Treebeard the Ent, Tom Bombadil and Beorn, who are no wizards (2026-11-07),
 // each drawn as himself once his figure exists (sprites-wanderers.js), else as a wizard.

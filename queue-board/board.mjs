@@ -52,12 +52,14 @@ const tilde = (p) => (p === HOME || p.startsWith(`${HOME}/`) ? `~${p.slice(HOME.
 // config loader expands a leading ~/ to this machine's home, so a path under it goes back to ~/ for the remote shell.
 const REMOTE_ROOT = tilde(qb.remoteRoot ?? ROOT);
 
+// A string a config table gives a host, by own key only (a host named "constructor" gets none).
+const ownStr = (table, host) => (table && Object.hasOwn(table, host) && typeof table[host] === 'string' ? table[host] : null);
 // How to reach each queue machine (dispatcher.enabledHosts): its name on the page from queueBoard.names and its ssh
 // destination from queueBoard.ssh, both the host name itself when unset. The one this runs on is read directly.
 const MACHINES = (dc.enabledHosts ?? []).map((host) => ({
   host,
-  name: qb.names?.[host] ?? host,
-  ssh: qb.ssh?.[host] ?? host,
+  name: ownStr(qb.names, host) ?? host,
+  ssh: ownStr(qb.ssh, host) ?? host,
   root: host === HERE ? tilde(ROOT) : REMOTE_ROOT,
 }));
 
