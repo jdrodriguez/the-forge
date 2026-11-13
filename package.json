@@ -4,6 +4,24 @@
   "private": true,
   "description": "The Forge: a spec desk and an agent queue. Linear tickets are built into pull requests by Claude Code workers across several accounts and machines, and a Middle-earth board shows it all.",
   "type": "module",
+  "bin": {
+    "the-forge": "bin/the-forge.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "dispatcher/",
+    "fleet/",
+    "inbox/",
+    "learning/",
+    "queue-board/",
+    "scripts/",
+    "skills/",
+    "specdesk/",
+    "docs/",
+    "agent-queue.config.example.json",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22"
   },
