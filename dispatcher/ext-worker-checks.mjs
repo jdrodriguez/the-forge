@@ -25,9 +25,10 @@ export function envSecrets(text) {
   for (const line of text.split('\n')) {
     const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
     if (!m || !SECRET_KEY.test(m[1])) continue;
-    // A quoted value ends at its closing quote, whatever follows; an unquoted one at a " #" comment.
+    // A quoted value ends at its closing quote, whatever follows; an unquoted one at a " #" comment, and one that starts
+    // with # is empty.
     const quoted = m[2].match(/^(['"])(.*?)\1/);
-    const value = quoted ? quoted[2] : m[2].replace(/\s+#.*$/, '');
+    const value = quoted ? quoted[2] : m[2].replace(/(?:^|\s+)#.*$/, '');
     if (value.length >= 12 && !/^(?:https?|postgres(?:ql)?|redis):\/\/(?:[^@/]*@)?(?:localhost|127\.0\.0\.1)/.test(value)) out.push({ key: m[1], value });
   }
   return out;

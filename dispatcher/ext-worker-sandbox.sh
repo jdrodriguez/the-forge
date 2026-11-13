@@ -89,7 +89,7 @@ setup_paths() { # <engine> <worktree> <run dir>
   ENGINE=$1; WT=$(abspath "$2"); mkdir -p "$3"; RUN=$(abspath "$3")
   RUN_TMP="$RUN/tmp"; RUN_HOME="$RUN/home"
   mkdir -p "$RUN_TMP" "$RUN_HOME" "$RUN/cli-home" "$RUN/net" "$EW/pkg-cache" "$EW/npm-cache" "$EW/corepack"
-  HOOKS_DIR=$(sgit -C "$WT" config core.hooksPath 2>/dev/null || true)
+  HOOKS_DIR=$(hooks_dir "$WT")
 }
 
 # The clone's paths that run code on the next git command, inside the sandbox or out: its hooks, its config, its
