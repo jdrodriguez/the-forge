@@ -136,7 +136,8 @@ function init(o) {
   const copyDir = answers.copyDir ?? (isTemporary(ROOT) ? DEFAULT_COPY : tilde(ROOT));
   const cfg = buildConfig(answers, { copyDir, answersFile: path.basename(o.answers) });
   const unknown = unknownKeys(cfg);
-  if (unknown.length) warn(`note: the example config has no place for ${unknown.join(', ')}`);
+  // A key the example lacks is one no component of this copy reads, and doctor would reject the config.
+  if (unknown.length) return warn(`This copy of The Forge has no config key for ${unknown.join(', ')}. Update it (the-forge update), or leave that answer out.`), 1;
   const text = `${JSON.stringify(cfg, null, 2)}\n`;
   if (o['dry-run']) return process.stdout.write(text), 0;
   const out = path.resolve(o.out ?? configPath());
@@ -198,6 +199,10 @@ async function main() {
     case 'copy-to': {
       if (!o._[0]) return warn(HELP['copy-to']), 2;
       if (isTemporary(ROOT)) return warn('Run copy-to from the lasting copy (the-forge setup makes it).'), 1;
+      // copy-to sends the lasting copy's own config; another computer reads its config from there.
+      if (path.resolve(configPath()) !== path.join(ROOT, 'agent-queue.config.json')) {
+        return warn(`AGENT_QUEUE_CONFIG points at ${configPath()}, but copy-to sends ${tilde(path.join(ROOT, 'agent-queue.config.json'))}. Write the config there (init --out) or unset AGENT_QUEUE_CONFIG.`), 1;
+      }
       return copyTo(ROOT, loadConfig({ fresh: true }), o._[0], { install: Boolean(o.install), dry }) ? 0 : 1;
     }
   }

@@ -77,6 +77,9 @@ Each Claude account on a computer lives in its own config folder. Your main acco
 - Add every other account with `fleet/setup/add-account.sh here <label> <email>` on this computer, or
   `fleet/setup/add-account.sh <computer> <label> <email>` for another one. It makes the folder, links it to the
   shared settings in `~/.claude`, signs it in (you do the sign-in), and marks your workspace trusted.
+- Workers start in the folder above your repository (`workspaceCwd`, default `~/dev`), and each account must have
+  trusted it once. `add-account.sh` does that for the accounts it adds. For your main account, run `claude` once in
+  that folder and accept the trust prompt. Doctor checks it for every worker account.
 - Accept the bypass-permissions notice once on each computer: `claude --dangerously-skip-permissions`, accept, then
   `/exit`. Workers run unattended in that mode, so a worker can run any command your user can. Run the queue under a
   user and on a computer where that is acceptable, or set `dispatcher.permissionMode` to a stricter mode.
@@ -86,7 +89,8 @@ Each Claude account on a computer lives in its own config folder. Your main acco
 ## Codex and Grok
 
 One Codex or Grok sign-in serves one computer. On each computer that should run them: install the CLI, then sign in
-with `codex login` and `grok login`. Over SSH, use `codex login --device-auth` and `grok login --device-auth`. The
+with `codex login` and `grok login`. The dispatcher runs an engine on every computer where its CLI is signed in, so
+keep it signed out on a computer the answers leave it off; doctor warns when it finds one signed in there. Over SSH, use `codex login --device-auth` and `grok login --device-auth`. The
 dispatcher gives them only small tickets (sizes S and M by default), never Sentry tickets and never tickets labelled
 `claude-only`. `dispatcher/README.md` says what their sandbox does and does not protect.
 
@@ -121,8 +125,10 @@ keychain, so add `--insecure-storage`. Clone your repository on every computer a
 2. Save it on each computer without it showing on screen. Run this in your own terminal and paste the key when asked:
 
    ```bash
-   mkdir -p ~/.agent-queue && chmod 700 ~/.agent-queue && (umask 077; read -rs -p 'Linear key: ' k && printf '%s\n' "$k" > ~/.agent-queue/linear-api-key); echo
+   mkdir -p ~/.agent-queue && chmod 700 ~/.agent-queue && printf 'Paste the key, then Enter: ' && stty -echo && read -r k; stty echo; echo; (umask 077; printf '%s\n' "$k" > ~/.agent-queue/linear-api-key); unset k
    ```
+
+   It works in zsh and bash. `stty -echo` keeps the key off the screen while you paste it.
 
    Or copy the file to another computer over SSH: `scp -p ~/.agent-queue/linear-api-key <user>@<name>:.agent-queue/`
    (after the `mkdir` above there). With a secrets manager, set `linear.apiKeyCommand` in the answers instead.
@@ -134,7 +140,7 @@ keychain, so add `--insecure-storage`. Clone your repository on every computer a
 Make a Slack app for your workspace (https://api.slack.com/apps). Turn on Incoming Webhooks and add one for your
 channel. Under OAuth and Permissions, add the bot scope `chat:write`, install the app, and invite it to the channel.
 Save the webhook address as `~/.agent-queue/slack-webhook` and the bot token as `~/.agent-queue/slack-bot-token`
-with the same `read -rs` command as the Linear key. The channel ID is at the bottom of the channel's details.
+with the same command as the Linear key (change the file name at its end). The channel ID is at the bottom of the channel's details.
 
 ## The answers file
 
@@ -172,6 +178,11 @@ Two computers, two Claude accounts, Codex on the first:
 | `repository` | `github` (owner/name), `githubUser` (the login the queue merges as), `path`, `check` (the command the pre-merge check runs, required), and optionally `install`, `gates` (commands run before every push), `errorPattern`, `ciWorkflow` (default CI), `reviewCheck` (default none), `baseBranch` (default main), `copyFiles`, `buildOutputRoots`, `migrations`. |
 | `linear` | `workspace`, `team` (the ticket prefix), and optionally `inboxProject` and `apiKeyCommand`. |
 | `slack`, `weather`, `realms`, `reviewer`, `spreadRealms` | Optional. `realms` maps a host to `rivendell`, `shire`, `erebor` or `rohan`. `copyDir` (optional) is where the copy lives on every computer (default `~/the-forge`). |
+
+`errorPattern` decides which failing pre-merge checks are real failures (a killed or timed-out run is always held a
+tick instead). Its default is the TypeScript compiler's `error TS\d+` when `check` runs tsc or a type-check, and any
+output at all otherwise. With two or more computers, init also binds the board to its Tailscale address, so the other
+computers and your phone on the tailnet can open it.
 
 `docs/configuration.md` explains every key of the config init writes.
 

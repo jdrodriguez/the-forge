@@ -104,6 +104,9 @@ For one computer, skip to step 4. Otherwise, for each other computer:
 
 ## 4. Claude accounts
 
+- Workers start in `workspaceCwd` (the folder above the repository), and each worker account must trust it once.
+  For account `a`, they run `cd <workspaceCwd> && claude`, accept the trust prompt, then `/exit`; add-account.sh
+  does it for the others. Doctor's `trust` lines check it.
 - The main account (`a`) on this computer is the one running this session, so it is signed in. Accept the
   bypass-permissions notice once per computer: `claude --dangerously-skip-permissions`, accept, then `/exit`.
   Workers run unattended in that mode; say so plainly, and that `dispatcher.permissionMode` can make it stricter.
@@ -116,7 +119,8 @@ For one computer, skip to step 4. Otherwise, for each other computer:
 ## 5. Codex and Grok
 
 On each computer the answers give them: install (docs/setup.md), then the person signs in: `codex login` and
-`grok login` here, or with `--device-auth` over `ssh -t <dest>`. Doctor checks them.
+`grok login` here, or with `--device-auth` over `ssh -t <dest>`. Doctor checks them. The dispatcher runs an engine
+wherever its CLI is signed in, so on a computer the answers leave it off, it stays signed out (doctor warns).
 
 ## 6. Linear, Slack and the GitHub side
 
