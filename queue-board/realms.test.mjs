@@ -1,7 +1,7 @@
 // realms.test.mjs: node --test queue-board/realms.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { REALM_KINDS, REALM_ORDER, realmTable } from './realms.mjs';
+import { REALM_KINDS, REALM_ORDER, realmTable, heldRealms, isRealm } from './realms.mjs';
 
 const HOSTS = ['box-a', 'box-b', 'box-c', 'box-d', 'box-e'];
 
@@ -38,4 +38,19 @@ test('entries are copies, so a caller cannot change the kinds', () => {
   const t = realmTable(['solo']);
   t.solo.name = 'Changed';
   assert.equal(REALM_KINDS.rivendell.name, 'Rivendell');
+});
+
+test('a realm name an object inherits is no realm, and the host is drawn as the fallback', () => {
+  for (const k of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+    assert.equal(isRealm(k), false, k);
+    assert.deepEqual(realmTable(['solo', 'other'], { solo: k, other: 'shire' }), { other: { ...REALM_KINDS.shire } }, k);
+  }
+});
+
+test('with spread on, a map that gives no enabled host a realm leaves them the realms in order', () => {
+  assert.deepEqual(heldRealms(['laptop'], { desktop: 'rivendell' }, { spread: true }), { laptop: 'rivendell' });
+  assert.deepEqual(heldRealms(['laptop'], { desktop: 'rivendell' }), {}, 'off, the map is taken as given');
+  assert.deepEqual(heldRealms(['laptop'], { laptop: 'constructor' }, { spread: true }), { laptop: 'rivendell' });
+  assert.equal(realmTable(['laptop'], { desktop: 'rivendell' }, { spread: true }).laptop.key, 'rivendell');
+  assert.deepEqual(heldRealms(['a', 'b'], { b: 'erebor' }, { spread: true }), { b: 'erebor' }, 'a map that names one keeps it');
 });

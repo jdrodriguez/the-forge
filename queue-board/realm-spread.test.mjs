@@ -87,3 +87,28 @@ test('a remembered realm the machine no longer holds is given again, and old mem
   assert.equal(next['solo/ABC-OLD'], undefined);
   assert.equal(next[`solo/${t.id}`].realm, 'rivendell');
 });
+
+test('with spread on, one enabled host the map does not name still fills all four realms', () => {
+  assert.deepEqual(realmsByHost(['laptop'], { desktop: 'rivendell' }, true), { laptop: ['rivendell', 'shire', 'erebor', 'rohan'] });
+  const ts = Array.from({ length: 4 }, () => live('laptop'));
+  assignRealms(ts, realmsByHost(['laptop'], { desktop: 'rivendell' }, true), {}, T0);
+  assert.deepEqual(ts.map((t) => t.realm).sort(), ['erebor', 'rivendell', 'rohan', 'shire']);
+});
+
+test('an inherited name in the map gives no realm, and a ticket on an unknown host gets none', () => {
+  assert.deepEqual(realmsByHost(['solo'], { solo: 'constructor' }, false), { solo: [] });
+  const ts = [live('solo'), live('constructor')];
+  assignRealms(ts, realmsByHost(['solo'], { solo: 'constructor' }, false), {}, T0);
+  assert.deepEqual(ts.map((t) => t.realm), [null, null]);
+});
+
+test('a ticket still on the board keeps its realm however old the memory, and one gone is forgotten', () => {
+  const byHost = realmsByHost(['solo'], null, true);
+  const t = live('solo');
+  const old = T0 - KEEP_MS - 24 * 3600_000;
+  const mem = { [`solo/${t.id}`]: { realm: 'rohan', seen: old }, 'solo/ABC-GONE': { realm: 'shire', seen: old } };
+  const next = assignRealms([t], byHost, mem, T0);
+  assert.equal(t.realm, 'rohan', 'kept after a board stopped for nine days');
+  assert.equal(next['solo/ABC-GONE'], undefined);
+  assert.equal(next[`solo/${t.id}`].seen, T0);
+});

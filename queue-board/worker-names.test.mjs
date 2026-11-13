@@ -55,3 +55,9 @@ test('a name the dispatcher gave wins, and a full pool numbers its names', () =>
   assert.equal(ts[0].nickname, 'Legolas');
   assert.deepEqual(ts.slice(1).map((t) => t.nickname).sort(), ['Frodo', 'Frodo 2', 'Merry', 'Sam']);
 });
+
+test('a realm or host named like an inherited property finds no pool and takes other', () => {
+  const ts = [live('constructor', { realm: 'toString' })];
+  giveNames(ts, POOLS, fresh(), { spread: true });
+  assert.equal(ts[0].nickname, 'Beregond');
+});

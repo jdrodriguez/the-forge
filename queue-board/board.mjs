@@ -63,7 +63,9 @@ const MACHINES = (dc.enabledHosts ?? []).map((host) => ({
 
 // The Middle-earth realm each machine is drawn as (realms.mjs): queueBoard.realms, else the enabled hosts in order take
 // Rivendell, the Shire, Erebor and Rohan. A host with no realm (a fifth machine) is drawn as Men under its own name.
-const REALMS = realmTable(dc.enabledHosts, qb.realms);
+// Spread realms (realm-spread.mjs) also decide the table when one computer's map names no realm for it.
+const SPREAD = spreadOn(qb.spreadRealms ?? 'auto', dc.enabledHosts);
+const REALMS = realmTable(dc.enabledHosts, qb.realms, { spread: SPREAD });
 
 // The owner's place (queueBoard.weather) for the page's sky clock, which needs sunrise and sunset there; null when unset.
 const PLACE = Number.isFinite(Number(qb.weather?.latitude)) && Number.isFinite(Number(qb.weather?.longitude)) && qb.weather?.latitude != null && qb.weather?.longitude != null
@@ -489,7 +491,6 @@ function heartbeats() {
 // <stateDir>: queue-board-names.json and queue-board-realms.json. With spread realms on (queueBoard.spreadRealms; "auto"
 // is on with exactly one enabled host) a machine also holds the realms no machine holds, a worker takes the one with the
 // fewest live workers when its ticket starts and keeps it, and its name comes from that realm's pool.
-const SPREAD = spreadOn(qb.spreadRealms ?? 'auto', dc.enabledHosts);
 const REALMS_BY_HOST = realmsByHost(dc.enabledHosts, qb.realms, SPREAD);
 const SPREAD_REALMS = SPREAD ? Object.fromEntries(Object.entries(REALMS_BY_HOST).map(([h, keys]) => [h, keys.map((k) => ({ ...REALM_KINDS[k] }))])) : null;
 const NAMES_FILE = path.join(STATE_DIR, 'queue-board-names.json');

@@ -19,14 +19,15 @@ export function chromePath() {
 }
 
 // The board on port, with its config and state in a fresh folder. Resolves { base, stop }.
-export async function startBoard(port) {
+// queueBoard adds keys to the throwaway config's queueBoard (realms, spreadRealms), so a test can start a board as configured.
+export async function startBoard(port, { queueBoard = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-page-'));
   const config = {
     paths: { stateDir: path.join(dir, 'state'), sharedDir: path.join(dir, 'shared') },
     repoPath: path.join(dir, 'repo'), workspaceCwd: path.join(dir, 'repo'),
     linear: { apiKeyFile: path.join(dir, 'no-key') },
     dispatcher: { enabledHosts: ['forge-test.invalid'] },
-    queueBoard: { port, bind: ['127.0.0.1'], extUsage: false, musicDir: path.join(dir, 'music'), repoRoots: [path.join(dir, 'repo')] },
+    queueBoard: { port, bind: ['127.0.0.1'], extUsage: false, musicDir: path.join(dir, 'music'), repoRoots: [path.join(dir, 'repo')], ...queueBoard },
   };
   for (const d of ['state', 'shared', 'repo', 'music']) fs.mkdirSync(path.join(dir, d), { recursive: true });
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config));

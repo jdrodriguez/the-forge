@@ -11,17 +11,20 @@
 // its host's pool. nowIso is the time names are stamped with.
 export function giveNames(tickets, pools, state, { spread = false, nowIso = new Date().toISOString() } = {}) {
   if (!pools) return;
+  // A pool by its own key only, so a realm or host named like an inherited property ("constructor") finds none.
+  const own = (k) => (typeof k === 'string' && Object.hasOwn(pools, k) && Array.isArray(pools[k]) ? pools[k] : null);
   const key = (t) => `${t.host}/${t.id}`;
   const shown = new Set(tickets.map(key));
   for (const k of Object.keys(state.given)) if (!shown.has(k)) delete state.given[k];
   const live = tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
   const taken = new Set(live.map((t) => t.nickname ?? state.given[key(t)]).filter(Boolean));
   for (const t of live) {
-    if (t.nickname || state.given[key(t)]) continue;
+    if (t.nickname || Object.hasOwn(state.given, key(t))) continue;
     // A Codex or Grok worker takes its realm's names like any worker.
-    const pool = (t.adhoc && pools.adhoc) || (t.sentry && pools.sentry) || (spread && pools[t.realm]) || pools[t.host] || pools[t.realm] || pools.other;
+    const pool = (t.adhoc && own('adhoc')) || (t.sentry && own('sentry')) || (spread && own(t.realm)) || own(t.host) || own(t.realm) || own('other');
     if (!pool?.length) continue;
-    const free = pool.filter((n) => !taken.has(n)).sort((a, b) => (state.lastGiven[a] ?? '').localeCompare(state.lastGiven[b] ?? ''));
+    const when = (n) => (Object.hasOwn(state.lastGiven, n) ? String(state.lastGiven[n]) : '');
+    const free = pool.filter((n) => !taken.has(n)).sort((a, b) => when(a).localeCompare(when(b)));
     let name = free[0];
     for (let i = 2; !name; i++) name = pool.map((n) => `${n} ${i}`).find((n) => !taken.has(n));
     state.given[key(t)] = name;

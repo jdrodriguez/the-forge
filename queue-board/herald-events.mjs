@@ -15,12 +15,14 @@
 // sit in every realm) sounds that realm's cue, so a merge is heard in the voice of the realm its worker sat in.
 const MERGE_CUE = { elf: 'merge-rivendell', hobbit: 'merge-shire', dwarf: 'merge-erebor', man: 'merge-rohan' };
 const REALM_VOICE = { rivendell: ['Rivendell', 'elf'], shire: ['the Shire', 'hobbit'], erebor: ['Erebor', 'dwarf'], rohan: ['Rohan', 'man'] };
+// Lookups by own key only, so a snapshot value named like an inherited property ("constructor") is no realm or folk.
+const ownOf = (table, k) => (typeof k === 'string' && table && Object.hasOwn(table, k) ? table[k] : null);
 const realmOf = (snap, host, name) => {
-  const r = snap.config?.realms?.[host];
-  return r ? [r.name.replace(/^The /, 'the '), MERGE_CUE[r.folk] ?? MERGE_CUE.man] : [name, MERGE_CUE.man];
+  const r = ownOf(snap.config?.realms, host);
+  return r?.name ? [String(r.name).replace(/^The /, 'the '), ownOf(MERGE_CUE, r.folk) ?? MERGE_CUE.man] : [name, MERGE_CUE.man];
 };
 const mergeRealm = (snap, t, name) => {
-  const v = REALM_VOICE[t.realm];
+  const v = ownOf(REALM_VOICE, t.realm);
   return v ? [v[0], MERGE_CUE[v[1]]] : realmOf(snap, t.host, name);
 };
 // A merge older than this is old news even if the herald never saw it before.
