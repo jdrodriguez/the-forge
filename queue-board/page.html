@@ -757,7 +757,9 @@ function captainKind(name) {
 }
 // A Codex or Grok worker is drawn as its realm's own folk like any worker; only its mark (ai-marks.js) says what runs it
 // (2026-11-09: it is just a subagent executing work, so it needs no look of its own).
-const figureOf = (t) => (t.adhoc ? wandererKind(t.nickname) : t.sentry ? captainKind(t.nickname) : realmKind(t.host));
+// With spread realms (realm-view.js) a worker wears the folk of the realm it sits in, which need not be its machine's.
+const spreadFolk = (t) => (snap?.config?.spread && t.realm ? Object.values(snap.config.spreadRealms ?? {}).flat().find((r) => r.key === t.realm)?.folk ?? null : null);
+const figureOf = (t) => (t.adhoc ? wandererKind(t.nickname) : t.sentry ? captainKind(t.nickname) : spreadFolk(t) ?? realmKind(t.host));
 // A realm's sigil in its colour, wherever a machine is named: a leaf for Rivendell, a round door for the Shire, a gated
 // mountain for Erebor and a pennant for Rohan (drawn by CSS masks, .mdot[data-r]). mc overrides the colour, as red for
 // a machine that is down.
@@ -952,9 +954,9 @@ function sentrySlots(live) {
   return { total, used, text: total === 1 ? `Sentry slot ${used ? 'busy' : sentryHost() ? 'idle' : 'offline'}` : `${used} of ${total} Sentry slots busy` };
 }
 const sentryChip = (t) => (t.sentry ? `<span class="chip sentry" title="In ${esc(t.machine)}'s Sentry slot, apart from its regular slots">${ICON.sentry}Sentry</span>` : '');
-const mergedTickets = () => {
+const mergedTickets = (s = snap) => {
   const seen = new Set();
-  return snap.tickets.filter((t) => t.status === 'merged').sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).filter((t) => !seen.has(t.id) && seen.add(t.id));
+  return s.tickets.filter((t) => t.status === 'merged').sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).filter((t) => !seen.has(t.id) && seen.add(t.id));
 };
 
 // Worktree states (worktree-state.mjs) in the order the Worktrees view lists them: a label, the words after a count on
@@ -1372,6 +1374,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scenery-elves.js"></script>
 <script src="/scenery-heal.js"></script>
 <script src="/scenery-shire.js"></script>
+<script src="/realm-view.js"></script>
 <script src="/scene-tags.js"></script>
 <script src="/scene.js"></script>
 <script src="/scene-path.js"></script>

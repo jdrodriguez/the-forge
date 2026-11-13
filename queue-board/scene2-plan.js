@@ -55,6 +55,7 @@ const m2RoamOf = (name) => M2_ROAM[Object.keys(M2_ROAM).find((k) => m2Plain(name
 // The plan for a world W by H units: places, regions, rivers, ranges, roads and stations. A region whose stations need
 // more room than its place gives grows south into the land below it.
 function m2Plan(W, H) {
+  const snap = drawSnap(); // the drawing's snapshot: with spread realms each realm is a machine of its own (realm-view.js)
   const at = (u, v) => [u * W, v * H];
   const plan = { W, H, wide: true, fits: W >= 480 && H >= 300, minW: 320, realms: [], stations: [], roads: [], places: {}, river: null };
   for (const [k, [u, v]] of Object.entries(M2_AT)) plan.places[k] = { x: u * W, y: v * H };
@@ -217,6 +218,7 @@ function m2PlanStations(plan, r) {
 // depend on, so the map is laid out again when they change. Each post is a lantern post that stands quiet until a rider
 // comes.
 function m2PlanPosts(plan) {
+  const snap = drawSnap();
   const lands = [...new Set(Object.values(M2_WATCH))];
   const need = Object.fromEntries(lands.map((l) => [l, 0]));
   const riders = snap.tickets.filter((t) => t.live && !t.adhoc && t.sentry);

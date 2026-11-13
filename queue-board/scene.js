@@ -10,7 +10,7 @@
 // session panel. It animates at about 10 frames a second only while this view is open and the tab visible; with reduced
 // motion it draws one still frame per snapshot. Uses page.html's snap, view, standing, mergedTickets, esc and $, and
 // session.js's openPanel. Alert sounds are the herald's (herald.mjs), on the Mac itself; this view plays none.
-const scRealm = (host) => { const r = realmsFor(snap?.config, snap?.machines)[host]; return r ? [r[1], r[0], r[2]] : null; }; // [folk, realm name, key]; a machine with no realm is Men with no key (page.html's realmsFor)
+const scRealm = (host) => { const r = realmsFor(drawSnap()?.config, drawSnap()?.machines)[host]; return r ? [r[1], r[0], r[2]] : null; }; // [folk, realm name, key]; a machine with no realm is Men with no key (page.html's realmsFor)
 const SC_COL = 30;
 // The rows of stations, far enough apart that a front-row worker's bubble and name clear the back row's figures.
 const SC_ROWS = [126, 160];
@@ -62,9 +62,9 @@ const scStage4 = (t, mood) => (mood === 'green' ? 4 : t.pr?.ci.fail.length ? 3 :
 // world grows to fill the view (scFit): every realm widens by the same share, its stations centred in the new room and
 // its Sentry posts kept on the road at its right edge, each with a clear stretch beside it for its Ranger at home.
 function scLayout() {
-  const plans = snap.machines.map((m) => {
+  const plans = drawSnap().machines.map((m) => {
     const [kind, title] = scRealm(m.host) ?? ['man', 'Rohan'];
-    const live = snap.tickets.filter((t) => t.live && !t.adhoc && t.host === m.host);
+    const live = drawSnap().tickets.filter((t) => t.live && !t.adhoc && t.host === m.host);
     const n = Math.max(m.maxWorkers || 0, live.filter((t) => !t.sentry).length);
     const k = Math.max(m.sentryWorkers || 0, live.filter((t) => t.sentry).length);
     const cols = Math.max(1, Math.ceil(n / 2));
@@ -113,7 +113,7 @@ function scFit(natural) {
 function sceneSync() {
   if (!snap || !sc.running) return;
   scLayout();
-  const live = snap.tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
+  const live = drawSnap().tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
   const keep = new Set();
   const taken = new Set();
   for (const t of live) {
@@ -136,7 +136,7 @@ function sceneSync() {
   }
   for (const k of [...sc.actors.keys()]) if (!keep.has(k)) sc.actors.delete(k);
   sc.orcs?.sync();
-  sc.recent = mergedTickets().filter((t) => Date.now() - Date.parse(t.mergedAt) < 15 * 60000);
+  sc.recent = mergedTickets(drawSnap()).filter((t) => Date.now() - Date.parse(t.mergedAt) < 15 * 60000);
   scSize();
   scTagsBuild();
   if (scReduced.matches && sc.running) scFrame();

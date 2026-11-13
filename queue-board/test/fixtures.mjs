@@ -3,6 +3,8 @@
 // now, so the same fixture reads the same whenever it runs: workers busy, one fighting a failing check, one waiting on
 // the owner, one green, one asleep, a Sentry rider, a wanderer, and a merge a few minutes old for the fireworks.
 import { REALM_KINDS } from '../realms.mjs';
+import { realmsByHost, assignRealms } from '../realm-spread.mjs';
+import { giveNames } from '../worker-names.mjs';
 
 const POOLS = {
   rivendell: ['Elrond', 'Galadriel', 'Legolas', 'Arwen', 'Haldir', 'Glorfindel', 'Celeborn', 'Lindir'],
@@ -107,13 +109,55 @@ export const fourMachines = (now = Date.now()) => machines(now, 4);
 // Three machines as a board before the fourth realm sends them: realm entries without a key, tickets without a realm.
 export const threeMachines = (now = Date.now()) => machines(now, 3, { legacy: true });
 
-// One machine with n live workers, all of them its own (the one-computer case before the spread realms are assigned).
-export function oneMachine(now = Date.now(), n = 8) {
+// One machine as the board sends it: its realm table, whether its realms spread, and each worker's realm and name given
+// the way board.mjs gives them (realm-spread.mjs, worker-names.mjs), so the views draw what the board would send. It has
+// one forgotten worktree, so Gollum keeps a heap in its first realm.
+const NICKS = { ...POOLS, sentry: ['Aragorn'], adhoc: ['Gandalf'] };
+function solo(now, tickets, { spread = true, mem = { seats: {}, names: { given: {}, lastGiven: {} } }, max = 8 } = {}) {
+  const host = 'forge-solo';
+  const m = machine(now, host, 'solo', max, 1);
+  const byHost = realmsByHost([host], null, spread);
+  const shown = tickets.map((t) => ({ ...t, nickname: t.sentry ? 'Aragorn' : null }));
+  mem.seats = assignRealms(shown, byHost, mem.seats, now);
+  giveNames(shown, NICKS, mem.names, { spread, nowIso: iso(now, 0) });
+  const snap = base(now, [m], { [host]: { ...REALM_KINDS.rivendell } }, shown);
+  snap.config.spread = spread;
+  snap.config.spreadRealms = spread ? { [host]: byHost[host].map((k) => ({ ...REALM_KINDS[k] })) } : null;
+  snap.worktrees.machines[0].rows = [{ path: '~/dev/the-forge-wt/abc-1', branch: 'abc-1', workers: [], procs: [], lastCommitAt: iso(now, -6 * 24 * 60), pr: null, state: 'local' }];
+  return snap;
+}
+const soloMachine = () => machine(0, 'forge-solo', 'solo', 8, 1);
+
+// One machine with n live workers, a merge 5 minutes old and a Sentry rider; spread says whether its realms spread.
+export function oneMachine(now = Date.now(), n = 8, { spread = true } = {}) {
   serial = 100;
-  const m = machine(now, 'forge-solo', 'solo', n, 1);
+  const m = soloMachine();
   const tickets = [];
-  for (let i = 0; i < n; i += 1) tickets.push(ticket(now, m, { realm: 'rivendell', nickname: null, mood: MOODS[i % MOODS.length] }));
-  tickets.push(ticket(now, m, { realm: 'rivendell', nickname: null, status: 'merged', mergedAt: iso(now, -5) }));
-  tickets.push(ticket(now, m, { nickname: 'Aragorn', sentry: true, realm: 'rivendell' }));
-  return base(now, [m], { [m.host]: { ...REALM_KINDS.rivendell } }, tickets);
+  for (let i = 0; i < n; i += 1) tickets.push(ticket(now, m, { mood: MOODS[i % MOODS.length] }));
+  tickets.push(ticket(now, m, { status: 'merged', mergedAt: iso(now, -5) }));
+  tickets.push(ticket(now, m, { sentry: true }));
+  return solo(now, tickets, { spread, max: n });
+}
+
+// rounds snapshots of one spread machine, a minute apart: each round the oldest worker but the first merges and a new
+// one starts, as the board would see them. The first worker (watched) works through all of them.
+export function oneMachineRounds(now = Date.now(), rounds = 10, n = 8) {
+  serial = 100;
+  const m = soloMachine();
+  const mem = { seats: {}, names: { given: {}, lastGiven: {} } };
+  const start = now - rounds * 60_000;
+  let live = Array.from({ length: n }, (_, i) => ticket(start, m, { mood: MOODS[i % MOODS.length] }));
+  const watched = live[0].id;
+  const merged = [];
+  const out = [];
+  for (let k = 0; k < rounds; k += 1) {
+    const at = start + k * 60_000;
+    if (k) {
+      const done = live.splice(1, 1)[0];
+      merged.push({ ...done, live: false, status: 'merged', workerState: null, mergedAt: iso(at, 0) });
+      live.push({ ...ticket(at, m, {}), dispatchedAt: iso(at, 0) });
+    }
+    out.push(solo(at, [...live, ...merged], { mem }));
+  }
+  return { snaps: out, watched };
 }
