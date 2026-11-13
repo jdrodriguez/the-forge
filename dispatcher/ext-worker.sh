@@ -106,6 +106,7 @@ engine_hosts() { case "$1" in codex) echo "chatgpt.com *.chatgpt.com api.openai.
 . "$HERE/ext-worker-sandbox.sh"
 . "$HERE/ext-worker-guard.sh"
 . "$HERE/ext-worker-supervise.sh"
+. "$HERE/ext-worker-clone.sh"
 
 # --- available ------------------------------------------------------------------------------------------------
 
@@ -149,21 +150,6 @@ cmd_available() {
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
-# An engine works in its own clone, which borrows the main checkout's objects read-only through objects/info/alternates
-# and writes only its own .git. A linked worktree would share the main .git's refs and objects, so an engine could move
-# another worker's branch or replace an object another checkout reads. Remove a clone with rm -rf.
-is_engine_clone() {
-  [ -d "$1/.git" ] && [ ! -L "$1/.git" ] && [ ! -e "$1/.git/commondir" ] && [ ! -e "$1/.git/gitdir" ] && grep -qxF "$MAIN/.git/objects" "$1/.git/objects/info/alternates" 2>/dev/null
-}
-clone_for() { # <path>: on the base branch, fetched fresh from origin
-  local url hooks; url=$(git -C "$MAIN" remote get-url origin) || return 1
-  hooks=$(git -C "$MAIN" config core.hooksPath 2>/dev/null || true)
-  git clone -q --shared --no-checkout --single-branch --branch "$EW_BASE" "$MAIN" "$1" || return 1
-  git -C "$1" remote set-url origin "$url" || return 1
-  [ -z "$hooks" ] || git -C "$1" config core.hooksPath "$hooks" || return 1
-  git -C "$1" fetch -q origin "$EW_BASE" && git -C "$1" checkout -q -B "$EW_BASE" "origin/$EW_BASE"
-}
-
 cmd_start() {
   local engine=${1:-} id=${2:-} branch=${3:-} brief=${4:-}
   [ -n "$engine" ] && [ -n "$id" ] && [ -n "$branch" ] && [ -n "$brief" ] || usage
@@ -172,7 +158,7 @@ cmd_start() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --continue) cont=1; shift ;;
-      --timeout) timeout=${2:-}; shift 2 ;;
+      --timeout) [ $# -ge 2 ] || die "--timeout needs a number of seconds"; timeout=$2; shift 2 ;;
       *) die "unknown argument: $1" ;;
     esac
   done
@@ -193,35 +179,9 @@ cmd_start() {
   fi
   local why; why=$(cmd_available "$engine") || { echo "ext-worker: $engine is unavailable: $why" >&2; exit 3; }
 
-  local wt="$WT_ROOT/${branch##*/}" remote=0
-  EXIT=4
+  local wt="$WT_ROOT/${branch##*/}"
   mkdir -p "$WT_ROOT"
-  if [ -e "$wt" ]; then
-    is_engine_clone "$wt" || EXIT=2 die "$wt exists and is not an engine clone"
-    local cur; cur=$(git -C "$wt" symbolic-ref -q --short HEAD || echo detached)
-    [ "$cur" = "$branch" ] || EXIT=2 die "$wt is on $cur, not $branch"
-    git -C "$wt" fetch -q origin "$EW_BASE" || die "git fetch origin $EW_BASE failed"
-  else
-    clone_for "$wt" || die "could not clone $MAIN into $wt"
-  fi
-  if git -C "$wt" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-    remote=1
-    git -C "$wt" fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" || die "git fetch origin $branch failed"
-  fi
-  [ $cont = 1 ] || [ $remote = 0 ] || EXIT=2 die "origin/$branch exists; pass --continue to build on it"
-  if [ "$(git -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null)" != "$branch" ]; then
-    local base="origin/$EW_BASE"; [ $remote = 0 ] || base="origin/$branch"
-    git -C "$wt" checkout -q -B "$branch" "$base" || die "could not check out $branch from $base"
-    [ $remote = 0 ] || git -C "$wt" branch -q --set-upstream-to="origin/$branch" "$branch"
-  elif [ $cont = 0 ]; then
-    if [ -n "$(git -C "$wt" status --porcelain)" ] || [ -n "$(git -C "$wt" rev-list "origin/$EW_BASE..HEAD" 2>/dev/null)" ]; then
-      EXIT=2 die "$wt holds work beyond origin/$EW_BASE; pass --continue to keep it"
-    fi
-    git -C "$wt" reset -q --hard "origin/$EW_BASE" || die "could not reset $wt to origin/$EW_BASE"
-  elif [ $remote = 1 ] && [ -z "$(git -C "$wt" status --porcelain)" ] && git -C "$wt" merge-base --is-ancestor HEAD "origin/$branch"; then
-    git -C "$wt" merge -q --ff-only "origin/$branch" || die "could not fast-forward $wt to origin/$branch"
-  fi
-  EXIT=2
+  prepare_clone "$wt" "$branch" "$cont"
 
   local sid name logdir run spid
   sid=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')

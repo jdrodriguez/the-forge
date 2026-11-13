@@ -29,6 +29,9 @@ test('start refuses a bad ticket id, the base branch, an unknown engine and a se
     assert.equal(r.status, 2, r.out);
     assert.match(r.out, rx);
   }
+  const r = runExt(w, ['start', 'codex', 'ABC-1', 'agent/abc-1', ok, '--timeout'], { timeout: 15_000 });
+  assert.equal(r.status, 2, `a missing --timeout value is refused, never looped on: ${r.out}`);
+  assert.match(r.out, /--timeout needs a number of seconds/);
   assert.equal(fs.existsSync(w.registry), false, 'no registry row was written');
   assert.equal(fs.existsSync(w.worktree('agent/abc-1')), false, 'no clone was made');
 });
@@ -95,6 +98,25 @@ test('a question file that is a link is never read out: the round ends with a co
   assert.match(row.report, /^containment: .*its question file was a link/);
   assert.equal(row.question, null);
   assert.equal(fs.existsSync(path.join(row.logDir, 'question.md')), false);
+});
+
+test('a clone whose hooks changed between rounds gets no git command and no install: the round ends contained', { skip, timeout: 120_000 }, async () => {
+  const w = engineWorld('ext-tamper');
+  runExt(w, ['start', 'codex', 'ABC-10', 'agent/abc-10', brief(w, 'Build ABC-10.\n')]);
+  assert.equal((await waitRow(w, 'ABC-10')).status, 'done');
+  // What an escape on Linux could leave behind: a hook in the clone, which the next git command outside would run.
+  const wt = w.worktree('agent/abc-10');
+  const marker = path.join(w.home, 'hook-ran');
+  fs.writeFileSync(path.join(wt, '.git/hooks/post-checkout'), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(wt, '.git/hooks/post-merge'), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  const r = runExt(w, ['start', 'codex', 'ABC-10', 'agent/abc-10', brief(w, 'Build ABC-10.\n'), '--continue']);
+  assert.equal(r.status, 0, r.out);
+  const row = await waitRow(w, 'ABC-10');
+  assert.equal(row.status, 'failed');
+  assert.match(row.report, /^containment: .*changed since the last round; no git command ran on it/);
+  assert.equal(fs.existsSync(path.join(row.logDir, 'install.log')), false, 'the install never ran');
+  assert.equal(fs.existsSync(path.join(wt, 'engine-round-2.txt')), false, 'the engine never ran');
+  assert.equal(fs.existsSync(marker), false, 'no hook ran');
 });
 
 test('a process the engine leaves running in its process group ends with the round', { skip, timeout: 120_000 }, async () => {

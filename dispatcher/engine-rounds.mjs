@@ -36,6 +36,12 @@ function applyRound(c, id, t, out, { round, engine, summary, text }) {
 // a round due past it makes the ticket stuck (a `redispatch` by hand then gives it to a Claude worker).
 async function startRound(c, st, m, id, t, { note, summary, keepRound = false, exclude = [], retry = false, pr = null }) {
   const round = keepRound ? (t.round ?? 1) : (t.round ?? 1) + 1;
+  // A paused queue starts no worker, a round included, and changes no labels: the ticket waits as a green PR does.
+  if (c.isPaused()) {
+    t.note = `its next round is due (${summary}), held while the queue is paused`;
+    c.log(`${id}: a round is due (${summary}), held while the queue is paused`);
+    return 'held';
+  }
   if (!keepRound && (t.round ?? 1) >= maxRounds(c)) {
     await c.markStuck(st, m, id, t, `${maxRounds(c)} engine rounds ran and it still needs another (${summary}); \`dispatcher.mjs redispatch ${id}\` hands it to a Claude worker`);
     return 'stuck';

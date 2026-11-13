@@ -42,15 +42,21 @@ test('the audit flags every escape: credentials, secrets managers, merges, workf
     'gh -R o/r pr merge 7': /merged a PR through gh/,
     'gh api graphql -f query=mutation{mergePullRequest(input:{})}': /GraphQL API/,
     'docker run -v /:/host alpine': /Docker daemon/,
+    'gh api -X POST repos/o/r/actions/workflows/ci.yml/dispatches -f ref=main': /dispatched through the GitHub API/,
+    'curl -X PUT https://api.github.com/repos/o/r/pulls/7/merge': /merged or moved a branch/,
     'curl --unix-socket /var/run/docker.sock http://x/containers/json': /Docker daemon/,
   };
-  for (const [c, rx] of Object.entries(escapes)) assert.match(flags(c).join(' | '), rx, c);
+  for (const [c, rx] of Object.entries(escapes)) {
+    const got = flags(c);
+    assert.equal(got.length, 1, `${c}: exactly one violation, got ${JSON.stringify(got)}`);
+    assert.match(got[0], rx, c);
+  }
 });
 
 test('the audit leaves normal work alone: the worktree, its temp folder, pushes of its own branch, gh reads', () => {
   for (const c of ['git status', 'npm test', `cat ${WT}/src/x.ts`, `ls ${HOME}/dev/app/.git/objects`, `cat ${HOME}/.cache/ew/runs/x/tmp/note.md`,
     'git push origin agent/eng-1', 'gated-push origin agent/eng-1', 'gh pr view --json state', 'gh run rerun 1 --failed', 'git log --oneline',
-    `ls ${HOME}/dev`, 'rg mergePullRequest src/', 'grep -rn osascript scripts/']) {
+    `ls ${HOME}/dev`, 'rg mergePullRequest src/', 'grep -rn osascript scripts/', 'gh api repos/o/r/actions/workflows/ci.yml/runs', 'gh api repos/o/r/actions/workflows', 'gh api repos/o/r/pulls/7/merge']) {
     assert.deepEqual(flags(c), [], c);
   }
   assert.equal(pushViolation('git push origin agent/eng-1 # not main'), null, 'a comment after the refspec is not a target');
@@ -103,6 +109,11 @@ test('a brief with a secret-shaped value, or a .env value, is refused; one witho
   assert.deepEqual(secrets.map((s) => s.key), ['API_KEY']);
   assert.deepEqual(scanPrompt('the key is abcdefghijklmnop', secrets), ['the value of API_KEY from a .env file']);
   assert.deepEqual(scanPrompt('Build ENG-1: show the count.', secrets), []);
+  // A comment after the value is not part of it, quoted or not.
+  const commented = envSecrets('SERVICE_TOKEN=abcdefghijklmnop # production\nOTHER_SECRET="qrstuvwxyz123456" # staging\n');
+  assert.deepEqual(commented.map((x) => x.value), ['abcdefghijklmnop', 'qrstuvwxyz123456']);
+  assert.deepEqual(scanPrompt('use abcdefghijklmnop here', commented), ['the value of SERVICE_TOKEN from a .env file']);
+  assert.deepEqual(scanPrompt('use qrstuvwxyz123456 here', commented), ['the value of OTHER_SECRET from a .env file']);
   assert.deepEqual(readResult('work\n**RESULT: DONE**\n'), { done: true, reason: null });
   assert.deepEqual(readResult('RESULT: BLOCKED which colour?'), { done: false, reason: 'which colour?' });
   assert.deepEqual(readResult('I stopped.'), { done: false, reason: 'it ended without a RESULT line' });

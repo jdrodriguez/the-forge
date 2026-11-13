@@ -1567,7 +1567,7 @@ async function dispatch(st, m) {
     const notForEngine = !engines.on() ? 'the engines are off'
       : await engines.call(`checking ${issue.identifier} for an engine`, 'the engine module could not be read', (e, c) => e.skipReason(c, issue));
     if (!notForEngine) engineRows ??= await engines.call('reading the engine accounts', [], (e, c) => e.accounts(c, st));
-    const acct = pickAccount(accounts, notForEngine ? [] : engineRows);
+    let acct = pickAccount(accounts, notForEngine ? [] : engineRows);
     if (!acct) {
       // A ticket only Claude may take waits, and the next one may still go to an engine with room.
       if (engines.on() && notForEngine && (engineRows === null || pickAccount([], engineRows))) {
@@ -1585,18 +1585,28 @@ async function dispatch(st, m) {
       log(`${id}: another machine claimed it first`);
       continue;
     }
-    if (acct.engine) {
-      // An engine ticket takes one slot in the same pool as a Claude one, and is never bundled.
+    // An engine ticket takes one slot in the same pool as a Claude one, and is never bundled. An engine that fails to
+    // start is not offered again this tick, so one broken launcher can't churn the queue, and the ticket is offered at
+    // once to the next account with room: a start that fails for a reason tied to the ticket (a Claude worktree where
+    // the engine's clone would go, say) would otherwise lose it to the same engine every tick.
+    let started = false;
+    while (acct?.engine) {
       const out = await engines.call(`starting ${acct.engine} on ${id}`, 'failed', (e, c) => e.startEngine(c, st, m, issue, acct));
       if (out === 'paused') return;
-      // An engine that failed to start is not offered again this tick, so one broken launcher can't churn the queue.
-      if (out === 'failed') {
-        engineRows = engineRows.filter((x) => x !== acct);
-        continue;
+      if (out !== 'failed') {
+        slots -= 1;
+        room -= 1;
+        acct.working += 1;
+        started = true;
+        break;
       }
-      slots -= 1;
-      room -= 1;
-      acct.working += 1;
+      engineRows = engineRows.filter((x) => x !== acct);
+      acct = pickAccount(accounts, notForEngine ? [] : engineRows);
+      if (acct) log(`${id}: its engine failed to start, so it goes to ${acct.label} instead`);
+    }
+    if (started) continue;
+    if (!acct) {
+      log(`${id}: its engine failed to start and no other account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom, trying next tick`);
       continue;
     }
     const mates = [];

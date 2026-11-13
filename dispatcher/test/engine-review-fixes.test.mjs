@@ -1,11 +1,12 @@
-// Cases a pre-push review found: a requeue must not lose that an engine built the branch, or the PR it opened; a
-// round on a ticket waiting for the orchestrator must find a free slot first; and the green path must read a round an
-// interrupted tick started before it hands the PR on.
+// Cases the pre-push reviews found: a requeue must not lose that an engine built the branch, or the PR it opened; a
+// round on a ticket waiting for the orchestrator must find a free slot first; the green path must read a round an
+// interrupted tick started before it hands the PR on; a paused queue starts no round; and a ticket whose engine fails
+// to start goes to the next account in the same tick.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { CLAUDE_T, ENGINE_T, HEAD, OLD, ROOM, engineBox, mergeRequest, merges, starts, tick, ticket } from './engine-sandbox.mjs';
+import { CLAUDE_T, ENGINE_T, HEAD, OLD, ROOM, claude, claudeBriefs, engineBox, issue, mergeRequest, merges, plans, starts, tick, ticket } from './engine-sandbox.mjs';
 
 const DIRTY = { mergeStateStatus: 'DIRTY' };
 const marker = (box, id = 'ENG-9') => {
@@ -60,4 +61,26 @@ test('a green PR whose next round an interrupted tick started is held for that r
   assert.equal(ticket(box).workerId, 'e-new');
   assert.equal(ticket(box).roundStarting, undefined);
   assert.equal(mergeRequest(box), null, 'not sent to the orchestrator while the adopted round runs');
+});
+
+test('a paused queue starts no round: the ticket waits with a note', () => {
+  const box = engineBox({ tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: DIRTY });
+  fs.writeFileSync(path.join(box.stateDir, 'PAUSED'), 'paused by hand\n');
+  const out = tick(box);
+  assert.match(out, /ENG-9: a round is due \(resolve its conflict with main\), held while the queue is paused/);
+  assert.equal(starts(box).length, 0);
+  assert.match(ticket(box).note, /held while the queue is paused/);
+  assert.equal(ticket(box).round, 1);
+});
+
+test('when the engine that won a ticket fails to start, the ticket goes to the next account with room in the same tick', () => {
+  const box = engineBox({ usage: claude(50), extUsage: plans({ codex: 20 }), ready: [issue(11)] });
+  box.put('start-fails', '');
+  const out = tick(box);
+  assert.match(out, /ENG-11: claim or engine start failed, reconciling/);
+  assert.match(out, /ENG-11: its engine failed to start, so it goes to b instead/);
+  assert.match(out, /ENG-11: dispatched to b\/w0/);
+  assert.equal(claudeBriefs(box).length, 1);
+  assert.equal(ticket(box, 'ENG-11').account, 'b');
+  assert.equal(ticket(box, 'ENG-11').driver, undefined);
 });

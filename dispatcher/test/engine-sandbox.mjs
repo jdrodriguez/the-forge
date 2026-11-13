@@ -95,7 +95,8 @@ else if (a[0] === 'api' && a[1] === 'graphql') {
 } else console.log('[]');
 `;
 
-// ext-worker.sh: every call goes to $HOME/ext-calls. available passes an engine with $HOME/avail-<engine>. start copies
+// ext-worker.sh: every call goes to $HOME/ext-calls. available passes an engine with $HOME/avail-<engine>. With
+// $HOME/start-fails, start refuses (exit 2). Otherwise start copies
 // the brief to $HOME/ext-brief-<n>, writes a busy registry row and prints the launcher's JSON line.
 const EXT = `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -105,6 +106,7 @@ const a = process.argv.slice(2);
 fs.appendFileSync(H + '/ext-calls', JSON.stringify(a) + '\\n');
 const reg = path.join(H, '.agent-queue/engine-workers');
 if (a[0] === 'available') process.exit(fs.existsSync(H + '/avail-' + a[1]) ? 0 : 1);
+if (a[0] === 'start' && fs.existsSync(H + '/start-fails')) { console.error('ext-worker: ' + H + '/wt exists and is not an engine clone'); process.exit(2); }
 if (a[0] === 'start') {
   const [, engine, id, branch, brief] = a;
   const n = fs.readdirSync(H).filter((f) => f.startsWith('ext-brief-')).length;

@@ -80,14 +80,12 @@ gh_token() {
   gh auth token 2>/dev/null
 }
 
-# The clone still is what start made: .git a real folder (not a link, not a file pointing elsewhere), with no commondir
-# or gitdir sending git to another config. Checked before the supervisor runs any git command on it after the run.
-clone_layout_ok() { [ -d "$WT/.git" ] && [ ! -L "$WT/.git" ] && [ ! -e "$WT/.git/commondir" ] && [ ! -e "$WT/.git/gitdir" ]; }
-# git on the clone, outside the sandbox, with the settings that run programs turned off, and without your global or
-# system config: an attribute the engine wrote in the clone could otherwise pick a filter defined there (git lfs).
-cgit() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= -C "$WT" "$@"; }
-
-git_guard_sig() { (cd "$WT" && find $(protected_paths | sed "s|$WT/||g") -type f 2>/dev/null | sort | xargs cksum 2>/dev/null); }
+# git on the clone outside the sandbox: sgit (ext-worker-clone.sh), run only after clone_intact has passed.
+cgit() { sgit -C "$WT" "$@"; }
+# The clone's layout and baseline (ext-worker-clone.sh), checked before any git command runs on it out here.
+intact_or_stop() { # <when> <exit code>
+  clone_intact "$WT" || finish failed "$2" "containment: the clone's .git was replaced or redirected, or its git hooks, config or hook folder changed $1; no git command ran on it; files kept in $LOGDIR"
+}
 
 cmd_supervise() {
   ENGINE=$1; TID=$2; SID=$3; BRANCH=$4; local wt=$5; TIMEOUT=$6; RUN=$7; LOGDIR=$8
@@ -102,6 +100,7 @@ cmd_supervise() {
   prepare_cli_home || finish failed null "could not copy $ENGINE's auth file into the run"
   PROXY_PORT=$(lib port)
   net_up "$LOGDIR/net.jsonl" || finish failed null "the network proxy did not start"
+  intact_or_stop "since the last round" null
 
   if [ ${#EW_INSTALL[@]} -gt 0 ]; then
     echo "$(now) installing dependencies in $WT: ${EW_INSTALL[*]}"
@@ -109,12 +108,12 @@ cmd_supervise() {
     ENGINE_PID=$!
     wait "$ENGINE_PID" || finish failed null "install: $(grep -v '^[[:space:]]*$' "$LOGDIR/install.log" | tail -3 | tr '\n' ' ' | cut -c1-600)"
     ENGINE_PID=""
+    intact_or_stop "during the dependency install" null
   fi
 
   write_prompt
-  local head0 branch0 guard0
-  head0=$(git -C "$WT" rev-parse HEAD); branch0=$(git -C "$WT" symbolic-ref -q --short HEAD || echo detached)
-  guard0=$(git_guard_sig)
+  local head0 branch0
+  head0=$(cgit rev-parse HEAD); branch0=$(cgit symbolic-ref -q --short HEAD || echo detached)
   rm -f "$RUN_TMP/ENGINE_QUESTION.md" "$RUN_TMP/final.md"
   CMD=(); STDIN=/dev/null; engine_command
   EW_GH_TOKEN=$(gh_token); export EW_GH_TOKEN
@@ -130,8 +129,7 @@ cmd_supervise() {
   echo "$(now) $ENGINE exited $rc"
   # Before any git command runs on the clone out here: a changed layout or a changed hook or config file means the
   # engine tried to get code run with the supervisor's rights.
-  clone_layout_ok || finish failed "$rc" "containment: the clone's .git was replaced or redirected (commondir, gitdir or a link); no git command ran on it; files kept in $LOGDIR"
-  [ "$guard0" = "$(git_guard_sig)" ] || finish failed "$rc" "containment: the clone's git hooks, config or hook folder changed during the run; files kept in $LOGDIR"
+  intact_or_stop "during the run" "$rc"
 
   # --- what happened ---
   lib stream "$ENGINE" "$LOGDIR/stream.jsonl" "$WT" "$LOGDIR/summary.md" "$RUN_TMP" > "$LOGDIR/audit.txt" 2>&1
