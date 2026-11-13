@@ -119,6 +119,38 @@ test('a clone whose hooks changed between rounds gets no git command and no inst
   assert.equal(fs.existsSync(marker), false, 'no hook ran');
 });
 
+test('a nested repository in the clone ends the round contained, before any git command of the supervisor walks into it', { skip, timeout: 120_000 }, async () => {
+  const w = engineWorld('ext-nested');
+  runExt(w, ['start', 'codex', 'ABC-11', 'agent/abc-11', brief(w, 'FAKE: nested\n')]);
+  const row = await waitRow(w, 'ABC-11');
+  assert.equal(row.status, 'failed');
+  assert.match(row.report, /^containment: .*a nested \.git appeared in it/);
+});
+
+test('a configured hook folder other than .husky is write-protected inside and covered by the baseline', { skip, timeout: 120_000 }, async () => {
+  const w = engineWorld('ext-hookspath');
+  fs.mkdirSync(path.join(w.main, 'repo-hooks'));
+  fs.writeFileSync(path.join(w.main, 'repo-hooks/pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const g = (...a) => execFileSync('git', ['-C', w.main, ...a], { stdio: 'ignore' });
+  g('add', 'repo-hooks');
+  g('commit', '-q', '-m', 'hooks');
+  g('push', '-q', 'origin', 'main');
+  g('config', 'core.hooksPath', 'repo-hooks');
+  runExt(w, ['start', 'codex', 'ABC-12', 'agent/abc-12', brief(w, 'Build ABC-12.\n')]);
+  assert.equal((await waitRow(w, 'ABC-12')).status, 'done');
+  const wt = w.worktree('agent/abc-12');
+  // Inside the sandbox the folder is read-only.
+  const r = runExt(w, ['sandbox-run', 'codex', wt, '--', '/usr/bin/touch', path.join(wt, 'repo-hooks/planted')]);
+  assert.notEqual(r.status, 0);
+  assert.equal(fs.existsSync(path.join(wt, 'repo-hooks/planted')), false);
+  // A change to it between rounds, as an escape on Linux could make, ends the next round before any git runs.
+  fs.writeFileSync(path.join(wt, 'repo-hooks/pre-commit'), '#!/bin/sh\ntouch /tmp/never\n', { mode: 0o755 });
+  runExt(w, ['start', 'codex', 'ABC-12', 'agent/abc-12', brief(w, 'Build ABC-12.\n'), '--continue']);
+  const row = await waitRow(w, 'ABC-12');
+  assert.equal(row.status, 'failed');
+  assert.match(row.report, /^containment: .*changed since the last round/);
+});
+
 test('a process the engine leaves running in its process group ends with the round', { skip, timeout: 120_000 }, async () => {
   const w = engineWorld('ext-linger');
   runExt(w, ['start', 'codex', 'ABC-8', 'agent/abc-8', brief(w, 'FAKE: linger\n')]);

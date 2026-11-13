@@ -84,7 +84,7 @@ gh_token() {
 cgit() { sgit -C "$WT" "$@"; }
 # The clone's layout and baseline (ext-worker-clone.sh), checked before any git command runs on it out here.
 intact_or_stop() { # <when> <exit code>
-  clone_intact "$WT" || finish failed "$2" "containment: the clone's .git was replaced or redirected, or its git hooks, config or hook folder changed $1; no git command ran on it; files kept in $LOGDIR"
+  clone_intact "$WT" || finish failed "$2" "containment: the clone's .git was replaced or redirected, a nested .git appeared in it, or its git hooks, config or hook folder changed $1; no git command ran on it; files kept in $LOGDIR"
 }
 
 cmd_supervise() {

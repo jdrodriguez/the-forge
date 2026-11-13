@@ -75,10 +75,10 @@ const COMMAND_RULES = [
   ['changed the repo through gh', gh(String.raw`(?:repo\s+(?:edit|delete|rename|archive)|ruleset|api\s+[^\n]*\b(?:rulesets|collaborators|branches\/[^\s/]+\/protection)\b)`)],
   // A mutation's name only counts on a line that calls the API, so a search of the code for it is not an attempt.
   ['merged through the GraphQL API', /\b(?:gh\s+[^\n]*\bapi|curl|wget|http)\b[^\n]*\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch|updateRef|deleteRef)\b/],
-  // Only the calls that change something. Dispatches, enable and disable and the merges endpoint take no GET; a PR's
-  // merge and a branch ref are read with GET, so those count only with a write method or a request body.
+  // Workflows: only the calls that change something (dispatches, enable, disable); a read of a workflow or its runs is
+  // normal work. The merges endpoint takes no GET. A PR's merge endpoint and the base branch's ref are matched in
+  // commandViolations, whatever the method: an engine has no need to call either, so a read of one counts as an attempt.
   ['merged or dispatched through the GitHub API', /\b(?:gh\s+[^\n]*\bapi|curl|wget|http)\b[^\n]*(?:\/dispatches\b|\/actions\/workflows\/[^\s/]+\/(?:enable|disable)\b|\brepos\/[^\s/]+\/[^\s/]+\/merges\b)/],
-  ['merged or moved a branch through the GitHub API', new RegExp(String.raw`\b(?:gh\s+[^\n]*\bapi|curl|wget|http)\b(?=[^\n]*(?:\/pulls\/\d+\/merge\b|\/git\/refs\/heads\/(?:main|master)\b))(?=[^\n]*\s(?:-X\s*(?:PUT|POST|PATCH|DELETE)|--method[=\s]+(?:PUT|POST|PATCH|DELETE)|--request[=\s]+(?:PUT|POST|PATCH|DELETE)|-f|-F|--field|--raw-field|--input|-d|--data)\b)`, 'i')],
   ['read the keychain', new RegExp(`${AT_COMMAND}(?:\\S*/)?security\\s+(?:find-(?:generic|internet)-password|dump-keychain|export|unlock-keychain)\\b`)],
   ['tried to leave the sandbox through launchd, LaunchServices or AppleEvents', new RegExp(`${AT_COMMAND}(?:\\S*/)?(?:launchctl\\s+(?:submit|load|bootstrap|start|kickstart)|osascript\\b|open\\s+-[a-zA-Z]*a\\b|open\\s+\\S+\\.(?:app|command)\\b)`)],
   ['tried to leave the sandbox through systemd or the session bus', new RegExp(`${AT_COMMAND}(?:\\S*/)?(?:systemd-run|systemctl\\s+--user\\s+(?:start|enable|link)|dbus-send|busctl|gdbus)\\b`)],
@@ -103,9 +103,18 @@ export function pushViolation(line, base = 'main') {
   return null;
 }
 
+// A line that calls the GitHub API and names a PR's merge endpoint or a ref of the base branch (github.baseBranch, and
+// main and master whatever it is).
+function mergeOrBaseRef(command, base = 'main') {
+  const bases = [...new Set(['main', 'master', base])].map(esc).join('|');
+  const rx = new RegExp(String.raw`\b(?:gh\s+[^\n]*\bapi|curl|wget|http)\b[^\n]*(?:\/pulls\/\d+\/merge\b|\bgit\/refs?\/heads\/(?:${bases})(?![\w./-]))`);
+  return rx.test(command);
+}
+
 export function commandViolations(command, ctx) {
   const out = [];
   for (const [what, rx] of COMMAND_RULES) if (rx.test(command)) out.push(what);
+  if (mergeOrBaseRef(command, ctx.base)) out.push(`called a PR's merge endpoint or the ${ctx.base ?? 'main'} branch's ref through the GitHub API`);
   for (const [name, rx] of deniedRules(ctx)) if (rx.test(command)) out.push(`reached for ${name}`);
   const other = otherRepoPath(command, ctx);
   if (other) out.push(`reached outside its worktree into ${other}`);
@@ -211,16 +220,17 @@ export const RUNS_ELSEWHERE = /^(?:\.github\/workflows\/|\.github\/actions\/|\.h
 
 export function branchHazards(worktree, base) {
   // The supervisor checked the clone's layout first; the settings that run programs are off here as well.
-  const git = (...a) => execFileSync('git', ['-c', 'core.attributesFile=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-C', worktree, ...a],
+  const git = (...a) => execFileSync('git', ['-c', 'core.attributesFile=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=',
+    '-c', 'submodule.recurse=false', '-C', worktree, ...a],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } });
   let files = [];
   try {
-    files = git('diff', '--name-only', `${base}...HEAD`).split('\n');
+    files = git('diff', '--name-only', '--ignore-submodules=all', `${base}...HEAD`).split('\n');
   } catch {
     // no merge base: nothing committed to compare
   }
   try {
-    files.push(...git('status', '--porcelain=v1', '--untracked-files=all').split('\n').map((l) => l.slice(3)));
+    files.push(...git('status', '--porcelain=v1', '--untracked-files=all', '--ignore-submodules=all').split('\n').map((l) => l.slice(3)));
   } catch {
     // not a work tree any more; the caller reports that
   }

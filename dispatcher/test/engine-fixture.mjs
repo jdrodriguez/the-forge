@@ -27,6 +27,15 @@ if (/^This is a (?:containment )?test of your (?:sandbox|tools)/m.test(prompt)) 
   // The selftest's probe briefs: try each numbered command with the shell, the way a model told to would.
   for (const m of prompt.matchAll(/^\d+\. (.+)$/gm)) { try { sh('sh', ['-c', m[1]]); } catch {} }
   done('Tried each one.\nRESULT: DONE');
+} else if (/^FAKE: nested/m.test(prompt)) {
+  // A nested repository with a tracked file, staged in the parent as a gitlink: git would enter it with its own config.
+  sh('git', ['init', '-q', 'child']);
+  fs.writeFileSync('child/x.txt', 'x\n');
+  sh('git', ['-C', 'child', 'add', 'x.txt']);
+  sh('git', ['-C', 'child', '-c', 'user.name=e', '-c', 'user.email=e@example.test', 'commit', '-q', '-m', 'x']);
+  sh('git', ['add', 'child']);
+  fs.writeFileSync('child/x.txt', 'dirty\n');
+  done('Nested.\nRESULT: DONE');
 } else if (/^FAKE: link-question/m.test(prompt)) {
   // A question file that is a link to a file outside the clone, for the supervisor to read with its own rights.
   fs.symlinkSync('/etc/hosts', process.env.ENGINE_QUESTION_FILE);

@@ -43,7 +43,11 @@ test('the audit flags every escape: credentials, secrets managers, merges, workf
     'gh api graphql -f query=mutation{mergePullRequest(input:{})}': /GraphQL API/,
     'docker run -v /:/host alpine': /Docker daemon/,
     'gh api -X POST repos/o/r/actions/workflows/ci.yml/dispatches -f ref=main': /dispatched through the GitHub API/,
-    'curl -X PUT https://api.github.com/repos/o/r/pulls/7/merge': /merged or moved a branch/,
+    'curl -X PUT https://api.github.com/repos/o/r/pulls/7/merge': /merge endpoint/,
+    'curl -T body.json https://api.github.com/repos/o/r/pulls/7/merge': /merge endpoint/,
+    'gh api repos/o/r/pulls/7/merge': /merge endpoint/,
+    'gh api -X PATCH repos/o/r/git/refs/heads/develop -f sha=abc': /develop branch's ref/,
+    'gh api --method GET repos/o/r/git/ref/heads/develop -f x=y': /develop branch's ref/,
     'curl --unix-socket /var/run/docker.sock http://x/containers/json': /Docker daemon/,
   };
   for (const [c, rx] of Object.entries(escapes)) {
@@ -56,7 +60,7 @@ test('the audit flags every escape: credentials, secrets managers, merges, workf
 test('the audit leaves normal work alone: the worktree, its temp folder, pushes of its own branch, gh reads', () => {
   for (const c of ['git status', 'npm test', `cat ${WT}/src/x.ts`, `ls ${HOME}/dev/app/.git/objects`, `cat ${HOME}/.cache/ew/runs/x/tmp/note.md`,
     'git push origin agent/eng-1', 'gated-push origin agent/eng-1', 'gh pr view --json state', 'gh run rerun 1 --failed', 'git log --oneline',
-    `ls ${HOME}/dev`, 'rg mergePullRequest src/', 'grep -rn osascript scripts/', 'gh api repos/o/r/actions/workflows/ci.yml/runs', 'gh api repos/o/r/actions/workflows', 'gh api repos/o/r/pulls/7/merge']) {
+    `ls ${HOME}/dev`, 'rg mergePullRequest src/', 'grep -rn osascript scripts/', 'gh api repos/o/r/actions/workflows/ci.yml/runs', 'gh api repos/o/r/actions/workflows', 'gh api repos/o/r/git/ref/heads/agent/eng-1', 'gh api repos/o/r/git/ref/heads/develop-docs']) {
     assert.deepEqual(flags(c), [], c);
   }
   assert.equal(pushViolation('git push origin agent/eng-1 # not main'), null, 'a comment after the refspec is not a target');
@@ -112,6 +116,7 @@ test('a brief with a secret-shaped value, or a .env value, is refused; one witho
   // A comment after the value is not part of it, quoted or not.
   const commented = envSecrets('SERVICE_TOKEN=abcdefghijklmnop # production\nOTHER_SECRET="qrstuvwxyz123456" # staging\n');
   assert.deepEqual(commented.map((x) => x.value), ['abcdefghijklmnop', 'qrstuvwxyz123456']);
+  assert.deepEqual(envSecrets('SERVICE_TOKEN= # a long comment about the token\n'), [], 'a value that starts with # is empty');
   assert.deepEqual(scanPrompt('use abcdefghijklmnop here', commented), ['the value of SERVICE_TOKEN from a .env file']);
   assert.deepEqual(scanPrompt('use qrstuvwxyz123456 here', commented), ['the value of OTHER_SECRET from a .env file']);
   assert.deepEqual(readResult('work\n**RESULT: DONE**\n'), { done: true, reason: null });

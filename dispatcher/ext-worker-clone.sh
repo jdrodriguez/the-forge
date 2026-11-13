@@ -13,17 +13,24 @@
 # path that doesn't exist yet, and this is what catches that.
 
 # git outside the sandbox on an engine's clone: no global or system config (an attribute the engine wrote could pick a
-# filter defined there), and fsmonitor, hooks and external diff off. ngit is the same for commands that reach origin,
-# which need your credential helper from the global config and run no filters.
-sgit() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= "$@"; }
+# filter defined there), fsmonitor, hooks and external diff off, and submodules never entered (a nested repository's
+# own config could name a filter). ngit is the same for commands that reach origin, which need your credential helper
+# from the global config and run no filters.
+sgit() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= -c submodule.recurse=false "$@"; }
 ngit() { git -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
 
 is_engine_clone() { [ -d "$1/.git" ] && [ ! -L "$1/.git" ] && grep -qxF "$MAIN/.git/objects" "$1/.git/objects/info/alternates" 2>/dev/null; }
-# .git a real folder, with no commondir or gitdir sending git to another config.
-clone_layout_ok() { [ -d "$1/.git" ] && [ ! -L "$1/.git" ] && [ ! -e "$1/.git/commondir" ] && [ ! -e "$1/.git/gitdir" ]; }
+# .git a real folder, with no commondir or gitdir sending git to another config, and no .git anywhere below the root:
+# a nested repository is one git would enter with its own config, which the engine wrote.
+clone_layout_ok() {
+  [ -d "$1/.git" ] && [ ! -L "$1/.git" ] && [ ! -e "$1/.git/commondir" ] && [ ! -e "$1/.git/gitdir" ] &&
+    [ -z "$(find "$1" -path "$1/.git" -prune -o -name .git -print 2>/dev/null | head -1)" ]
+}
+# core.hooksPath from the clone's own config file. Read through sgit it would come back as sgit's /dev/null.
+hooks_dir() { git config --file "$1/.git/config" --get core.hooksPath 2>/dev/null || true; }
 clone_sig() { # <clone>: run only after clone_layout_ok
   local hooks p list=".git/hooks .git/config .git/objects/info .git/info .husky"
-  hooks=$(sgit -C "$1" config core.hooksPath 2>/dev/null || true)
+  hooks=$(hooks_dir "$1")
   case "$hooks" in ""|/*|*..*) ;; *) list="$list $hooks" ;; esac
   (cd "$1" && for p in $list; do [ ! -e "$p" ] || find "$p" -type f; done | sort | xargs cksum 2>/dev/null)
 }
@@ -65,11 +72,11 @@ prepare_clone() {
     sgit -C "$wt" checkout -q -B "$branch" "$base" || die "could not check out $branch from $base"
     [ $remote = 0 ] || sgit -C "$wt" branch -q --set-upstream-to="origin/$branch" "$branch"
   elif [ "$cont" = 0 ]; then
-    if [ -n "$(sgit -C "$wt" status --porcelain)" ] || [ -n "$(sgit -C "$wt" rev-list "origin/$EW_BASE..HEAD" 2>/dev/null)" ]; then
+    if [ -n "$(sgit -C "$wt" status --porcelain --ignore-submodules=all)" ] || [ -n "$(sgit -C "$wt" rev-list "origin/$EW_BASE..HEAD" 2>/dev/null)" ]; then
       EXIT=2 die "$wt holds work beyond origin/$EW_BASE; pass --continue to keep it"
     fi
     sgit -C "$wt" reset -q --hard "origin/$EW_BASE" || die "could not reset $wt to origin/$EW_BASE"
-  elif [ $remote = 1 ] && [ -z "$(sgit -C "$wt" status --porcelain)" ] && sgit -C "$wt" merge-base --is-ancestor HEAD "origin/$branch"; then
+  elif [ $remote = 1 ] && [ -z "$(sgit -C "$wt" status --porcelain --ignore-submodules=all)" ] && sgit -C "$wt" merge-base --is-ancestor HEAD "origin/$branch"; then
     sgit -C "$wt" merge -q --ff-only "origin/$branch" || die "could not fast-forward $wt to origin/$branch"
   fi
   # This script's own checkout may change tracked hook files (.husky), so the baseline is taken again here.

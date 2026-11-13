@@ -1601,6 +1601,12 @@ async function dispatch(st, m) {
         break;
       }
       engineRows = engineRows.filter((x) => x !== acct);
+      // Offered again only when the failed start left no claim behind; a claim still journaled waits for the next tick.
+      if (st.tickets[id]) {
+        log(`${id}: its engine start failed and its claim is still recorded, so it waits for the next tick`);
+        started = true;
+        break;
+      }
       acct = pickAccount(accounts, notForEngine ? [] : engineRows);
       if (acct) log(`${id}: its engine failed to start, so it goes to ${acct.label} instead`);
     }

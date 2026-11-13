@@ -26,7 +26,8 @@ SH
   for n in doppler op vault; do
     printf '#!/bin/bash\n. "$(dirname "$0")/_real"\nrefuse "the %s CLI"\n' "$n" > "$t/$n"
   done
-  cat > "$t/gh" <<'SH'
+  # A PR's merge endpoint and the base branch's ref are refused whatever the method; the base comes from the config.
+  sed "s|@BASE@|$EW_BASE|g" > "$t/gh" <<'SH'
 #!/bin/bash
 . "$(dirname "$0")/_real"
 args=" $* "
@@ -49,6 +50,11 @@ case "$sub" in
   " auth token"*|" auth refresh"*|" auth login"*|" auth logout"*|" auth setup-git"*|" auth switch"*) refuse "gh auth" ;;
 esac
 if [ "${sub# api}" != "$sub" ]; then
+  case "$args" in
+    */pulls/*/merge" "*|*/pulls/*/merge/*|*/pulls/*/merge\?*) refuse "gh api on a PR's merge endpoint" ;;
+    *git/ref/heads/main" "*|*git/refs/heads/main" "*|*git/ref/heads/master" "*|*git/refs/heads/master" "*|*git/ref/heads/@BASE@" "*|*git/refs/heads/@BASE@" "*)
+      refuse "gh api on the base branch's ref" ;;
+  esac
   case "$args" in
     *merge*|*dispatches*|*/actions/*|*workflows*|*rulesets*|*protection*|*collaborators*|*/hooks*|*/keys*|*environments*|*/git/refs*)
       case "$args" in

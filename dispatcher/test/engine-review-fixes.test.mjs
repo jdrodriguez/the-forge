@@ -84,3 +84,17 @@ test('when the engine that won a ticket fails to start, the ticket goes to the n
   assert.equal(ticket(box, 'ENG-11').account, 'b');
   assert.equal(ticket(box, 'ENG-11').driver, undefined);
 });
+
+test('a start that fails after its run began is adopted from the registry: it keeps the ticket and its slot, and no Claude worker starts', () => {
+  const box = engineBox({ usage: claude(50), extUsage: plans({ codex: 20 }), ready: [issue(11), issue(12)], host: { maxWorkers: 1 } });
+  box.put('start-throws-after-row', '');
+  const out = tick(box);
+  assert.match(out, /ENG-11: interrupted claim reconciled, worker codex\/e0 is running/);
+  assert.match(out, /ENG-11: its codex run had started, so it was adopted and keeps the ticket/);
+  const t = ticket(box, 'ENG-11');
+  assert.equal(t.status, 'building');
+  assert.equal(t.driver, 'engine');
+  assert.equal(t.account, 'codex');
+  assert.equal(claudeBriefs(box).length, 0, 'no Claude worker starts on it');
+  assert.equal(ticket(box, 'ENG-12'), undefined, 'the adopted run holds the one slot');
+});

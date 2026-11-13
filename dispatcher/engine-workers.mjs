@@ -253,6 +253,12 @@ export async function startEngine(c, st, m, issue, acct) {
   } catch (e) {
     c.log(`${id}: claim or engine start failed, reconciling (${c.errText(e)})`);
     await c.reconcileClaims(st, m);
+    // The launcher may have started its supervisor before the call failed (a timeout, say): reconciling then adopted
+    // the run from its registry row, and the ticket is building on this engine.
+    if (st.tickets[id]?.status === 'building') {
+      c.log(`${id}: its ${engine} run had started, so it was adopted and keeps the ticket`);
+      return 'started';
+    }
     return 'failed';
   }
   Object.assign(t, { status: 'building', dispatchedAt: c.iso(), account: engine, workerId: out.id, workerName: out.name ?? null,
