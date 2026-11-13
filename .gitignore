@@ -18,3 +18,7 @@ node_modules/
 
 # Python bytecode from running send.py.
 __pycache__/
+
+# The setup interview's answers (names and addresses, never secrets), kept next to the config by the-forge init.
+forge-answers.json
+agent-queue.config.json.bak-*
