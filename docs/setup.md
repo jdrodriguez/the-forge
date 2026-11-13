@@ -10,7 +10,9 @@ npx the-forge setup
 Until the package is published, run it from the repository instead (you need read access to it, and gh signed in):
 `npx github:<owner>/the-forge setup`, or clone it and run `node bin/the-forge.mjs setup --here` in the clone.
 
-`setup` copies The Forge to `~/the-forge`, checks which programs are missing, links its skills into Claude Code, and
+`npm install -g the-forge` and then `the-forge setup` works the same way. Either way, `setup` copies The Forge to
+`~/the-forge` and runs everything from there: npm may clean its cache and replaces a global package on every upgrade,
+so neither can hold your config or the jobs. `setup` checks which programs are missing, links its skills into Claude Code, and
 starts Claude Code on the `forge-setup` skill. The skill asks one question at a time and walks you through the rest
 of this guide. You can also follow this guide by hand. Either way, you do every sign-in yourself: the skill and this
 guide name the command, and no part of The Forge asks for, stores or prints a password, token or key.
@@ -227,8 +229,8 @@ it; the end of README.md's Set up section lists the watchers it keeps.
 - **Add a computer:** add it to `forge-answers.json`, run `the-forge init --answers forge-answers.json`, set up
   Tailscale and SSH for it, then `the-forge copy-to <host> --install`, and `copy-to` every other computer so each has
   the new config.
-- **Update:** `npx the-forge@latest update --all` refreshes `~/the-forge` here and on every other computer and
-  reloads the jobs. A copy that is a git clone pulls instead. Your config and answers stay.
+- **Update:** `npx the-forge@latest update --all` (or, after a global install, `npm install -g the-forge` and
+  `the-forge update --all`) refreshes `~/the-forge` here and on every other computer and reloads the jobs. A copy that is a git clone pulls instead. Your config and answers stay.
 - **Stop for a while:** `the-forge stop` unloads this computer's jobs; `the-forge start` brings them back. To hold the
   whole queue, `node dispatcher/dispatcher.mjs pause "reason"`, and `resume` later.
 - **Remove:** `the-forge uninstall` on each computer, then delete `~/the-forge` and `~/.agent-queue`.

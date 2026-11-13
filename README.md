@@ -58,13 +58,13 @@ One command copies The Forge to `~/the-forge`, links its skills into Claude Code
 npx the-forge setup
 ```
 
-Until the package is published, run it from this repository (`npx github:<owner>/the-forge setup`), or clone it and run `node bin/the-forge.mjs setup --here` in the clone. `docs/setup.md` is the same ground as a written guide for someone who has never seen this system: what to buy or reuse, the programs each computer needs, Claude accounts and how several live on one computer, Codex, Grok, Tailscale, SSH, GitHub, Linear and Slack, what each computer runs, and how to add a computer later.
+`npm install -g the-forge` then `the-forge setup` works too: either way the lasting copy is `~/the-forge`, because npm replaces its own folders on upgrade. Until the package is published, run it from this repository (`npx github:<owner>/the-forge setup`), or clone it and run `node bin/the-forge.mjs setup --here` in the clone. `docs/setup.md` is the same ground as a written guide for someone who has never seen this system: what to buy or reuse, the programs each computer needs, Claude accounts and how several live on one computer, Codex, Grok, Tailscale, SSH, GitHub, Linear and Slack, what each computer runs, and how to add a computer later.
 
 You need Claude Code (one Claude account is enough), Node 22 or newer, git, gh, jq, curl, a GitHub repository with CI, and a Linear workspace. Slack, Codex and Grok are optional. You do every sign-in yourself; no part of The Forge asks for, stores or prints a password, token or key.
 
 | Command | What it does |
 |---|---|
-| `the-forge setup` | Makes the lasting copy (a copy npx unpacked sits in npm's cache, which can be cleaned at any time), lists missing programs, links the skills, and starts the `forge-setup` skill. |
+| `the-forge setup` | Makes the lasting copy (a copy npx unpacked sits in npm's cache, and a global install sits in npm's own folder, which npm replaces on upgrade), lists missing programs, links the skills, and starts the `forge-setup` skill. |
 | `the-forge init --answers <file>` | Writes `agent-queue.config.json` from the interview's answers file. The only thing that writes the config. |
 | `the-forge doctor` | Checks this computer: programs, sign-ins, each Claude account, Codex and Grok, Tailscale and SSH to the other computers, the Linear key, the config. |
 | `the-forge install`, `uninstall` | This computer's scheduled jobs: the dispatcher everywhere, and the board, herald and red-main watcher on the board's computer (launchd on macOS, systemd on Linux). |
