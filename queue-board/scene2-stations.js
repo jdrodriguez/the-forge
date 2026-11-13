@@ -1,12 +1,13 @@
 // scene2-stations.js: what the workers of the map from above (scene2.js) work at, seen from overhead at the 1.4 times
 // scale, showing how far each one's PR has come as the side view's stations do (sprites-gear-stations.js): stage 1
-// building, 2 a PR open, 3 CI failing, 4 green, 0 nobody there. The elves' (and Men's) writing desk, 15 by 8 units on
+// building, 2 a PR open, 3 CI failing, 4 green, 0 nobody there. The elves' writing desk, 15 by 8 units on
 // the ground, shows its planked top raised over its front, with a stack of books, a brass candlestick and an inkwell
 // with its quill; the scroll on it grows as the work goes on, half written while it builds, crossed red with a broken
 // seal when CI fails, and tied with a gold ribbon and seal, sparkling, when green; the candle burns while anyone works.
 // The Sentry's lantern post, 4 wide and 26 tall, stands by the road on its stone footing: an oak shaft, an arm with the
 // lantern hung from it, lit from stage 1, and a pennant on its cap (white while a PR is open, red when CI fails, gold
-// when green). scene2-station-art.js draws the hobbits' garden plot and the dwarves' anvil.
+// when green). scene2-station-art.js draws the hobbits' garden plot and the dwarves' anvil, scene2-rohan-shield.js the
+// Men's shield on its trestle.
 
 const m2StArt = new Map();
 // A canvas w by h units painted once by paint(g, px), cached by key; px(x, y, w, h, colour) fills in quarter units.
@@ -207,6 +208,7 @@ function m2DrawStation(g, s, stage, tick) {
   if (s.kind === 'hobbit') return m2DrawPlot(g, x, y, stage, tick);
   if (s.kind === 'dwarf') return m2DrawAnvil(g, x, y, stage, tick);
   if (s.kind === 'ranger') return m2DrawPost(g, x, y, stage, tick);
+  if (s.kind === 'man') return m2DrawShield(g, x, y, stage, tick);
   g.drawImage(m2DeskAt(stage), x - 7.5, y - 18, 15, 18);
   if (!stage) return;
   m2StFlame(g, x - 1.25, y - 14.75, tick % 8 < 4);
@@ -215,7 +217,7 @@ function m2DrawStation(g, s, stage, tick) {
 }
 // The box a station fills on the map [x0, y0, x1, y1] (units), from its tallest part down to its front edge, for
 // scene2.js's see-through pass; a worker at its station is hidden by it below row s.y - M2_STATION_TOP[kind].
-const M2_STATION_TOP = { elf: 14, man: 14, hobbit: 1.5, dwarf: 12.5, ranger: 26 };
+const M2_STATION_TOP = { elf: 14, man: 12.5, hobbit: 1.5, dwarf: 12.5, ranger: 26 };
 function m2StationBox(s) {
   if (s.kind === 'hobbit') return [s.x - 11, s.y - 18, s.x + 11, s.y + 1];
   if (s.kind === 'dwarf') return [s.x - 6, s.y - 17, s.x + 6, s.y + 1];

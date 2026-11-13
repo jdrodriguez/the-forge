@@ -1,16 +1,16 @@
 // scene-work.js: what busy workers do in the Middle-earth view (scene.js). A worker whose ticket is building, or whose
 // checks are running while it works, goes on rounds from its station: it walks to a spot, works there a few seconds,
-// sometimes carries something back and drops it, then works its station for a while and picks the next job. Dwarves mine
-// ore and tip it into the forge, dig gems out for the chest and hammer at the anvil; hobbits hoe and water their plot,
-// pick vegetables for the cart and brew ale; elves write at the lectern, carry scrolls to and from the rack, shoot at the
-// target, play the harp by the falls and gather golden leaves; Men carry sacks from the tent to the cart. The Sentry's
-// Ranger rides the road instead (scene-ride.js). Each worker's choices and timings come from a generator seeded by its
-// key, so they are stable and no two workers move in step, and a spot holds one worker at a time. The station stays the
-// worker's home and keeps showing how far its PR has come. A worker that stops being busy, or is pulled into a fight
-// (scene-duel.js), drops what it was doing and goes home first. With reduced motion scene.js keeps workers at their
-// stations. The props and their places are scenery-props.js; this file draws them as depth-sorted items, with arrows in
-// flight. Loaded after scene.js, it sets sc.work, which scene.js calls on every frame: step (moves a worker), fx (its
-// particles) and items.
+// sometimes carries something back and drops it, then works its station for a while and picks the next job. Dwarves
+// mine ore and tip it into the forge, dig gems out for the chest and hammer at the anvil; hobbits hoe and water their
+// plot, pick vegetables for the cart and brew ale; elves write at the lectern, carry scrolls to and from the rack,
+// shoot at the target, play the harp by the falls and gather golden leaves; Men carry sacks from their pile to the cart
+// (their horses, water and sword drill are scene-rohan.js's). The Sentry's Ranger rides the road instead
+// (scene-ride.js). Each worker's choices and timings come from a generator seeded by its key, so they are stable and no
+// two workers move in step, and a spot holds one worker at a time. The station stays the worker's home and keeps
+// showing how far its PR has come. A worker that stops being busy, or is pulled into a fight (scene-duel.js), drops
+// what it was doing and goes home first. With reduced motion scene.js keeps workers at their stations. The props and
+// their places are scenery-props.js; this file draws them as depth-sorted items, with arrows in flight. Loaded after
+// scene.js, it sets sc.work, which scene.js calls on every frame: step (moves a worker), fx (its particles) and items.
 const work = { realms: new Map(), shots: [] };
 const NOTE = ['.11', '.1.', '11.'];
 
@@ -214,7 +214,7 @@ function workFx(a, pose, frame, hand) {
     if (tool === 'pick') spray(hand.x + 6 * fwd, hand.y, ['#a5a1ab', '#7e7a86', '#f0a33a'], 3, { up: 1, spread: 1.6, life: 4 });
     else if (a.kind === 'dwarf') spray(hand.x + 4 * fwd, hand.y, [PX.emberL, PX.ember, '#fff3c4'], 4, { up: 1.3, spread: 1.8, life: 4 });
     else if (a.kind === 'hobbit') spray(hand.x + 4 * fwd, hand.y + 4, [PX.soil, PX.soilD], 2, { up: 0.8, spread: 1.2, life: 4 });
-    else spray(x + 2 * fwd, Math.round(a.y) - 6, [PX.blue, '#e6f2ff', PX.gold], 1, { up: 0.35, spread: 0.3, life: 16, fall: 0 });
+    else if (a.kind === 'elf') spray(x + 2 * fwd, Math.round(a.y) - 6, [PX.blue, '#e6f2ff', PX.gold], 1, { up: 0.35, spread: 0.3, life: 16, fall: 0 });
   }
   if (pose === 'dig' && frame === 1 && changed) {
     spray(hand.x, hand.y, ['#625e6b', '#a5a1ab'], 2, { up: 0.9, spread: 1.4, life: 4 });

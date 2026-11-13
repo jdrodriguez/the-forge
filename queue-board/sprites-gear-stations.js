@@ -1,8 +1,9 @@
 // sprites-gear-stations.js: what the Middle-earth view's workers work at and what floats over them, at 32-bit: each
 // station at each stage of its PR (drawStation: the elves' desk and scroll, the hobbits' garden bed, the dwarves' anvil
-// and blade) and the speech bubbles with their glyphs (drawBubble). scene.js calls both. Split out of sprites-gear.js on
-// 2026-11-07, when the 32-bit art made that file too long; it composes its art with sprites-gear.js's gearGrid, once on
-// first use, and stamps it with sprites-gear.js's gearMap. Loaded right after sprites-gear.js.
+// and blade; the Men's shield is sprites-rohan.js's) and the speech bubbles with their glyphs (drawBubble). scene.js
+// calls both. Split out of sprites-gear.js on 2026-11-07, when the 32-bit art made that file too long; it composes its
+// art with sprites-gear.js's gearGrid, once on first use, and stamps it with sprites-gear.js's gearMap. Loaded right
+// after sprites-gear.js.
 
 // The stations' colours: the desk's wood 0 to 5, gold J j q Q +, the scroll's paper P V U and ink k K, a shadow under it
 // (_); soil D d o O S s; leaves G g c C y Y; a withered stalk T t w W; a pumpkin Z z h H a A; steel N n m M L *; a red
@@ -136,8 +137,9 @@ const GEAR_BLADE = ['112222222222222222222222222.....', '0133++++++++33333333333
 const GEAR_CRACK = ['...#..', '..#...', '..##..', '.#..#.', '#.....'];
 
 // A worker's station; stage is how far its PR has come: 0 nothing, 1 building, 2 PR open, 3 CI failing, 4 green.
-// Elves write a scroll that grows, hobbits grow a garden, dwarves forge a blade that glows, fails red and ends gold, and
-// the Sentry's Ranger keeps a post by the road whose lantern burns while it works (drawPost, sprites-horse.js).
+// Elves write a scroll that grows, hobbits grow a garden, dwarves forge a blade that glows, fails red and ends gold, Men
+// paint a shield of Rohan (drawShieldStation, sprites-rohan.js), and the Sentry's Ranger keeps a post by the road whose
+// lantern burns while it works (drawPost, sprites-horse.js).
 function drawStation(g, kind, x, y, stage, tick) {
   if (kind === 'hobbit') {
     gearMap(g, stationOf('bed', gearBed), STATION_Q, x - 7, y - 2);
@@ -156,6 +158,8 @@ function drawStation(g, kind, x, y, stage, tick) {
     if (stage === 4) { gearMap(g, GEAR_SPARK_SMALL, STATION_Q, x + 1, y - 6.25); gearMap(g, GEAR_SPARK, STATION_Q, x + 3, y - 8.5); }
   } else if (kind === 'ranger') {
     drawPost(g, x, y, stage, tick);
+  } else if (kind === 'man') {
+    drawShieldStation(g, x, y, stage);
   } else {
     gearMap(g, stationOf('desk', gearDesk), STATION_Q, x - 6, y - 5);
     const units = [0, 3, 6, 6, 8][stage];

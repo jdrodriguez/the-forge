@@ -74,6 +74,19 @@ const CUES = {
     horn(x, 1.62, [[233.08, 0.95]], { gain: 0.045, cutoff: 650, attack: 0.15 });
     return x;
   },
+  // Rohan merge: a horn of the Mark in F, brighter and higher than Erebor's B-flat and the war horn's D, as a rider's horn
+  // carries across open grassland. Two short calls on the tonic, a rise through the fifth to the octave held long over a
+  // soft fifth below, and the octave answered twice, fainter each time, from the hills round the plain.
+  'merge-rohan'() {
+    const x = track(3.4);
+    horn(x, 0.02, [[174.61, 0.12]], { gain: 0.15, cutoff: 1700, attack: 0.03 });
+    horn(x, 0.2, [[174.61, 0.12]], { gain: 0.15, cutoff: 1700, attack: 0.03 });
+    horn(x, 0.4, [[174.61, 0.14], [261.63, 0.14], [349.23, 1.0]], { gain: 0.16, cutoff: 1900, attack: 0.04 });
+    horn(x, 0.68, [[174.61, 0.82]], { gain: 0.06, cutoff: 800, attack: 0.1 });
+    horn(x, 1.62, [[349.23, 0.6]], { gain: 0.05, cutoff: 900, attack: 0.12 });
+    horn(x, 2.3, [[349.23, 0.6]], { gain: 0.025, cutoff: 700, attack: 0.15 });
+    return x;
+  },
   // Main red: the war horn, as horn.js played it in the browser. Four bars of marching drums under two low calls, the
   // first rising a fifth, the second climbing a minor triad over a held fifth below.
   'main-red'() {

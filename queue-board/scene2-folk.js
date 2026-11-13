@@ -3,9 +3,9 @@
 // mirror. Each facing walks in four steps (a stride, passing with the body half a unit up, the other stride, passing);
 // at its station a figure turns toward you to work (its tool raised, swinging through, striking: the elves' quill,
 // as in the side view), to sleep (sat down, arms folded, head bowed, eyes shut, breathing), to ask (a hand up) or to
-// cheer. Every people wears the elf's body for now, in its own colours from sprites.js's PEOPLE (qdFigurePal): a
-// stand-in until the hobbits, dwarves, Men, Rangers and wizards get top-down bodies of their own. Each frame is
-// composed once per worker's colours into a small canvas and stamped; a soft shadow sits under every figure.
+// cheer. Each people's body is registered in M2_BODY (scene2-body-v1.js stamps v1's own figures), in its own colours
+// from sprites.js's PEOPLE (qdFigurePal); a people with none wears the elf's body drawn here. Each frame is composed
+// once per worker's colours into a small canvas and stamped; a soft shadow sits under every figure.
 
 // A frame is M2_FW by M2_FH units with the feet on row M2_FY, centred on column M2_FX.
 const M2_FW = 14;
@@ -20,8 +20,8 @@ const m2Frames = new Map();
 const M2_BODY = {};
 const M2_ELF_BODY = { w: M2_FW, h: M2_FH, fx: M2_FX, fy: M2_FY, head: 15, sleepHead: 12, shadow: 8 };
 const m2BodyOf = (kind) => M2_BODY[kind] ?? M2_ELF_BODY;
-// The tool each people works with (sprites-gear.js draws them).
-const M2_TOOL = { elf: 'quill', hobbit: 'hoe', dwarf: 'hammer', man: 'quill', ranger: 'sword', wizard: 'staff' };
+// The tool each people works with (sprites-gear.js draws them): Men hammer the rim of the shield at their station.
+const M2_TOOL = { elf: 'quill', hobbit: 'hoe', dwarf: 'hammer', man: 'hammer', ranger: 'sword', wizard: 'staff' };
 // Tools only the map draws, by name, registered by the files that draw them: draw(g, hand) with hand { x, y, up }, as
 // sprites-gear.js's drawTool takes it. A body draws its tool with m2DrawTool, which falls back to drawTool.
 const M2_TOOLS = {};

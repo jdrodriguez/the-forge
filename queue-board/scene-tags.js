@@ -11,7 +11,7 @@ function scTagsBuild() {
   scTags.classList.toggle('sc-day', !sc.sky?.night);
   const realms = sc.realms.map((r) => {
     const m = r.m;
-    const note = !m.ok ? `${m.name} out of reach, last heard ${ago(m.fetchedAt)}` : m.paused ? `${m.name} paused` : '';
+    const note = m.echo ? '' : !m.ok ? `${m.name} out of reach, last heard ${ago(m.fetchedAt)}` : m.paused ? `${m.name} paused` : '';
     const merged = (sc.recent || []).filter((t) => t.host === m.host).map((t) => `<small>${esc(t.label || t.id)} merged${t.nickname ? ` by ${esc(t.nickname)}` : ''}</small>`).join('');
     if (!note && !merged) return '';
     // Over the realm, its foot just above the highest peak (the Lonely Mountain, 58 rows over the ground), so it stays

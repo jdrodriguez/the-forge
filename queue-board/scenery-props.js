@@ -1,7 +1,7 @@
 // scenery-props.js: the props the Middle-earth workers use on their rounds (scene-work.js), and where each realm has room
 // for them. Erebor has rocks of ore and a rock of gems at the foot of its wall and a chest whose pile of gems grows over
 // the session; the Shire a brewing kettle with a barrel and a cart that fills with vegetables; Rivendell a rack of scrolls
-// under the pavilion and a straw target; Rohan a pile of sacks by the tent and a cart. Each prop is placed from its
+// under the pavilion and a straw target; Rohan's are scenery-rohan-props.js's. Each prop is placed from its
 // realm's own layout, so it clears the stations, the landmarks and the other props at any width, and so does the spot
 // where a worker stands to use it; a prop that finds no room is left out, and so is the work that needs it. The props
 // are drawn as depth-sorted items (scene-work.js), so a worker in front of one hides it. Also elfTrees, the trees of
@@ -222,10 +222,6 @@ function realmProps(r) {
       desks.push(stand);
       P.trees.push({ ...t, spot: { x: t.x + 4, y: GROUND_Y + 6, face: -1 } });
     }
-  } else if (r.kind === 'man') {
-    solid([cx - 10, GROUND_Y - 15, cx + 10, GROUND_Y + 3]);
-    P.pile = fit('sacks', 9, 5, GROUND_Y + 4, [...xsFrom(cx + 11, r.x0 + r.w - 12), ...xsFrom(cx - 20, r.x0 + 2)], 6);
-    P.cart = fit('cart', 13, 8, PROP_MID, xsFrom(r.x0 + r.w - 15, r.x0 + 2), 6);
   }
   PROP_MORE[r.kind]?.(r, P, fit, outs, desks);
   for (const f of PROP_LATE[r.kind] ?? []) f(r, P, fit, outs, desks);

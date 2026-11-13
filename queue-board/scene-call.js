@@ -93,7 +93,7 @@ function callResolve() {
   const envoys = new Map();
   for (const c of [...calls.all.values()].sort((p, q) => q.at - p.at)) {
     if (callAge(c) >= CALL_MS) { calls.all.delete(c.id); continue; }
-    const w = c.who;
+    const w = drawWho(c.who); // the realm its worker sits in (realm-view.js)
     if (!w?.host) continue;
     const a = w.id && sc.actors.get(`${w.host}/${w.id}`);
     if (a) { calls.lit.set(a.key, [...(calls.lit.get(a.key) ?? []), c]); continue; }
