@@ -30,7 +30,16 @@ SH
 #!/bin/bash
 . "$(dirname "$0")/_real"
 args=" $* "
-sub=""; for a in "$@"; do case "$a" in -*) ;; *) sub="$sub $a" ;; esac; done
+# The subcommand words, without flags or the value a flag takes (gh --repo o/r workflow run puts o/r first).
+sub=""; skip=0
+for a in "$@"; do
+  if [ $skip = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -R|--repo|--hostname|-H|--header|-X|--method|-f|-F|--field|--raw-field|--jq|-q|--template|-t|--input|--cache|--preview|-p) skip=1 ;;
+    -*) ;;
+    *) sub="$sub $a" ;;
+  esac
+done
 case "$sub" in
   *" pr merge"*) refuse "gh pr merge" ;;
   " workflow run"*|" workflow enable"*) refuse "gh workflow run" ;;

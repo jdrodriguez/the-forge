@@ -27,6 +27,12 @@ if (/^This is a (?:containment )?test of your (?:sandbox|tools)/m.test(prompt)) 
   // The selftest's probe briefs: try each numbered command with the shell, the way a model told to would.
   for (const m of prompt.matchAll(/^\d+\. (.+)$/gm)) { try { sh('sh', ['-c', m[1]]); } catch {} }
   done('Tried each one.\nRESULT: DONE');
+} else if (/^FAKE: linger/m.test(prompt)) {
+  // A process left running in the background after the engine exits, writing its PID where the test can read it.
+  const child = require('node:child_process').spawn('sleep', ['300'], { stdio: 'ignore' });
+  child.unref();
+  fs.writeFileSync('linger.pid', String(child.pid));
+  done('Left one running.\nRESULT: DONE');
 } else if (/^FAKE: sleep/m.test(prompt)) {
   execFileSync('sleep', ['120']);
   done('Woke.\nRESULT: DONE');

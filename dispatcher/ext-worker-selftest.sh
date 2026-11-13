@@ -120,6 +120,23 @@ kernel() {
     if [ "$(disk_sig "$t")" != "$before" ]; then flunk "$e kernel: touch $t reached the disk"; [ "$before" != none ] || rm -f "$t"
     else pass "$e kernel: write refused: $t"; fi
   done
+  # Pointing the clone's git somewhere else: a commondir, or a .git replaced. The supervisor's own git would follow it.
+  inside "$e" /bin/sh -c "echo /tmp > '$WT/.git/commondir'"
+  if [ "$OS" = Darwin ]; then
+    [ ! -e "$WT/.git/commondir" ] && pass "$e kernel: .git/commondir refused" || { flunk "$e kernel: .git/commondir was written"; rm -f "$WT/.git/commondir"; }
+  else
+    [ ! -e "$WT/.git/commondir" ] && pass "$e kernel: .git/commondir refused" || { leak "$e: bwrap can't protect a path that does not exist yet, so .git/commondir was written; the supervisor's clone check catches it before any git runs"; rm -f "$WT/.git/commondir"; }
+  fi
+  inside "$e" /bin/mv "$WT/.git" "$WT/.git-moved"
+  if [ -d "$WT/.git" ] && [ ! -e "$WT/.git-moved" ]; then pass "$e kernel: .git can't be moved"
+  elif [ "$OS" = Darwin ]; then flunk "$e kernel: .git was moved"; mv "$WT/.git-moved" "$WT/.git" 2>/dev/null
+  else leak "$e: .git can be moved inside the clone; the supervisor's clone check catches it before any git runs"; mv "$WT/.git-moved" "$WT/.git" 2>/dev/null; fi
+  # A Unix socket outside, the way Docker's or a database's sits: a network namespace or an IP rule does not cover it.
+  local sock="$WORK/probe-$e.sock"
+  node -e 'require("net").createServer(c=>c.end("hi\n")).listen(process.argv[1])' "$sock" & BG+=($!); sleep 0.5
+  inside "$e" node -e 'require("net").connect(process.argv[1]).on("data",()=>process.exit(0)).on("error",()=>process.exit(1))' "$sock" \
+    && flunk "$e kernel: connected to a Unix socket outside" || pass "$e kernel: Unix sockets outside refused"
+  [ "$OS" = Darwin ] || { inside "$e" /usr/bin/test -e /run/docker.sock && flunk "$e kernel: /run/docker.sock is visible" || pass "$e kernel: /run is empty (no Docker socket, no system bus)"; }
   inside "$e" /usr/bin/touch "$WT/selftest-inside-$e" && [ -f "$WT/selftest-inside-$e" ] && pass "$e kernel: writes inside the worktree" || flunk "$e kernel: cannot write inside the worktree: $(tail -1 "$WORK/k.out")"
   rm -f "$WT/selftest-inside-$e"
 

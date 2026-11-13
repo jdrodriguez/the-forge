@@ -357,6 +357,13 @@ async function checkMerged(st) {
 // reuses its branch name, so only a PR opened after this claim counts: a reopened ticket's old merged PR once read as
 // the rebuild's PR and the ticket went to Verifying 20 minutes into the build.
 function findPr(t, id) {
+  // A ticket an engine worked on and put back in the queue: its PR was opened before this claim, so the search below
+  // would skip it. The shared record names it; it is taken while it is still open.
+  const carried = !t.prNumber && engines.marked(id)?.prNumber;
+  if (carried) {
+    const p = JSON.parse(gh(['pr', 'view', String(carried), '--repo', REPO, '--json', 'state,headRefName']));
+    if (p.state === 'OPEN' && p.headRefName === t.branch) t.prNumber = carried;
+  }
   if (!t.prNumber) {
     const list = JSON.parse(gh(['pr', 'list', '--repo', REPO, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']));
     const since = Date.parse(t.claimedAt ?? t.dispatchedAt ?? 0);
@@ -1072,8 +1079,10 @@ async function advance(st, m, workers) {
       saveState(st);
       continue;
     }
-    if (!notGreen && engineBuilt(t)) {
-      await engines.toOrchestrator(st, id, t, pr, `built by ${t.engineHistory.map((x) => x.engine).join(', ')} and finished by a Claude worker, no orchestrator review of the engine's code yet`);
+    const mark = engineDriven(t) ? null : engines.marked(id);
+    if (!notGreen && (engineBuilt(t) || mark)) {
+      const by = [...new Set([...(t.engineHistory ?? []).map((x) => x.engine), ...(mark?.engines ?? [])])].join(', ');
+      await engines.toOrchestrator(st, id, t, pr, `built by ${by} and finished by a Claude worker, no orchestrator review of the engine's code yet`);
       continue;
     }
     if (notGreen && engineDriven(t)) {
@@ -1742,15 +1751,28 @@ async function sentryTriage() {
 
 // --- engine workers ------------------------------------------------------------------------------------
 
+// Free regular slots on this machine now: maxWorkers less the building tickets and the working outside workers, the
+// count dispatch() uses. An outside count that can't be read counts as no room.
+function poolRoom(st) {
+  const queued = Object.values(st.tickets).filter((t) => t.status === 'building' && !t.sentry).length;
+  let outside;
+  try {
+    outside = outsideWorkers(st);
+  } catch {
+    return 0;
+  }
+  return (hostCfg.maxWorkers ?? Infinity) - queued - outside;
+}
+
 // Codex and Grok as queue accounts. The logic is in engine-workers.mjs and engine-rounds.mjs, loaded on first use and
 // only while the engines are on (externalBuilders.fallback.enabled) or a ticket is engine-driven, so a syntax error or a
 // throw there costs one log line. The context hands them the dispatcher's own helpers, so an engine ticket is claimed,
 // commented on, asked about and marked stuck exactly the way a Claude ticket is.
 const engines = makeEngineHooks(() => ({
-  cfg, log, errText, iso, saveState, effects, notify, run, askHuman, attachCmd, riskyPaths, requestMerge, EXT_WORKER, HUMAN, WORKTREES,
+  cfg, log, errText, iso, saveState, effects, notify, run, askHuman, attachCmd, riskyPaths, requestMerge, EXT_WORKER, HUMAN, WORKTREES, SHARED,
   ctx: () => ({ cfg, conf, DIR, ROOT, LOCAL, SHARED, HOST, DRY, REPO, BASE, HUMAN, L, EXT_WORKER, EXT_USAGE, ASK, WORKTREES,
     log, run, gh, gql, iso, hoursSince, errText, saveState, isPaused, notify, effects, comment, issueId, addLabel, removeLabel, setState,
-    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig }),
+    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig, poolRoom }),
 }));
 
 // --- commands ------------------------------------------------------------------------------------------

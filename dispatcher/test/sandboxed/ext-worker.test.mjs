@@ -87,6 +87,16 @@ test('a question ends the round blocked with the question; an escape ends it fai
   assert.match(c.report, /^containment: .*pushed to main/);
 });
 
+test('a process the engine leaves running in its process group ends with the round', { skip, timeout: 120_000 }, async () => {
+  const w = engineWorld('ext-linger');
+  runExt(w, ['start', 'codex', 'ABC-8', 'agent/abc-8', brief(w, 'FAKE: linger\n')]);
+  const row = await waitRow(w, 'ABC-8');
+  assert.equal(row.status, 'done', row.report);
+  const pid = Number(fs.readFileSync(path.join(w.worktree('agent/abc-8'), 'linger.pid'), 'utf8'));
+  assert.ok(pid > 0);
+  assert.throws(() => process.kill(pid, 0), 'the leftover process is gone');
+});
+
 test('stop ends a busy round by its PID and marks it failed, stopped', { skip, timeout: 120_000 }, async () => {
   const w = engineWorld('ext-stop');
   assert.equal(runExt(w, ['start', 'codex', 'ABC-6', 'agent/abc-6', brief(w, 'FAKE: sleep\n')]).status, 0);

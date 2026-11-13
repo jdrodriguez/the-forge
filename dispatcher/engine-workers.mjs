@@ -20,6 +20,22 @@ export const fb = (c) => c.cfg.externalBuilders?.fallback ?? {};
 export const maxRounds = (c) => fb(c).maxRounds ?? 5;
 export const registryDir = (c) => path.join(c.LOCAL, 'engine-workers');
 export const containedFile = (c, id) => path.join(c.SHARED, 'engine-contained', `${id}.json`);
+// Every ticket an engine ever worked on, in the shared folder: which engines, and the PR it left. It outlives the
+// ticket's state entry (a requeue deletes that), so whichever worker or machine takes the ticket next, its green PR
+// still goes to the orchestrator, and the PR the engine opened is still found (engine-hooks.mjs reads it).
+export const builtFile = (c, id) => path.join(c.SHARED, 'engine-built', `${id}.json`);
+export function markBuilt(c, id, patch) {
+  if (c.DRY) return;
+  let cur = {};
+  try {
+    cur = JSON.parse(fs.readFileSync(builtFile(c, id), 'utf8'));
+  } catch {
+    // first engine on this ticket
+  }
+  const engines = [...new Set([...(cur.engines ?? []), ...(patch.engine ? [patch.engine] : [])])];
+  fs.mkdirSync(path.dirname(builtFile(c, id)), { recursive: true });
+  fs.writeFileSync(builtFile(c, id), `${JSON.stringify({ ...cur, id, engines, ...(patch.prNumber ? { prNumber: patch.prNumber } : {}), at: c.iso(), host: c.HOST }, null, 2)}\n`);
+}
 const template = (c) => (fb(c).brief ? path.resolve(c.ROOT, fb(c).brief) : path.join(c.DIR, 'engine-worker-brief.md'));
 
 // --- the registry ext-worker.sh writes, one file per ticket, overwritten by each spawn ---------------------------
@@ -232,6 +248,7 @@ export async function startEngine(c, st, m, issue, acct) {
     await c.addLabel(issue.id, m.label.building);
     await c.removeLabel(issue.id, m.label.ready);
     await c.setState(issue.id, m.inProgress);
+    markBuilt(c, id, { engine });
     out = spawn(c, engine, id, branch, file, cont);
   } catch (e) {
     c.log(`${id}: claim or engine start failed, reconciling (${c.errText(e)})`);

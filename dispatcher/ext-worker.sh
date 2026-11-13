@@ -64,6 +64,8 @@
 #    after the push.
 #  - The command guard (ext-worker-guard.sh) is a speed bump: an absolute path skips it. The audit reads the event
 #    stream after the run, as text, so it catches only the attempts it can read.
+#  - On macOS a process that calls setsid leaves the process group the time box kills. On Linux bwrap can't protect a
+#    path that doesn't exist yet (.git/commondir); the supervisor checks the clone's layout before any git runs on it.
 set -uo pipefail
 
 usage() { sed -n '7,12p' "$0" >&2; exit 2; }
@@ -149,7 +151,7 @@ pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 # and writes only its own .git. A linked worktree would share the main .git's refs and objects, so an engine could move
 # another worker's branch or replace an object another checkout reads. Remove a clone with rm -rf.
 is_engine_clone() {
-  [ -d "$1/.git" ] && [ ! -f "$1/.git" ] && grep -qxF "$MAIN/.git/objects" "$1/.git/objects/info/alternates" 2>/dev/null
+  [ -d "$1/.git" ] && [ ! -L "$1/.git" ] && [ ! -e "$1/.git/commondir" ] && [ ! -e "$1/.git/gitdir" ] && grep -qxF "$MAIN/.git/objects" "$1/.git/objects/info/alternates" 2>/dev/null
 }
 clone_for() { # <path>: on the base branch, fetched fresh from origin
   local url hooks; url=$(git -C "$MAIN" remote get-url origin) || return 1

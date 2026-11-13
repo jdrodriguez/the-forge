@@ -38,6 +38,11 @@ test('the audit flags every escape: credentials, secrets managers, merges, workf
     'cat $CODEX_HOME/auth.json': /auth file/,
     'security find-generic-password -s x -w': /keychain/,
     'osascript -e "tell app"': /leave the sandbox/,
+    'gh --repo o/r workflow run deploy.yml': /started a workflow/,
+    'gh -R o/r pr merge 7': /merged a PR through gh/,
+    'gh api graphql -f query=mutation{mergePullRequest(input:{})}': /GraphQL API/,
+    'docker run -v /:/host alpine': /Docker daemon/,
+    'curl --unix-socket /var/run/docker.sock http://x/containers/json': /Docker daemon/,
   };
   for (const [c, rx] of Object.entries(escapes)) assert.match(flags(c).join(' | '), rx, c);
 });
@@ -45,7 +50,7 @@ test('the audit flags every escape: credentials, secrets managers, merges, workf
 test('the audit leaves normal work alone: the worktree, its temp folder, pushes of its own branch, gh reads', () => {
   for (const c of ['git status', 'npm test', `cat ${WT}/src/x.ts`, `ls ${HOME}/dev/app/.git/objects`, `cat ${HOME}/.cache/ew/runs/x/tmp/note.md`,
     'git push origin agent/eng-1', 'gated-push origin agent/eng-1', 'gh pr view --json state', 'gh run rerun 1 --failed', 'git log --oneline',
-    `ls ${HOME}/dev`]) {
+    `ls ${HOME}/dev`, 'rg mergePullRequest src/', 'grep -rn osascript scripts/']) {
     assert.deepEqual(flags(c), [], c);
   }
   assert.equal(pushViolation('git push origin agent/eng-1 # not main'), null, 'a comment after the refspec is not a target');

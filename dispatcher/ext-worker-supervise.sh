@@ -78,6 +78,12 @@ gh_token() {
   gh auth token 2>/dev/null
 }
 
+# The clone still is what start made: .git a real folder (not a link, not a file pointing elsewhere), with no commondir
+# or gitdir sending git to another config. Checked before the supervisor runs any git command on it after the run.
+clone_layout_ok() { [ -d "$WT/.git" ] && [ ! -L "$WT/.git" ] && [ ! -e "$WT/.git/commondir" ] && [ ! -e "$WT/.git/gitdir" ]; }
+# git on the clone, outside the sandbox, with the settings that run programs turned off.
+cgit() { git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= -C "$WT" "$@"; }
+
 git_guard_sig() { (cd "$WT" && find $(protected_paths | sed "s|$WT/||g") -type f 2>/dev/null | sort | xargs cksum 2>/dev/null); }
 
 cmd_supervise() {
@@ -119,6 +125,10 @@ cmd_supervise() {
   unset EW_GH_TOKEN
   net_down
   echo "$(now) $ENGINE exited $rc"
+  # Before any git command runs on the clone out here: a changed layout or a changed hook or config file means the
+  # engine tried to get code run with the supervisor's rights.
+  clone_layout_ok || finish failed "$rc" "containment: the clone's .git was replaced or redirected (commondir, gitdir or a link); no git command ran on it; files kept in $LOGDIR"
+  [ "$guard0" = "$(git_guard_sig)" ] || finish failed "$rc" "containment: the clone's git hooks, config or hook folder changed during the run; files kept in $LOGDIR"
   lib auth-sync "$ENGINE" "$RUN/cli-home/auth.json" "$(cli_home "$ENGINE")/auth.json" > "$LOGDIR/auth-sync.txt" 2>&1
 
   # --- what happened ---
@@ -130,14 +140,13 @@ cmd_supervise() {
     flags+=("grok did not recognize a name in --tools, so tools outside the allowlist were on")
   fi
   hazards=$(lib branch "$WT" "origin/$EW_BASE") || flags+=("the branch changes files that run outside the sandbox: $(tr '\n' ' ' <<<"$hazards")")
-  [ "$guard0" = "$(git_guard_sig)" ] || flags+=("the clone's git hooks, config or hook folder changed during the run")
   [ ${#flags[@]} -eq 0 ] || finish failed "$rc" "containment: $(printf '%s; ' "${flags[@]}" | cut -c1-3500)files kept in $LOGDIR"
   [ "$rc" -ne 142 ] || finish failed "$rc" "timed out after ${TIMEOUT}s; the worktree is left as it was"
   [ "$rc" -ne 143 ] || finish failed "$rc" "stopped"
   if [ "$rc" -ne 0 ] && lib limit "$LOGDIR/stderr.log" "$LOGDIR/stream.jsonl"; then
     finish limit "$rc" "$ENGINE hit its plan or rate limit: $(grep -v rmcp "$LOGDIR/stderr.log" | tail -2 | tr '\n' ' ' | cut -c1-300)"
   fi
-  local branch1; branch1=$(git -C "$WT" symbolic-ref -q --short HEAD || echo detached)
+  local branch1; branch1=$(cgit symbolic-ref -q --short HEAD || echo detached)
   [ "$branch1" = "$branch0" ] || finish failed "$rc" "the worktree moved from $branch0 to $branch1"
   if [ -s "$RUN_TMP/ENGINE_QUESTION.md" ]; then
     cp "$RUN_TMP/ENGINE_QUESTION.md" "$LOGDIR/question.md"
@@ -145,7 +154,7 @@ cmd_supervise() {
   fi
   [ "$rc" -eq 0 ] || finish failed "$rc" "$ENGINE exited $rc: $(grep -v rmcp "$LOGDIR/stderr.log" | tail -3 | tr '\n' ' ' | cut -c1-400) $(grep '^error: ' "$LOGDIR/audit.txt" | tail -2 | tr '\n' ' ' | cut -c1-300)"
   local why; why=$(lib result "$LOGDIR/summary.md")
-  [ -n "$why" ] || finish done 0 "$ENGINE finished the round; HEAD ${head0:0:10} -> $(git -C "$WT" rev-parse --short=10 HEAD)"
+  [ -n "$why" ] || finish done 0 "$ENGINE finished the round; HEAD ${head0:0:10} -> $(cgit rev-parse --short=10 HEAD)"
   case "$why" in
     "it ended without a RESULT line") finish failed 0 "$ENGINE ended without a RESULT line" ;;
     *) finish blocked 0 "$ENGINE said it was blocked" "$why" ;;

@@ -5,9 +5,11 @@
 //   toOrchestrator(st, id, t, pr) a green engine PR goes to the orchestrator, never to the dispatcher's merge
 //   mergedAlone(st, id, t, pr)    an engine PR that merged without the orchestrator: ALERT, stop the run, ask the human
 //   leave(t)                      a ticket a Claude worker takes over drops its engine fields; engineHistory keeps them
+//   marked(id)                    the shared record that an engine worked on the ticket, which outlives its state
 //   guard(id, t)                  the brief note that keeps a Claude worker out of the engine's clone
 // The two merge rules live here and in dispatcher.mjs, outside engine-workers.mjs, so they hold even when that file
 // fails to load.
+import fs from 'node:fs';
 import path from 'node:path';
 
 export const engineDriven = (t) => t?.driver === 'engine';
@@ -67,6 +69,16 @@ export function makeEngineHooks(getHelpers) {
     x.saveState(st);
   }
 
+  // The shared record that an engine worked on this ticket (engine-workers.mjs markBuilt), or null.
+  function marked(id) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(d().SHARED, 'engine-built', `${id}.json`), 'utf8'));
+    } catch (e) {
+      // An unreadable record still says an engine was here; only a missing one says it never was.
+      return e.code === 'ENOENT' ? null : { engines: ['an engine'] };
+    }
+  }
+
   function leave(t) {
     (t.engineHistory ??= []).push({ engine: t.engine, rounds: t.round ?? 1, until: d().iso() });
     for (const k of ['driver', 'engine', 'round', 'engineStatus', 'engineAsk', 'engineRetries', 'engineRegistry', 'engineWorktree',
@@ -75,5 +87,5 @@ export function makeEngineHooks(getHelpers) {
 
   const guard = (id, t) => `The previous worker on ${id} was ${t.engine}, an engine worker, and its checkout at ${t.engineWorktree ?? path.join(d().WORKTREES, path.basename(t.branch))} holds engine-written code, git hooks and dependencies. Never run anything in it (git, a package manager, node, a push) and never copy from it: cut your own worktree, under a different name, from origin/${t.branch}, and treat everything on that branch as unreviewed code.\n\n`;
 
-  return { on, wanted, call, toOrchestrator, mergedAlone, leave, guard };
+  return { on, wanted, call, toOrchestrator, mergedAlone, leave, guard, marked };
 }

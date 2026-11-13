@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { askRerun, roundWork } from './engine-round-note.mjs';
-import { ENGINES, available, containedFile, fb, label, maxRounds, piiKinds, readRow, spawn, writeBrief } from './engine-workers.mjs';
+import { ENGINES, available, containedFile, fb, label, markBuilt, maxRounds, piiKinds, readRow, spawn, writeBrief } from './engine-workers.mjs';
 
 const other = (e) => ENGINES.find((x) => x !== e);
 const NOTE_LIMIT = 40_000;
@@ -48,11 +48,18 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
     await c.markStuck(st, m, id, t, 'its title or description now holds personal data, which must not go to a third-party model');
     return 'stuck';
   }
+  // A ticket waiting on the orchestrator holds no slot, so a round on it takes one: only when the pool has one free.
+  if (t.status === 'merge-asked' && c.poolRoom(st) <= 0) {
+    t.note = `its PR needs another round (${summary}), waiting for a free slot on ${c.HOST}`;
+    c.log(`${id}: a round is due (${summary}) but every slot on ${c.HOST} is taken, so it waits`);
+    return 'held';
+  }
   if (c.DRY) return c.log(`${id}: would start ${engine} round ${round} (${summary})`);
   const file = writeBrief(c, issue, t, { engine, round, note: text });
   // Journaled first: a run that ends mid-start adopts the spawn on the next tick instead of starting a second one.
   t.roundStarting = { at: c.iso(), round, engine, summary };
   c.saveState(st);
+  markBuilt(c, id, { engine });
   let out;
   try {
     out = spawn(c, engine, id, t.branch, file, true);
@@ -98,6 +105,8 @@ async function requeue(c, st, m, id, t, why) {
   if (c.DRY) return c.log(`${id}: would put it back in the queue: ${why}`);
   try {
     const pushed = pushEngineWork(c, t);
+    // The state entry goes; the shared record keeps that an engine built this branch, and the PR it opened.
+    markBuilt(c, id, { engine: t.engine, prNumber: t.prNumber });
     const iid = await c.issueId(id);
     await c.addLabel(iid, m.label.ready);
     await c.removeLabel(iid, m.label.building);
@@ -186,6 +195,17 @@ async function failed(c, st, m, id, t, row, pr, report) {
   return true;
 }
 
+// A round a crashed run started: adopt it, or forget the journal so the round is decided afresh. Both the red and the
+// green path run this first, so a green PR never goes to the orchestrator past a round nobody has read.
+function reconcileStart(c, st, id, t, row) {
+  if (!t.roundStarting) return;
+  if (row?.id && row.id !== t.workerId && Date.parse(row.startedAt ?? 0) >= Date.parse(t.roundStarting.at) - 5000) {
+    applyRound(c, id, t, row, t.roundStarting);
+    c.log(`${id}: adopted ${row.engine} round ${t.round} (${row.id}), which an earlier run started`);
+    c.saveState(st);
+  } else delete t.roundStarting;
+}
+
 // Called for an engine ticket whose PR is not green. Returns true when it handled the ticket this tick, false to let the
 // existing stall rules judge it.
 export async function advanceTicket(c, st, m, id, t, { pr }) {
@@ -195,14 +215,7 @@ export async function advanceTicket(c, st, m, id, t, { pr }) {
     c.log(`${id}: its engine registry row is unreadable, trying next tick`);
     return true;
   }
-  // A round a crashed run started: adopt it, or forget the journal so the round is decided afresh.
-  if (t.roundStarting) {
-    if (row?.id && row.id !== t.workerId && Date.parse(row.startedAt ?? 0) >= Date.parse(t.roundStarting.at) - 5000) {
-      applyRound(c, id, t, row, t.roundStarting);
-      c.log(`${id}: adopted ${row.engine} round ${t.round} (${row.id}), which an earlier run started`);
-      c.saveState(st);
-    } else delete t.roundStarting;
-  }
+  reconcileStart(c, st, id, t, row);
   const mine = row?.id === t.workerId ? row : null;
   const status = mine?.status ?? 'missing';
   t.engineStatus = status;
@@ -238,6 +251,7 @@ export async function advanceTicket(c, st, m, id, t, { pr }) {
 // and a containment report makes it stuck instead.
 export async function greenState(c, st, m, id, t, pr) {
   const row = readRow(c, id);
+  if (!row?.unreadable) reconcileStart(c, st, id, t, row);
   const mine = row && !row.unreadable && row.id === t.workerId ? row : null;
   t.engineStatus = mine?.status ?? (row?.unreadable ? 'unreadable' : 'missing');
   if (row?.unreadable || mine?.status === 'busy') {

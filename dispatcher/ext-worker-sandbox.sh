@@ -124,6 +124,9 @@ sbpl() {
   printf ' (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (literal "/dev/ptmx") (subpath "/dev/fd") (regex #"^/dev/tty")'
   printf ')\n(deny file-write*'
   for p in $(protected_paths); do printf ' (subpath "%s")' "$p"; done
+  # The .git entry itself and the files that point git elsewhere: replacing .git, or writing commondir or gitdir, would
+  # send the supervisor's own git commands (outside the sandbox) to a config the engine wrote.
+  printf ' (literal "%s/.git") (literal "%s/.git/commondir") (literal "%s/.git/gitdir")' "$WT" "$WT" "$WT"
   printf ')\n'
   # Mach services: none but the ones a build needs. That shuts the keychain, the pasteboard, LaunchServices, the
   # window server and Accessibility.
@@ -133,13 +136,18 @@ sbpl() {
   printf '(deny job-creation)\n(deny lsopen)\n(deny appleevent-send)\n(deny signal)\n(allow signal (target same-sandbox))\n'
   printf '(deny network-outbound (remote ip "*:*"))\n(allow network-outbound'
   for p in $LOOPBACK_PORTS "$PROXY_PORT"; do printf ' (remote ip "localhost:%s")' "$p"; done
-  printf ')\n'
+  # Unix sockets too, which an IP rule does not cover: Docker's, a database's, an agent's. Only the system resolver
+  # (name lookups, a known leak in ext-worker.sh's header) and the system log stay open.
+  printf ')\n(deny network-outbound (remote unix-socket))\n'
+  printf '(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")) (remote unix-socket (path-literal "/private/var/run/syslog")))\n'
 }
 
 # --- Linux: bubblewrap -----------------------------------------------------------------------------------------
 
 # bwrap mounts later entries over earlier ones: the empty $HOME first, then the allowed paths back on top. It can't
-# mount over a path that doesn't exist, so a missing one is skipped. Ubuntu 24.04 and later stop unprivileged user
+# mount over a path that doesn't exist, so a missing one is skipped (a .git/commondir the engine creates is caught by
+# the supervisor's clone check after the run). /run is an empty tmpfs: the read-only root still lets a process connect
+# to a Unix socket, and /run holds Docker's, the system bus and the session buses. /var/run points into it. Ubuntu 24.04 and later stop unprivileged user
 # namespaces through AppArmor, so bwrap needs a profile that grants it userns (dispatcher/README.md).
 BW=()
 bw_ro() { [ ! -e "$1" ] || BW+=(--ro-bind "$1" "$1"); }
@@ -147,7 +155,7 @@ bw_rw() { [ ! -e "$1" ] || BW+=(--bind "$1" "$1"); }
 bwrap_args() {
   local p
   BW=(bwrap --die-with-parent --new-session --unshare-pid --unshare-ipc --unshare-uts --unshare-net --unshare-cgroup-try
-    --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /var/tmp --tmpfs /dev/shm --tmpfs /run/user --tmpfs "$HOME")
+    --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /var/tmp --tmpfs /dev/shm --tmpfs /run --tmpfs "$HOME")
   for p in ${TOOL_READ[@]+"${TOOL_READ[@]}"} $(cli_bin_read "$ENGINE") "$EW/shims" "$EW/bin" "$RUN"; do bw_ro "$p"; done
   bw_ro "$MAIN/.git"
   bw_rw "$WT"
@@ -253,4 +261,7 @@ TIMEOUT_PERL='
   $SIG{$_} = sub { kill "TERM", -$pid; sleep 2; kill "KILL", -$pid; exit 143; } for qw(TERM INT HUP);
   alarm $t if $t > 0;
   waitpid($pid, 0);
-  exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);'
+  my $rc = ($? & 127) ? 128 + ($? & 127) : $? >> 8;
+  # Whatever the engine left running in its process group ends with it, so nothing changes the clone after the audit.
+  kill "TERM", -$pid; select(undef, undef, undef, 0.5); kill "KILL", -$pid;
+  exit $rc;'

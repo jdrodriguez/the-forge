@@ -62,19 +62,24 @@ function otherRepoPath(text, ctx) {
 // Where a command name can start: the line's start, after a separator or quote, or after a word that runs one. The
 // word must follow a space or the line's start: \b never matches before "-c", so `sh -c doppler` would pass.
 const AT_COMMAND = String.raw`(?:^|[;&|(\x60{'"]\s*|(?:^|\s)(?:exec|env|xargs|sudo|command|nohup|time|then|do|-c|-lc)\s+)`;
+// gh and its flags, a flag's value included (gh --repo o/r workflow run puts o/r before the subcommand).
+const GH = String.raw`\bgh\s+(?:(?:-R|--repo|--hostname)\s+\S+\s+|-\S+\s+)*`;
+const gh = (rest) => new RegExp(`${GH}${rest}`);
 const COMMAND_RULES = [
   ['ran doppler', new RegExp(`${AT_COMMAND}(?:\\S*/)?doppler(?:\\s|$|['"])`)],
-  ['merged a PR through gh', /\bgh\s+(?:-\S+\s+)*pr\s+merge\b/],
-  ['started a workflow through gh', /\bgh\s+(?:-\S+\s+)*workflow\s+(?:run|enable)\b/],
-  ['used gh release', /\bgh\s+(?:-\S+\s+)*release\s+(?:create|upload|edit|delete)\b/],
-  ['used gh secret or variable', /\bgh\s+(?:-\S+\s+)*(?:secret|variable)\b/],
-  ['read the gh token', /\bgh\s+(?:-\S+\s+)*auth\s+(?:token|refresh|login|logout|switch|setup-git)\b/],
-  ['changed the repo through gh', /\bgh\s+(?:-\S+\s+)*(?:repo\s+(?:edit|delete|rename|archive)|ruleset|api\s+[^\n]*\b(?:rulesets|collaborators|branches\/[^\s/]+\/protection)\b)/],
-  ['merged through the GraphQL API', /\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch|updateRef|deleteRef)\b/],
-  ['merged or dispatched through the GitHub API', /\b(?:gh\s+api|curl|wget|http)\b[^\n]*(?:\/merges?\b|\/dispatches\b|\/actions\/workflows\b|\/pulls\/\d+\/merge\b|\/git\/refs\/heads\/(?:main|master)\b)/],
-  ['read the keychain', /\bsecurity\s+(?:find-(?:generic|internet)-password|dump-keychain|export|unlock-keychain)\b/],
-  ['tried to leave the sandbox through launchd, LaunchServices or AppleEvents', /\b(?:launchctl\s+(?:submit|load|bootstrap|start|kickstart)|osascript|open\s+-[a-zA-Z]*a\b|open\s+\S+\.(?:app|command)\b)/],
-  ['tried to leave the sandbox through systemd or the session bus', /\b(?:systemd-run|systemctl\s+--user\s+(?:start|enable|link)|dbus-send|busctl|gdbus)\b/],
+  ['merged a PR through gh', gh(String.raw`pr\s+(?:(?:-R|--repo)\s+\S+\s+)?merge\b`)],
+  ['started a workflow through gh', gh(String.raw`workflow\s+(?:run|enable)\b`)],
+  ['used gh release', gh(String.raw`release\s+(?:create|upload|edit|delete)\b`)],
+  ['used gh secret or variable', gh(String.raw`(?:secret|variable)\b`)],
+  ['read the gh token', gh(String.raw`auth\s+(?:token|refresh|login|logout|switch|setup-git)\b`)],
+  ['changed the repo through gh', gh(String.raw`(?:repo\s+(?:edit|delete|rename|archive)|ruleset|api\s+[^\n]*\b(?:rulesets|collaborators|branches\/[^\s/]+\/protection)\b)`)],
+  // A mutation's name only counts on a line that calls the API, so a search of the code for it is not an attempt.
+  ['merged through the GraphQL API', /\b(?:gh\s+[^\n]*\bapi|curl|wget|http)\b[^\n]*\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch|updateRef|deleteRef)\b/],
+  ['merged or dispatched through the GitHub API', /\b(?:gh\s+[^\n]*\bapi|curl|wget|http)\b[^\n]*(?:\/merges?\b|\/dispatches\b|\/actions\/workflows\b|\/pulls\/\d+\/merge\b|\/git\/refs\/heads\/(?:main|master)\b)/],
+  ['read the keychain', new RegExp(`${AT_COMMAND}(?:\\S*/)?security\\s+(?:find-(?:generic|internet)-password|dump-keychain|export|unlock-keychain)\\b`)],
+  ['tried to leave the sandbox through launchd, LaunchServices or AppleEvents', new RegExp(`${AT_COMMAND}(?:\\S*/)?(?:launchctl\\s+(?:submit|load|bootstrap|start|kickstart)|osascript\\b|open\\s+-[a-zA-Z]*a\\b|open\\s+\\S+\\.(?:app|command)\\b)`)],
+  ['tried to leave the sandbox through systemd or the session bus', new RegExp(`${AT_COMMAND}(?:\\S*/)?(?:systemd-run|systemctl\\s+--user\\s+(?:start|enable|link)|dbus-send|busctl|gdbus)\\b`)],
+  ['reached the Docker daemon', new RegExp(`${AT_COMMAND}(?:\\S*/)?(?:docker|podman)\\s|docker\\.sock`)],
 ];
 
 // A push names the base branch as its target (main, HEAD:main, refs/heads/main, :main) or forces. Each command line of
@@ -202,7 +207,8 @@ export function auditStream(engine, text, ctx) {
 export const RUNS_ELSEWHERE = /^(?:\.github\/workflows\/|\.github\/actions\/|\.husky\/|\.claude\/settings(?:\.local)?\.json$|\.claude\/hooks\/|\.mcp\.json$|\.grok\/|\.codex\/|\.cursor\/|\.vscode\/tasks\.json$|\.gitlab-ci\.yml$|\.circleci\/)/;
 
 export function branchHazards(worktree, base) {
-  const git = (...a) => execFileSync('git', ['-C', worktree, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 });
+  // The supervisor checked the clone's layout first; the settings that run programs are off here as well.
+  const git = (...a) => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-C', worktree, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 });
   let files = [];
   try {
     files = git('diff', '--name-only', `${base}...HEAD`).split('\n');
