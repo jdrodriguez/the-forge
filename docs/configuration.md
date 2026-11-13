@@ -89,7 +89,7 @@ Copy this file to agent-queue.config.json (gitignored) and fill it in. Keys endi
 | Key | Example | What it does |
 |---|---|---|
 | `dispatcher.enabledHosts` | `["main-mac"]` | Short hostnames (hostname -s) that run ticks. A host missing here does nothing. |
-| `dispatcher.hosts` | `{"main-mac":{"maxWorkers":4,"accounts":["a","b","c"],"fallbackAccou...` | Per machine: maxWorkers caps working fleet workers there (queue and outside ones). accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. |
+| `dispatcher.hosts` | `{"main-mac":{"maxWorkers":4,"accounts":["a","b","c"],"fallbackAccou...` | Per machine: maxWorkers caps working fleet workers there (queue and outside ones). accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. engines (optional) lists the engines that may run on that machine, out of dispatcher.externalBuilders.fallback.engines: absent means every one of them, [] means none. |
 | `dispatcher.maxConcurrent` | `8` | Workers across all machines, counted through the building label. A bundle counts as one. |
 | `dispatcher.maxDispatchesPerDay` | `null` | null means no daily cap; worker slots and maxConcurrent still bound the queue. |
 | `dispatcher.maxLoadPerCore` | `1.5` | A machine whose 5-minute load average is over this times its core count claims nothing that tick. |

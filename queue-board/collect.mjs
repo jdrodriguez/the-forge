@@ -224,8 +224,10 @@ console.log(JSON.stringify({
   maxWorkers: hostCfg.maxWorkers ?? dc.workerCap,
   sentryWorkers: hostCfg.sentryWorkers ?? 0,
   // The engines the dispatcher may give a ticket here as accounts in this machine's pool, beside the Claude ones, while
-  // they are on. A dispatcher with no engine workers (no dispatcher.externalBuilders) gives none.
-  engineAccounts: dc.externalBuilders?.fallback?.enabled ? dc.externalBuilders.fallback.engines ?? ['codex', 'grok'] : [],
+  // they are on, narrowed by hosts.<this machine>.engines when it is set. A dispatcher with no engine workers (no
+  // dispatcher.externalBuilders) gives none.
+  engineAccounts: dc.externalBuilders?.fallback?.enabled
+    ? (dc.externalBuilders.fallback.engines ?? ['codex', 'grok']).filter((e) => !Array.isArray(hostCfg.engines) || hostCfg.engines.includes(e)) : [],
   maxDispatchesPerDay: dc.maxDispatchesPerDay,
   load: { cores: os.cpus().length, avg5: os.loadavg()[1], maxPerCore: hostCfg.maxLoadPerCore ?? dc.maxLoadPerCore },
   memFreePercent: memFree(),
