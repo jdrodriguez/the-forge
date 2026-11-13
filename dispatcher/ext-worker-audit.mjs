@@ -208,7 +208,8 @@ export const RUNS_ELSEWHERE = /^(?:\.github\/workflows\/|\.github\/actions\/|\.h
 
 export function branchHazards(worktree, base) {
   // The supervisor checked the clone's layout first; the settings that run programs are off here as well.
-  const git = (...a) => execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-C', worktree, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26 });
+  const git = (...a) => execFileSync('git', ['-c', 'core.attributesFile=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-C', worktree, ...a],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 26, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } });
   let files = [];
   try {
     files = git('diff', '--name-only', `${base}...HEAD`).split('\n');

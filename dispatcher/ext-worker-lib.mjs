@@ -10,7 +10,8 @@
 //   branch <worktree> <base>                 lists the branch's changes to paths that run code outside the sandbox
 //   result <summary>                         reads the closing RESULT line
 //   limit <log> <stream>                     exits 0 when the CLI's own output says it hit a plan or rate limit
-//   auth-sync <engine> <run copy> <real>     copies a refreshed auth file back, only for the same account
+//   auth-sync <engine> <run copy> <real>     copies refreshed tokens back, only for the same account
+//   safe-copy <src> <dst>                    copies a file the engine wrote, only a plain file with one link, 64 KB at most
 //   push-shim <file>                         writes the engine's gated-push command (push.gates, then git push)
 //   port                                     prints a free loopback port
 import fs from 'node:fs';
@@ -20,6 +21,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, ROOT } from '../lib/config.mjs';
 import { auditStream, branchHazards } from './ext-worker-audit.mjs';
+import { authSync, envFiles, envSecrets, LIMIT, readResult, safeCopy, scanPrompt } from './ext-worker-checks.mjs';
+
+export { authSync, envFiles, envSecrets, LIMIT, readResult, safeCopy, scanPrompt };
 
 // --- registry -------------------------------------------------------------------------------------------------
 
@@ -37,103 +41,6 @@ export function mergeRegistry(file, patch) {
   fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`);
   fs.renameSync(tmp, file);
   return next;
-}
-
-// --- what the engine is sent ----------------------------------------------------------------------------------
-
-const SECRET_SHAPES = [
-  ['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
-  ['an Anthropic or OpenAI key', /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/],
-  ['a GitHub token', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,})/],
-  ['a Linear key', /\blin_(?:api|oauth)_[A-Za-z0-9]{20,}/],
-  ['a Slack token', /\bxox[abpr]-[A-Za-z0-9-]{10,}/],
-  ['a Doppler token', /\bdp\.(?:st|pt|sa|ct)\.[A-Za-z0-9._-]{20,}/],
-  ['an AWS key', /\bAKIA[0-9A-Z]{16}\b/],
-  ['a Google key', /\bAIza[0-9A-Za-z_-]{30,}/],
-  ['a database URL with a password', /\b(?:postgres(?:ql)?|redis|mysql):\/\/[^:\s/]+:[^@\s]+@(?!localhost|127\.0\.0\.1|\[::1\])/],
-];
-const SECRET_KEY = /KEY|SECRET|TOKEN|PASSWORD|PASSWD|DSN|CREDENTIAL|DATABASE_URL|PRIVATE/i;
-
-// The values behind secret-named keys in a .env file: the brief must not quote any of them.
-export function envSecrets(text) {
-  const out = [];
-  for (const line of text.split('\n')) {
-    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (!m || !SECRET_KEY.test(m[1])) continue;
-    const value = m[2].replace(/^(['"])(.*)\1$/, '$2');
-    if (value.length >= 12 && !/^(?:https?|postgres(?:ql)?|redis):\/\/(?:[^@/]*@)?(?:localhost|127\.0\.0\.1)/.test(value)) out.push({ key: m[1], value });
-  }
-  return out;
-}
-
-export function scanPrompt(text, secrets = []) {
-  const found = SECRET_SHAPES.filter(([, rx]) => rx.test(text)).map(([what]) => what);
-  for (const { key, value } of secrets) if (text.includes(value)) found.push(`the value of ${key} from a .env file`);
-  return [...new Set(found)];
-}
-
-// The .env files in the worktree and the main checkout, at the root, under packages/ and apps/, plus premerge.copyFiles.
-export function envFiles(roots, copyFiles = []) {
-  const files = [];
-  for (const root of roots.filter(Boolean)) {
-    for (const f of ['.env', '.env.local', '.dev.vars', ...copyFiles]) files.push(path.join(root, f));
-    for (const group of ['packages', 'apps']) {
-      try {
-        for (const pkg of fs.readdirSync(path.join(root, group))) files.push(path.join(root, group, pkg, '.env'));
-      } catch {
-        // no such folder
-      }
-    }
-  }
-  return [...new Set(files)].filter((f) => fs.existsSync(f));
-}
-
-// --- what the engine said -------------------------------------------------------------------------------------
-
-// The last non-empty line decides. A run that ends without one was cut off, or forgot; either way nobody said it's done.
-export function readResult(summary) {
-  const last = summary.trimEnd().split('\n').filter((l) => l.trim()).at(-1) ?? '';
-  const clean = last.replace(/^[\s*_`#>-]+/, '').replace(/[\s*_`]+$/, '');
-  if (/^RESULT:\s*DONE\b/i.test(clean)) return { done: true, reason: null };
-  const blocked = clean.match(/^RESULT:\s*BLOCKED\b[:\s-]*(.*)$/i);
-  return { done: false, reason: blocked ? blocked[1] || 'no reason given' : 'it ended without a RESULT line' };
-}
-
-// The CLI's own words for a spent plan. Only the CLI's stderr and its error events count: a model that writes "rate
-// limit" in its own text is not out of usage.
-export const LIMIT = /usage limit|rate[ -]?limit|quota|429|too many requests|plan limit|exceeded your|credits? (?:exhausted|depleted)|out of credits|limit reached|reached your .*limit/i;
-
-// --- the CLI's auth file --------------------------------------------------------------------------------------
-
-// A run works on a copy of the CLI's auth file. When the CLI refreshed it, the refresh may have rotated the refresh
-// token, so the copy goes back, but only when it is the same account and newer. Anything inside the sandbox could have
-// rewritten the copy, and another account's tokens in the owner's own CLI would send their next session to that account.
-function authIdentity(engine, j) {
-  if (engine === 'codex') return j?.tokens?.account_id ? { id: j.tokens.account_id, at: Date.parse(j.last_refresh ?? '') || 0 } : null;
-  const keys = Object.keys(j ?? {});
-  if (keys.length !== 1) return null;
-  const e = j[keys[0]];
-  return e?.user_id ? { id: `${keys[0]}|${e.user_id}`, at: Date.parse(e.expires_at ?? '') || 0 } : null;
-}
-
-export function authSync(engine, runCopy, real) {
-  let a;
-  let b;
-  try {
-    a = JSON.parse(fs.readFileSync(runCopy, 'utf8'));
-    b = JSON.parse(fs.readFileSync(real, 'utf8'));
-  } catch {
-    return 'auth-sync: skipped, a file is missing or not JSON';
-  }
-  const ia = authIdentity(engine, a);
-  const ib = authIdentity(engine, b);
-  if (!ia || !ib) return 'auth-sync: skipped, no account in one of the files';
-  if (ia.id !== ib.id) return "auth-sync: refused, the run's copy names another account";
-  if (ia.at <= ib.at) return 'auth-sync: nothing newer to copy back';
-  const tmp = `${real}.ext-worker.${process.pid}`;
-  fs.writeFileSync(tmp, fs.readFileSync(runCopy), { mode: 0o600 });
-  fs.renameSync(tmp, real);
-  return 'auth-sync: copied the refreshed auth file back';
 }
 
 // --- config for the shell -------------------------------------------------------------------------------------
@@ -239,6 +146,7 @@ async function main([cmd, ...args]) {
     console.log(authSync(args[0], args[1], args[2]));
     return 0;
   }
+  if (cmd === 'safe-copy') return safeCopy(args[0], args[1]) ? 0 : 1;
   if (cmd === 'port') {
     console.log(await freePort());
     return 0;

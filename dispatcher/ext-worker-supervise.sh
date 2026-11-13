@@ -7,6 +7,8 @@ json_str() { "$HOST_NODE" -e 'process.stdout.write(JSON.stringify(require("fs").
 finish() { # <status> <exitCode> <report> [question]
   local q=null
   net_down
+  # A refreshed sign-in goes back to the CLI only from a round that ended clean: never from a failed or contained one.
+  [ "$1" = failed ] || [ -z "${RUN:-}" ] || lib auth-sync "$ENGINE" "$RUN/cli-home/auth.json" "$(cli_home "$ENGINE")/auth.json" > "$LOGDIR/auth-sync.txt" 2>&1
   # The run folder holds the copy of the CLI's auth file; the logs and the worktree stay.
   case "${RUN:-}" in "$EW"/runs/?*) rm -rf "$RUN" ;; esac
   [ -z "${4:-}" ] || q=$(printf '%s' "$4" | head -c 4000 | json_str)
@@ -81,8 +83,9 @@ gh_token() {
 # The clone still is what start made: .git a real folder (not a link, not a file pointing elsewhere), with no commondir
 # or gitdir sending git to another config. Checked before the supervisor runs any git command on it after the run.
 clone_layout_ok() { [ -d "$WT/.git" ] && [ ! -L "$WT/.git" ] && [ ! -e "$WT/.git/commondir" ] && [ ! -e "$WT/.git/gitdir" ]; }
-# git on the clone, outside the sandbox, with the settings that run programs turned off.
-cgit() { git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= -C "$WT" "$@"; }
+# git on the clone, outside the sandbox, with the settings that run programs turned off, and without your global or
+# system config: an attribute the engine wrote in the clone could otherwise pick a filter defined there (git lfs).
+cgit() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -c core.attributesFile=/dev/null -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= -C "$WT" "$@"; }
 
 git_guard_sig() { (cd "$WT" && find $(protected_paths | sed "s|$WT/||g") -type f 2>/dev/null | sort | xargs cksum 2>/dev/null); }
 
@@ -129,12 +132,18 @@ cmd_supervise() {
   # engine tried to get code run with the supervisor's rights.
   clone_layout_ok || finish failed "$rc" "containment: the clone's .git was replaced or redirected (commondir, gitdir or a link); no git command ran on it; files kept in $LOGDIR"
   [ "$guard0" = "$(git_guard_sig)" ] || finish failed "$rc" "containment: the clone's git hooks, config or hook folder changed during the run; files kept in $LOGDIR"
-  lib auth-sync "$ENGINE" "$RUN/cli-home/auth.json" "$(cli_home "$ENGINE")/auth.json" > "$LOGDIR/auth-sync.txt" 2>&1
 
   # --- what happened ---
   lib stream "$ENGINE" "$LOGDIR/stream.jsonl" "$WT" "$LOGDIR/summary.md" "$RUN_TMP" > "$LOGDIR/audit.txt" 2>&1
-  [ "$ENGINE" != codex ] || [ ! -s "$RUN_TMP/final.md" ] || cp "$RUN_TMP/final.md" "$LOGDIR/summary.md"
   local flags=() l hazards
+  # Files the engine wrote are read out here only through safe-copy: a link or a hard link could point at a file the
+  # sandbox kept from the engine, and the supervisor would read it with its own rights.
+  if [ "$ENGINE" = codex ] && { [ -e "$RUN_TMP/final.md" ] || [ -L "$RUN_TMP/final.md" ]; }; then
+    lib safe-copy "$RUN_TMP/final.md" "$LOGDIR/summary.md" || flags+=("its final reply file was a link or not a plain file")
+  fi
+  if [ -e "$RUN_TMP/ENGINE_QUESTION.md" ] || [ -L "$RUN_TMP/ENGINE_QUESTION.md" ]; then
+    lib safe-copy "$RUN_TMP/ENGINE_QUESTION.md" "$LOGDIR/question.md" || flags+=("its question file was a link or not a plain file")
+  fi
   while IFS= read -r l; do flags+=("${l#violation: }"); done < <(grep '^violation: ' "$LOGDIR/audit.txt")
   if [ "$ENGINE" = grok ] && grep -q 'name no tool' "$LOGDIR/stderr.log" 2>/dev/null; then
     flags+=("grok did not recognize a name in --tools, so tools outside the allowlist were on")
@@ -148,9 +157,8 @@ cmd_supervise() {
   fi
   local branch1; branch1=$(cgit symbolic-ref -q --short HEAD || echo detached)
   [ "$branch1" = "$branch0" ] || finish failed "$rc" "the worktree moved from $branch0 to $branch1"
-  if [ -s "$RUN_TMP/ENGINE_QUESTION.md" ]; then
-    cp "$RUN_TMP/ENGINE_QUESTION.md" "$LOGDIR/question.md"
-    finish blocked "$rc" "$ENGINE asked a question and stopped" "$(cat "$RUN_TMP/ENGINE_QUESTION.md")"
+  if [ -s "$LOGDIR/question.md" ]; then
+    finish blocked "$rc" "$ENGINE asked a question and stopped" "$(cat "$LOGDIR/question.md")"
   fi
   [ "$rc" -eq 0 ] || finish failed "$rc" "$ENGINE exited $rc: $(grep -v rmcp "$LOGDIR/stderr.log" | tail -3 | tr '\n' ' ' | cut -c1-400) $(grep '^error: ' "$LOGDIR/audit.txt" | tail -2 | tr '\n' ' ' | cut -c1-300)"
   local why; why=$(lib result "$LOGDIR/summary.md")

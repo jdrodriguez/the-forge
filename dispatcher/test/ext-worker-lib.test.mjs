@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { auditStream, branchHazards, commandViolations, pushViolation } from '../ext-worker-audit.mjs';
-import { authSync, envSecrets, pushShim, readResult, scanPrompt, shellConfig } from '../ext-worker-lib.mjs';
+import { authSync, envSecrets, pushShim, readResult, safeCopy, scanPrompt, shellConfig } from '../ext-worker-lib.mjs';
 import { hostAllowed } from '../ext-worker-net.mjs';
 
 const HOME = '/home/alex';
@@ -119,6 +119,33 @@ test("a refreshed auth file goes back only for the same account and only when it
   put('run.json', 'acct-1', '2026-02-01T00:00:00Z');
   assert.match(authSync('codex', path.join(dir, 'run.json'), path.join(dir, 'real.json')), /copied/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'real.json'), 'utf8')).last_refresh, '2026-02-01T00:00:00Z');
+  // Only token fields come back; anything else the copy carries stays out of the real file.
+  fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({ tokens: { account_id: 'acct-1', refresh_token: 'r2', extra: 'x' }, last_refresh: '2026-03-01T00:00:00Z', hooks: 'run-me' }));
+  authSync('codex', path.join(dir, 'run.json'), path.join(dir, 'real.json'));
+  const real = JSON.parse(fs.readFileSync(path.join(dir, 'real.json'), 'utf8'));
+  assert.equal(real.tokens.refresh_token, 'r2');
+  assert.equal(real.tokens.extra, undefined);
+  assert.equal(real.hooks, undefined);
+  fs.rmSync(path.join(dir, 'run.json'));
+  fs.symlinkSync(path.join(dir, 'real.json'), path.join(dir, 'run.json'));
+  assert.match(authSync('codex', path.join(dir, 'run.json'), path.join(dir, 'real.json')), /not a plain file/);
+});
+
+test('a file the engine wrote is read out only as a plain file with one link, and only its first 64 KB', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-safe-'));
+  const secret = path.join(dir, 'secret');
+  fs.writeFileSync(secret, 'kept from the engine');
+  fs.writeFileSync(path.join(dir, 'q.md'), 'Question: which colour?');
+  assert.equal(safeCopy(path.join(dir, 'q.md'), path.join(dir, 'out')), true);
+  assert.equal(fs.readFileSync(path.join(dir, 'out'), 'utf8'), 'Question: which colour?');
+  fs.symlinkSync(secret, path.join(dir, 'link.md'));
+  assert.equal(safeCopy(path.join(dir, 'link.md'), path.join(dir, 'out2')), false);
+  fs.linkSync(secret, path.join(dir, 'hard.md'));
+  assert.equal(safeCopy(path.join(dir, 'hard.md'), path.join(dir, 'out3')), false);
+  assert.equal(fs.existsSync(path.join(dir, 'out2')) || fs.existsSync(path.join(dir, 'out3')), false);
+  fs.writeFileSync(path.join(dir, 'big.md'), 'x'.repeat(100_000));
+  safeCopy(path.join(dir, 'big.md'), path.join(dir, 'out4'));
+  assert.equal(fs.statSync(path.join(dir, 'out4')).size, 65_536);
 });
 
 test('the shell view of the config quotes every value and drops env names that look like credentials', () => {

@@ -136,6 +136,12 @@ kernel() {
   node -e 'require("net").createServer(c=>c.end("hi\n")).listen(process.argv[1])' "$sock" & BG+=($!); sleep 0.5
   inside "$e" node -e 'require("net").connect(process.argv[1]).on("data",()=>process.exit(0)).on("error",()=>process.exit(1))' "$sock" \
     && flunk "$e kernel: connected to a Unix socket outside" || pass "$e kernel: Unix sockets outside refused"
+  # Another terminal session of the user's: opening it for writing (nothing is written) must be refused.
+  local tty; tty=$(ls /dev/ttys[0-9]* 2>/dev/null | head -1)
+  if [ "$OS" = Darwin ] && [ -n "$tty" ]; then
+    inside "$e" node -e 'try{require("fs").closeSync(require("fs").openSync(process.argv[1],"w"));process.exit(0)}catch{process.exit(1)}' "$tty" \
+      && flunk "$e kernel: opened another terminal ($tty)" || pass "$e kernel: other terminals refused ($tty)"
+  fi
   [ "$OS" = Darwin ] || { inside "$e" /usr/bin/test -e /run/docker.sock && flunk "$e kernel: /run/docker.sock is visible" || pass "$e kernel: /run is empty (no Docker socket, no system bus)"; }
   inside "$e" /usr/bin/touch "$WT/selftest-inside-$e" && [ -f "$WT/selftest-inside-$e" ] && pass "$e kernel: writes inside the worktree" || flunk "$e kernel: cannot write inside the worktree: $(tail -1 "$WORK/k.out")"
   rm -f "$WT/selftest-inside-$e"

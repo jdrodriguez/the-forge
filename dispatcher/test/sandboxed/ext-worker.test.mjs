@@ -87,6 +87,16 @@ test('a question ends the round blocked with the question; an escape ends it fai
   assert.match(c.report, /^containment: .*pushed to main/);
 });
 
+test('a question file that is a link is never read out: the round ends with a containment report', { skip, timeout: 120_000 }, async () => {
+  const w = engineWorld('ext-linkq');
+  runExt(w, ['start', 'codex', 'ABC-9', 'agent/abc-9', brief(w, 'FAKE: link-question\n')]);
+  const row = await waitRow(w, 'ABC-9');
+  assert.equal(row.status, 'failed');
+  assert.match(row.report, /^containment: .*its question file was a link/);
+  assert.equal(row.question, null);
+  assert.equal(fs.existsSync(path.join(row.logDir, 'question.md')), false);
+});
+
 test('a process the engine leaves running in its process group ends with the round', { skip, timeout: 120_000 }, async () => {
   const w = engineWorld('ext-linger');
   runExt(w, ['start', 'codex', 'ABC-8', 'agent/abc-8', brief(w, 'FAKE: linger\n')]);

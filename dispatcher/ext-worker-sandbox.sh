@@ -121,8 +121,11 @@ sbpl() {
   printf ')\n(deny file-write* (subpath "/"))\n'
   printf '(allow file-write* (subpath "%s") (subpath "%s") (subpath "%s") (subpath "%s/cli-home") (subpath "%s/pkg-cache") (subpath "%s/npm-cache") (subpath "%s/corepack")' \
     "$WT" "$RUN_TMP" "$RUN_HOME" "$RUN" "$EW" "$EW" "$EW"
-  printf ' (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (literal "/dev/ptmx") (subpath "/dev/fd") (regex #"^/dev/tty")'
-  printf ')\n(deny file-write*'
+  printf ' (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (literal "/dev/ptmx") (subpath "/dev/fd") (literal "/dev/tty")'
+  # A pty's own end only, through the extension macOS issues when the process opens /dev/ptmx: a plain /dev/ttys rule
+  # would let the engine open every other terminal session of the user.
+  printf ')\n(allow file-read* file-write* file-ioctl (require-all (regex #"^/dev/ttys[0-9]+") (extension "com.apple.sandbox.pty")))'
+  printf '\n(deny file-write*'
   for p in $(protected_paths); do printf ' (subpath "%s")' "$p"; done
   # The .git entry itself and the files that point git elsewhere: replacing .git, or writing commondir or gitdir, would
   # send the supervisor's own git commands (outside the sandbox) to a config the engine wrote.

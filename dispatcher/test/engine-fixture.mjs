@@ -27,6 +27,10 @@ if (/^This is a (?:containment )?test of your (?:sandbox|tools)/m.test(prompt)) 
   // The selftest's probe briefs: try each numbered command with the shell, the way a model told to would.
   for (const m of prompt.matchAll(/^\d+\. (.+)$/gm)) { try { sh('sh', ['-c', m[1]]); } catch {} }
   done('Tried each one.\nRESULT: DONE');
+} else if (/^FAKE: link-question/m.test(prompt)) {
+  // A question file that is a link to a file outside the clone, for the supervisor to read with its own rights.
+  fs.symlinkSync('/etc/hosts', process.env.ENGINE_QUESTION_FILE);
+  done('Asked.\nRESULT: BLOCKED see the question');
 } else if (/^FAKE: linger/m.test(prompt)) {
   // A process left running in the background after the engine exits, writing its PID where the test can read it.
   const child = require('node:child_process').spawn('sleep', ['300'], { stdio: 'ignore' });

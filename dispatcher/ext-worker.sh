@@ -64,6 +64,8 @@
 #    after the push.
 #  - The command guard (ext-worker-guard.sh) is a speed bump: an absolute path skips it. The audit reads the event
 #    stream after the run, as text, so it catches only the attempts it can read.
+#  - The CLI's refreshed tokens are copied back to its real auth file after a clean round (ext-worker-checks.mjs): the
+#    copy is engine-writable, so a round that passes the audit could plant tokens there for the same claimed account.
 #  - On macOS a process that calls setsid leaves the process group the time box kills. On Linux bwrap can't protect a
 #    path that doesn't exist yet (.git/commondir); the supervisor checks the clone's layout before any git runs on it.
 set -uo pipefail
