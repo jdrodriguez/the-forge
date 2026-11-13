@@ -3,8 +3,8 @@
 // edge dithered into the grass, broad patches of darker and sunlit grass with dithered edges, and fine blades lit at the
 // tip; long dry grass in Rohan; gravel and cracks on Erebor's stone; and by the season of the date small flowers in the
 // grass (spring and summer) or fallen leaves under Rivendell's trees (autumn). The landmarks are scenery-land-qd.js's
-// (Rivendell's pavilion, the Shire's hill, door, window, chimney, smoke and fence), scenery-rohan.js's (Rohan's tent
-// and pennant), scenery-erebor.js's (the wall, the gate and the forge) and scenery-falls.js's (Rivendell's waterfall);
+// (Rivendell's pavilion, the Shire's hill, door, window, chimney, smoke and fence), scenery-rohan.js's and
+// scenery-rohan-stables.js's (Meduseld on its hill, its pennant, and the stables), scenery-erebor.js's (the wall, the gate and the forge) and scenery-falls.js's (Rivendell's waterfall);
 // the lights that stay bright at night are scenery-lights.js's. What stands still is painted once per layout and season
 // into a layer (skLayer, scenery-sky.js); the smoke, the pennant, the falls' water and, with the wind (scene-wind.js),
 // the trees, the grass and the garden plants move each frame. The ground keeps to its realm's GROUND colours and the
@@ -259,7 +259,10 @@ function landStill(g, r, still = true, season = seasonNow()) {
     ereborWall(g, r);
     ereborGate(g, cx);
     ereborForge(g, r.x0);
-  } else rohanTent(g, cx);
+  } else {
+    rohanStables(g, r);
+    rohanMeduseld(g, r);
+  }
 }
 // Rivendell's trees, the line along the back of the valley first and then the tall ones, each swaying with the wind at
 // its column a little out of step with the rest.
@@ -276,7 +279,7 @@ function drawRealm(g, r, tick, sky) {
   const top = GROUND_Y - 50;
   const wind = landWind();
   const season = landSeasonNow();
-  const key = `${r.kind},${r.w},${season},${Boolean(wind)}`;
+  const key = `${r.kind},${r.w},${season},${Boolean(wind)}${r.kind === 'man' ? rohanSite(r).key : ''}`;
   g.drawImage(skLayer(`land${r.x0}`, key, r.w + 16, ROAD_Y - top, (lg) => { lg.translate(8 - r.x0, -top); landStill(lg, r, !wind, season); }), r.x0 - 8, top, r.w + 16, ROAD_Y - top);
   const cx = r.x0 + Math.floor(r.w / 2);
   if (r.kind === 'elf') {
@@ -284,5 +287,5 @@ function drawRealm(g, r, tick, sky) {
     if (wind) g.drawImage(skLayer(`landf${r.x0}`, key, cx + 32 - r.x0, 74, (lg) => { lg.translate(8 - r.x0, -top); elfFront(lg, r, cx); }), r.x0 - 8, top, cx + 32 - r.x0, 74);
     drawFalls(g, r, tick, sky);
   } else if (r.kind === 'hobbit') shireSmoke(g, cx, tick, sky);
-  else if (r.kind === 'man') rohanPennant(g, cx, tick);
+  else if (r.kind === 'man') rohanMoving(g, r, tick);
 }

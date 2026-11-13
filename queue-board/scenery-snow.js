@@ -1,16 +1,16 @@
 // scenery-snow.js: the snow the Middle-earth view's weather leaves on the ground, in 32-bit (quarter-unit pixels).
 // scene-weather.js says how much has settled (sc.weather.snow). Snow settles over the minutes it falls: in patches that
 // grow and join over the ground, the Shire's hill and the road, lit along their tops and shaded blue along their
-// undersides, the darker grass and the ruts showing through last as tracks; deep snow lies in low drifts, each lit along
-// its top and shaded along its near face, and a few crystals glint now and then. Along every top edge of what stands
-// still (the pavilion's roof, the cliff over the falls, Erebor's crest and lintel, the hill's chimney, the fence, the
-// tent) it builds a rim, thickest where the edge is flat, and it lies on the roofs of the healing house and the well. It
-// melts back the same way. Where it lies is found by drawing, not by colour: a realm's ground is wherever drawRealm's
-// picture matches landGround's alone (scenery-land.js), the hill wherever it matches shireHill's alone, so the land
-// can be recoloured freely; the trees, the falls and anything else that moves get none. How late a pixel is covered
-// follows how much darker it is than its ground's middle tone. A red main's war fires burn on over it. Drawn in
-// scene.js's ground layer (the roofs' rims as depth-sorted items just after their props), so the figures stand on it
-// and the night darkens it. Loaded right after scenery-storm.js.
+// undersides, the darker grass and the ruts showing through last as tracks; deep snow lies in low drifts, each lit
+// along its top and shaded along its near face, and a few crystals glint now and then. Along every top edge of what
+// stands still (the pavilion's roof, the cliff over the falls, Erebor's crest and lintel, the hill's chimney, the
+// fence, Meduseld and the stables) it builds a rim, thickest where the edge is flat, and it lies on the roofs of the
+// healing house and the well. It melts back the same way. Where it lies is found by drawing, not by colour: a realm's
+// ground is wherever drawRealm's picture matches landGround's alone (scenery-land.js), the hill wherever it matches
+// shireHill's alone, so the land can be recoloured freely; the trees, the falls and anything else that moves get none.
+// How late a pixel is covered follows how much darker it is than its ground's middle tone. A red main's war fires burn
+// on over it. Drawn in scene.js's ground layer (the roofs' rims as depth-sorted items just after their props), so the
+// figures stand on it and the night darkens it. Loaded right after scenery-storm.js.
 
 // Settled snow's colours: a glint, lit along a patch's top, its body (bluer over dark ground), the drifts' lit tops and
 // shaded faces, shaded blue along its underside.

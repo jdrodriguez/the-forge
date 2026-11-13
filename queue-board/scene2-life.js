@@ -227,14 +227,17 @@ function m2mLife(a, reduced) {
 }
 
 // The bits that fly off a station's work, on the frame the swing strikes (m2Pose's own swing, k 4 for elves, else 3):
-// sparks off the dwarves' anvil, soil off the hobbits' hoe into their plot, a glint off an elf's or a Man's quill.
+// sparks off the dwarves' anvil, soil off the hobbits' hoe into their plot, chips or sparks off a Man's shield rim,
+// a glint off an elf's quill. Men swing their own way, down onto the rim (scene2-rohan-shield.js's m2rim pose).
 function m2mStationFx(a) {
   const k = a.station.kind === 'elf' ? 4 : 3;
   const t = m2.tick + a.seed;
+  if (a.station.kind === 'man' && typeof POSES === 'object' && POSES.m2rim) a.posed = { pose: 'm2rim', frame: m2mSwing(t, k), face: 'down' };
   if (!m2mStrike(t, k)) return;
   const s = a.station;
   if (s.kind === 'dwarf') m2mPuff(s.x + 1, s.y - 8, M2M_SPARK, 5, { up: 0.8, spread: 1.4, fall: 0.07, life: 6, kind: 'spark' });
   else if (s.kind === 'hobbit') m2mPuff(s.x + 2.5, s.y - 4, M2M_SOIL, 3, { up: 0.5, spread: 0.9, fall: 0.09, life: 7, floor: s.y - 2 });
+  else if (s.kind === 'man') m2mPuff(s.x + 2.5, s.y - 12, a.stage === 1 ? M2M_CHIP : M2M_SPARK, 3, { up: 0.6, spread: 1, fall: 0.08, life: 6, kind: a.stage === 1 ? 'dot' : 'spark' });
   else if (t % (k * 6) < k * 2) m2mGlint(s.x + 3, s.y - 9, '#e6f2ff');
 }
 

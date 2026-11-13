@@ -266,16 +266,19 @@
       "main-mac": "rivendell",
       "linux-box": "erebor"
     },
-    "realmsNote": "The Middle-earth realm each host is drawn as on the map: \"rivendell\" (elves), \"shire\" (hobbits) or \"erebor\" (dwarves). A host with no entry is a machine of Rohan. Leave the key out and the first three hosts in dispatcher.enabledHosts get Rivendell, the Shire and Erebor in that order.",
+    "realmsNote": "The Middle-earth realm each host is drawn as in both Middle-earth views: \"rivendell\" (elves), \"shire\" (hobbits), \"erebor\" (dwarves) or \"rohan\" (Men). Leave the key out and the first four hosts in dispatcher.enabledHosts get Rivendell, the Shire, Erebor and Rohan in that order. A host with no entry, such as a fifth, is drawn as Men under its own name, on Gondor's fields on the map.",
+    "spreadRealms": "auto",
+    "spreadRealmsNote": "Whether one machine's workers fill realms beyond its own, so one computer still gets the whole map. \"auto\" turns it on when exactly one host is enabled. true turns it on for any number of hosts: each host keeps its own realm and the realms no host holds are dealt round the hosts in order. false keeps each host's workers in its own realm. With it on, a worker takes the realm with the fewest live workers when its ticket starts, keeps it for the ticket's life and after the merge, and takes its name from that realm's pool. Only the two Middle-earth views and the merge cue change; the other views show the real machines.",
     "nicknames": {
       "rivendell": ["Elrond", "Galadriel", "Legolas", "Arwen", "Thranduil", "Haldir", "Glorfindel", "Celeborn"],
       "shire": ["Frodo", "Sam", "Merry", "Pippin", "Bilbo", "Rosie"],
       "erebor": ["Gimli", "Thorin", "Balin", "Dwalin", "Fíli", "Kíli", "Bombur"],
+      "rohan": ["Théoden", "Éowyn", "Théodred", "Háma", "Gamling", "Erkenbrand", "Elfhelm", "Grimbold"],
       "sentry": ["Aragorn", "Faramir", "Éomer", "Boromir"],
       "adhoc": ["Gandalf", "Radagast", "Treebeard", "Tom Bombadil", "Beorn"],
-      "other": ["Théoden", "Éowyn"]
+      "other": ["Beregond", "Imrahil", "Húrin", "Ingold"]
     },
-    "nicknamesNote": "Name pools for the workers the board shows. A live worker takes the least recently given free name from the first pool that fits: adhoc for a worker started outside the queue, sentry for a Sentry-slot worker, then a pool keyed by its host name, then by its realm (realms above), then other. When every name in a pool is in use, names get a number (\"Frodo 2\"). Leave the key out and workers show without names.",
+    "nicknamesNote": "Name pools for the workers the board shows. A live worker takes the least recently given free name from the first pool that fits: adhoc for a worker started outside the queue, sentry for a Sentry-slot worker, then a pool keyed by its host name, then by its realm (rivendell, shire, erebor, rohan), then other for a host with no realm. When every name in a pool is in use, names get a number (\"Frodo 2\"). Leave the key out and workers show without names.",
     "reviewChecks": null,
     "reviewChecksNote": "Optional regex source for checks that belong to the review besides github.reviewCheck (a job that runs or re-requests it, say), e.g. \"^(request-review|claude-review\\\\b)\". The board leaves them out of a PR's CI counts. null leaves out only github.reviewCheck.",
     "reviewNotStartedTitles": ["^Re-review not requested", "^Review not run", "^CI not green"],

@@ -1,5 +1,5 @@
 // scene2-tool.js: the tools the peoples hold on the map from above, at the bodies' new size (scene2-body-parts.js), in
-// M2_TOOLS so m2DrawTool draws them: the elves' and Men's quill, the hobbit's hoe, the dwarf's hammer, the captains'
+// M2_TOOLS so m2DrawTool draws them: the elves' quill, the hobbit's hoe, the dwarf's and Men's hammer, the captains'
 // sword, the wizards' staff and Saruman's black staff, Beorn's axe, Eomer's spear, Faramir's bow, Boromir's horn, a
 // pipe and Radagast's handful of seed. Each is a pixel map pointing right from the grip, turned to the swing's angle
 // (hand.ang in degrees; -90 points straight up) and cached once per angle, its grip landing on the fist at hand.x,

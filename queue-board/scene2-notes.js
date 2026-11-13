@@ -29,11 +29,11 @@ const m2nt = { html: '', els: [] };
 
 // The merges of the last 15 minutes (the side view's sc.recent), and each realm's note, made again on every snapshot.
 function m2ntBuild() {
-  m2.recent = typeof mergedTickets === 'function' ? mergedTickets().filter((t) => Date.now() - Date.parse(t.mergedAt) < 15 * 60000) : [];
+  m2.recent = typeof mergedTickets === 'function' ? mergedTickets(m2.snap ?? drawSnap()).filter((t) => Date.now() - Date.parse(t.mergedAt) < 15 * 60000) : [];
   const line = (c, text) => `<span style="--c:${c}"><i></i>${esc(text)}</span>`;
   const notes = m2.realms.map((r, k) => {
     const m = r.m;
-    const lines = [!m.ok ? line('var(--bad)', `${m.name} out of reach, last heard ${ago(m.fetchedAt)}`) : m.paused ? line('var(--warn)', `${m.name} paused`) : '',
+    const lines = [m.echo ? '' : !m.ok ? line('var(--bad)', `${m.name} out of reach, last heard ${ago(m.fetchedAt)}`) : m.paused ? line('var(--warn)', `${m.name} paused`) : '',
       ...m2.recent.filter((t) => t.host === m.host).map((t) => line('var(--merged)', `${t.label || t.id} merged${t.nickname ? ` by ${t.nickname}` : ''}`))].join('');
     return lines ? `<div class="m2nt-note" data-k="${k}">${lines}</div>` : '';
   }).join('');

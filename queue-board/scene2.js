@@ -56,11 +56,11 @@ function m2Fit() {
   const availH = Math.max(150, room ?? window.innerHeight - m2.fitTop - inset);
   if (room !== null) {
     m2.scale = 2;
-    return m2Plan(Math.max(480, Math.floor(availW / 2)), Math.max(300, Math.floor(availH / 2)));
+    return m2Tall(m2Plan(Math.max(480, Math.floor(availW / 2)), Math.max(300, Math.floor(availH / 2))));
   }
   for (let s = 6; s >= 2; s -= 1) {
     const plan = m2Plan(Math.floor(availW / s), Math.floor(availH / s));
-    if (plan.fits || s === 2) { m2.scale = s; return plan.fits || plan.W >= plan.minW ? plan : m2Plan(plan.minW, Math.floor(availH / s)); }
+    if (plan.fits || s === 2) { m2.scale = s; return m2Tall(plan.fits || plan.W >= plan.minW ? plan : m2Plan(plan.minW, Math.floor(availH / s))); }
   }
   return null;
 }
@@ -69,7 +69,7 @@ function m2Fit() {
 // change, then matches live workers to stations, keeping each worker's station and place between snapshots.
 function m2Sync() {
   if (!snap || !m2.running) return;
-  m2.snap = snap;
+  m2.snap = drawSnap();
   const plan = m2Fit();
   if (!plan) return;
   const key = [plan.W, plan.H, m2.scale, m2Season(), plan.realms.map((r) => `${r.m.host}${r.n},${r.k}`).join()].join('|');
@@ -79,7 +79,7 @@ function m2Sync() {
     m2Size();
     m2Build();
   }
-  const live = snap.tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
+  const live = m2.snap.tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
   const keep = new Set();
   const taken = new Set();
   for (const t of live) {
@@ -113,7 +113,7 @@ function m2Sync() {
   }
   for (const k of [...m2.actors.keys()]) if (!keep.has(k)) m2.actors.delete(k);
   for (const s of m2.stations) s.actor = [...m2.actors.values()].find((a) => a.station === s) ?? null;
-  for (const f of m2.syncs) f(snap, relaid);
+  for (const f of m2.syncs) f(m2.snap, relaid);
   m2TagsBuild();
   if (m2Reduced.matches) m2Frame();
 }
@@ -291,7 +291,7 @@ function mapShow(on) {
 // A resize (page.html fires one on every switch of view) lays the world out for its new size, and a
 // new snapshot (page.html replaces snap on every poll) re-matches the workers within a second.
 window.addEventListener('resize', () => { if (m2.running) { m2Sync(); m2Frame(); } });
-setInterval(() => { if (m2.running && snap !== m2.snap) m2Sync(); }, 1000);
+setInterval(() => { if (m2.running && snap && drawSnap() !== m2.snap) m2Sync(); }, 1000);
 // The first start waits until every script has run, since the map's parts load after this file.
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => mapShow(view === 'map'), { once: true });
 else mapShow(view === 'map');

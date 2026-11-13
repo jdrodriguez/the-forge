@@ -53,7 +53,7 @@ function m2Tower(L, add, x, y, w, h, P, horns) {
 
 function m2Places(L, plan, season, add) {
   const P = plan.places;
-  if (!plan.realms.some((r) => r.kind === 'man')) {
+  if (!plan.edoras) {
     m2Mound(L, add, P.edoras.x, P.edoras.y + 4, 13, 7, m2GrassHex(M2_MAT.man, season));
     m2Cottage(L, add, P.edoras.x, P.edoras.y - 1, 18, M2_PAL.gold, M2_PAL.wood, 'timber');
   }

@@ -42,7 +42,7 @@ function m2eCallResolve() {
   const list = m2eShowing();
   m2eCall.sig = list.map((c) => c.id).join();
   for (const c of list) {
-    const w = c.who;
+    const w = drawWho(c.who); // the realm its worker sits in (realm-view.js)
     if (!w?.host) continue;
     const a = w.id && m2.actors.get(`${w.host}/${w.id}`);
     if (a) { m2eCall.lit.set(a.key, [...(m2eCall.lit.get(a.key) ?? []), c]); continue; }
