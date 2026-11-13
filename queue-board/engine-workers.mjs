@@ -7,8 +7,9 @@
 // into the ticket as engineStatus once a tick; the file is read first since the worker writes it the moment its state
 // changes, and engineStatus stands in when the file cannot be read. A ticket the containment audit stopped (a synced
 // marker, <paths.sharedDir>/engine-contained/<ID>.json) shows as failed.
-// This repo's dispatcher runs no engine workers: it never writes driver 'engine' or the registry folder, so
-// readEngineWorkers gives [] and engineWorker gives null for every ticket, and the board shows Claude workers only. They are builders, drawn as workers on the map;
+// The repo's dispatcher writes all of this when dispatcher.externalBuilders.fallback.enabled is on (dispatcher/
+// engine-workers.mjs and ext-worker.sh). With the engines off it writes none of it, so readEngineWorkers gives [] and
+// engineWorker gives null for every ticket, and the board shows Claude workers only. Engine workers are builders, drawn as workers on the map;
 // Saruman's stone counts only research calls (ext-runs.mjs), never them.
 import fs from 'node:fs';
 import path from 'node:path';
