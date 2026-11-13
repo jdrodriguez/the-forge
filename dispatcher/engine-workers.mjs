@@ -18,6 +18,13 @@ export const label = (e) => NAME[e] ?? e;
 
 export const fb = (c) => c.cfg.externalBuilders?.fallback ?? {};
 export const maxRounds = (c) => fb(c).maxRounds ?? 5;
+// An engine this machine may run: in fallback.engines and, when hosts.<this machine>.engines is set, in that list too
+// (an empty list means none). Every place an engine is chosen asks this: the account rows, the next round, a limit
+// handoff to the other engine.
+export function engineAllowedHere(c, engine) {
+  const host = c.cfg.hosts?.[c.HOST]?.engines;
+  return (fb(c).engines ?? ENGINES).includes(engine) && (!Array.isArray(host) || host.includes(engine));
+}
 export const registryDir = (c) => path.join(c.LOCAL, 'engine-workers');
 export const containedFile = (c, id) => path.join(c.SHARED, 'engine-contained', `${id}.json`);
 // Every ticket an engine ever worked on, in the shared folder: which engines, and the PR it left. It outlives the
@@ -142,11 +149,11 @@ function usageOf(c, engine) {
 }
 
 // The engines this machine can run now, as rows shaped like `fleet.sh usage --json` rows, so the dispatcher ranks them
-// with the Claude accounts in one pickAccount call. An engine is a candidate when it is in fallback.engines,
+// with the Claude accounts in one pickAccount call. An engine is a candidate when engineAllowedHere passes it,
 // `ext-worker.sh available` passes it here, and it has not hit its plan limit on this machine within
 // limitCooldownMinutes. `working` counts its running tickets on this machine. The usage figures decide the rest.
 export function accounts(c, st) {
-  const here = ENGINES.filter((e) => (fb(c).engines ?? ENGINES).includes(e) && available(c, st, e));
+  const here = ENGINES.filter((e) => engineAllowedHere(c, e) && available(c, st, e));
   return here.map((e) => ({ label: e, engine: e, signed_in: true, usage: usageOf(c, e),
     working: Object.values(st.tickets).filter((t) => t.driver === 'engine' && t.engine === e && ['claiming', 'building'].includes(t.status)).length }));
 }

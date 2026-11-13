@@ -116,14 +116,15 @@
         "maxWorkers": 4,
         "accounts": ["a", "b", "c"],
         "fallbackAccounts": [],
-        "maxLoadPerCore": 2
+        "maxLoadPerCore": 2,
+        "engines": ["codex", "grok"]
       },
       "linux-box": {
         "maxWorkers": 2,
         "accounts": ["b", "c"],
         "sentryWorkers": 1
       },
-      "hostsNote": "Per machine: maxWorkers caps working fleet workers there (queue and outside ones). accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets."
+      "hostsNote": "Per machine: maxWorkers caps working fleet workers there (queue and outside ones). accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. engines (optional) lists the engines that may run on that machine, out of dispatcher.externalBuilders.fallback.engines: absent means every one of them, [] means none."
     },
     "maxConcurrent": 8,
     "maxConcurrentNote": "Workers across all machines, counted through the building label. A bundle counts as one.",
