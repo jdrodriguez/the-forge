@@ -40,6 +40,7 @@ flowchart LR
 |---|---|
 | `agent-queue.config.example.json` | The one config. Every key is documented inline (the `...Note` keys). Copy it to `agent-queue.config.json`. |
 | `lib/config.mjs` | Loads the config for every component, and prints values for the shell scripts. |
+| `bin/the-forge.mjs`, `lib/setup/`, `skills/forge-setup/` | The `the-forge` command and the setup interview's skill (`docs/setup.md`). |
 | `specdesk/` | The spec desk's standing brief (`SPECDESK.md`) and its Claude Code skill. |
 | `dispatcher/` | The queue: `dispatcher.mjs` (the tick), `worker-brief.md`, `premerge-check.mjs`, `main-watch.mjs` (red-main responder), `gated-push.mjs`, `install.sh` (launchd or systemd). Its README has the full behavior. |
 | `fleet/` | `fleet.sh`: start, list, read and stop Claude Code background sessions on several Claude accounts on one machine, with plan usage per account. Plus its skill and account setup. |
@@ -49,62 +50,28 @@ flowchart LR
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |
 | `docs/` | The ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene, and the decisions. |
 
-## Prerequisites
+## Set up
 
-- **Claude Code**, signed in. Several Claude accounts make it worthwhile: each account has its own 5-hour and weekly limits, and the dispatcher spreads work across them (`fleet/README.md` explains the account folders). One account works too.
-- **Node 22 or newer**, `git`, `jq`, `curl`, and on macOS the stock bash 3.2 is enough.
-- **GitHub CLI** (`gh`), logged in as the account the dispatcher merges with (`github.user`). The repo needs CI on pull requests and, ideally, an AI review check (`github.reviewCheck`, for example Claude Code Review).
-- **Linear**, with a personal API key (`linear.apiKeyCommand`, `LINEAR_API_KEY`, or a file), a team, workflow states for In Progress and Verifying, a Size label group (S, M, L), and these labels: ready, building, stuck, needs-human. A saved view for the queue labels and one for needs-human make good sidebars.
-- **Slack**, optional but recommended: one private channel, an app with an incoming webhook (progress lines) and a bot token with `chat:write` (asks and the reviewer DM), and Linear's Slack app in the channel for synced threads.
-- **Codex and Grok CLIs**, optional, for `scripts/ext-agent.sh` and `scripts/cross-review.sh`.
-- **A file-sync tool** (any one that keeps a folder identical), only when more than one machine runs the queue, to keep `paths.sharedDir` the same on each.
+One command copies The Forge to `~/the-forge`, links its skills into Claude Code, and starts an interview in Claude Code that sets up one to four computers:
 
-## Set up a machine
+```bash
+npx the-forge setup
+```
 
-1. Clone this repo, for example to `~/dev/the-forge`.
-2. Copy the config and fill it in:
-   ```bash
-   cp agent-queue.config.example.json agent-queue.config.json
-   ```
-   At minimum set `human.name`, `repoPath`, `workspaceCwd`, `github.repo`, `github.user`, `linear.workspace`, `linear.team`, `linear.inboxProject`, the `slack` IDs, and `dispatcher.enabledHosts` and `dispatcher.hosts` with this machine's `hostname -s`.
-3. Put the secrets in the state folder (default `~/.agent-queue`), mode 600:
-   ```bash
-   mkdir -p ~/.agent-queue && chmod 700 ~/.agent-queue
-   ```
-   - `linear-api-key` (or set `linear.apiKeyCommand` to a secrets manager command),
-   - `slack-webhook`, the incoming-webhook URL,
-   - `slack-bot-token`, the bot token.
-4. Add your Claude accounts to the fleet (`fleet/README.md`), then check them:
-   ```bash
-   fleet/fleet.sh accounts
-   ```
-5. Link the skills and scripts into Claude Code, so every session can find them:
-   ```bash
-   ln -s ~/dev/the-forge/specdesk/skill ~/.claude/skills/specdesk
-   ```
-   ```bash
-   ln -s ~/dev/the-forge/fleet ~/.claude/skills/fleet
-   ```
-   ```bash
-   ln -s ~/dev/the-forge/inbox/ask-human.sh ~/.claude/scripts/ask-human.sh
-   ```
-6. Try the queue without changing anything:
-   ```bash
-   node dispatcher/dispatcher.mjs tick --dry-run
-   ```
-7. Install the scheduled jobs. The dispatcher runs on every queue machine; the red-main watcher and the board on one:
-   ```bash
-   dispatcher/install.sh
-   ```
-   ```bash
-   dispatcher/install.sh --main-watch
-   ```
-   ```bash
-   queue-board/install.sh
-   ```
-8. Open a Claude Code session, pin it, name it after `orchestrator.sessionName`, and run `/specdesk`. In it, start the watchers with Bash `run_in_background` so the session is woken when something needs it: `inbox/inbox-watch.sh`, `inbox/merge-request-watch.sh`, `inbox/main-red-watch.sh` and `queue-board/hourly-check.mjs`. Re-arm each one after it wakes the session.
+Until the package is published, run it from this repository (`npx github:<owner>/the-forge setup`), or clone it and run `node bin/the-forge.mjs setup --here` in the clone. `docs/setup.md` is the same ground as a written guide for someone who has never seen this system: what to buy or reuse, the programs each computer needs, Claude accounts and how several live on one computer, Codex, Grok, Tailscale, SSH, GitHub, Linear and Slack, what each computer runs, and how to add a computer later.
 
-More machines: repeat on each, with the same `paths.sharedDir` synced between them and each machine's hostname in `dispatcher.hosts`.
+You need Claude Code (one Claude account is enough), Node 22 or newer, git, gh, jq, curl, a GitHub repository with CI, and a Linear workspace. Slack, Codex and Grok are optional. You do every sign-in yourself; no part of The Forge asks for, stores or prints a password, token or key.
+
+| Command | What it does |
+|---|---|
+| `the-forge setup` | Makes the lasting copy (a copy npx unpacked sits in npm's cache, which can be cleaned at any time), lists missing programs, links the skills, and starts the `forge-setup` skill. |
+| `the-forge init --answers <file>` | Writes `agent-queue.config.json` from the interview's answers file. The only thing that writes the config. |
+| `the-forge doctor` | Checks this computer: programs, sign-ins, each Claude account, Codex and Grok, Tailscale and SSH to the other computers, the Linear key, the config. |
+| `the-forge install`, `uninstall` | This computer's scheduled jobs: the dispatcher everywhere, and the board, herald and red-main watcher on the board's computer (launchd on macOS, systemd on Linux). |
+| `the-forge start`, `stop`, `status`, `open` | Load or unload the jobs, show them, open the board. |
+| `the-forge update`, `copy-to <host>` | Refresh the lasting copy and reload the jobs; copy it to another computer over SSH. |
+
+Once it runs, open a Claude Code session, pin it, name it after `orchestrator.sessionName`, and run `/specdesk`. In it, start the watchers with Bash `run_in_background` so the session is woken when something needs it: `inbox/inbox-watch.sh`, `inbox/merge-request-watch.sh`, `inbox/main-red-watch.sh` and `queue-board/hourly-check.mjs`. Re-arm each one after it wakes the session.
 
 ## The board
 
@@ -122,7 +89,7 @@ Shell scripts read the config through `node lib/config.mjs env`, which prints `A
 npm test
 ```
 
-That runs the dispatcher, inbox and learning tests with `node --test`, all against throwaway homes and stubs; nothing real is read or written.
+That runs the setup, dispatcher, inbox, learning and board tests with `node --test`, all against throwaway homes and stubs; nothing real is read or written. A GitHub Actions workflow (`.github/workflows/test.yml`) runs it on every push.
 
 ```bash
 npm run test:fleet
