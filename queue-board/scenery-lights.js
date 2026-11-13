@@ -1,12 +1,13 @@
 // scenery-lights.js: the lights of the Middle-earth view that stay bright at night, drawn after scene.js's night shade:
-// the Shire's round window and the light under its door, Erebor's forge and the glow of its halls through the gate, the
-// falls in the moonlight, and the war fires' glow. Their halos and the pools they cast on the ground at night are
-// scene-glow.js's (sc.glow); each comes up through dusk and dies away through dawn (sc.glow.night). The shapes they light
-// are scenery-land.js's, scenery-erebor.js's and scenery-falls.js's. Loaded after scenery-erebor.js.
+// the Shire's round window and the light under its door, Erebor's forge and the glow of its halls through the gate,
+// Meduseld's windows and lamps and the stables' lantern (rohanLights, scenery-rohan.js), the falls in the moonlight,
+// and the war fires' glow. Their halos and the pools they cast on the ground at night are scene-glow.js's (sc.glow);
+// each comes up through dusk and dies away through dawn (sc.glow.night). The shapes they light are scenery-land.js's,
+// scenery-erebor.js's and scenery-falls.js's. Loaded after scenery-erebor.js.
 
-// After the night shade: the Shire's window and door, the forge, the gate's glow from the halls within, the falls in the
-// moonlight, and the war fires' glow, which flickers with each fire and pools round it at night, with the fire's flames
-// drawn again over it so they stay crisp (unless someone stands in front of the fire).
+// After the night shade: the Shire's window and door, the forge, the gate's glow from the halls within, Meduseld's
+// lights, the falls in the moonlight, and the war fires' glow, which flickers with each fire and pools round it at
+// night, with the fire's flames drawn again over it so they stay crisp (unless someone stands in front of the fire).
 function drawLights(g, scene, tick) {
   const G = scene.glow;
   const dark = G ? G.night : Number(scene.sky.night);
@@ -15,6 +16,7 @@ function drawLights(g, scene, tick) {
     if (r.kind === 'hobbit' && dark > 0) shireLights(g, G, cx, dark);
     if (r.kind === 'elf' && scene.sky.night) fallsGlow(g, r, tick);
     if (r.kind === 'dwarf') ereborLights(g, r, tick, scene.sky.night);
+    if (r.kind === 'man' && dark > 0) rohanLights(g, G, r, tick, dark);
     if (!scene.war) continue;
     for (const f of warFires(r)) {
       if (!G) continue;

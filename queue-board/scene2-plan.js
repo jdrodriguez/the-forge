@@ -16,9 +16,8 @@ const M2_AT = {
   edoras: [0.41, 0.775], riddermark: [0.475, 0.745], minasTirith: [0.605, 0.875], pelennor: [0.66, 0.888], ithilien: [0.758, 0.82],
   baradDur: [0.93, 0.82], doom: [0.865, 0.86], gap: [0.37, 0.73],
 };
-// The realms' regions [west, north, east, south]; a second machine with no realm of its own gets Gondor's fields.
+// The realms' regions [west, north, east, south]. Rohan's is M2_ROHAN.region, and any other Men's realm gets Gondor's fields.
 const M2_REGION = { hobbit: [0.0, 0.11, 0.188, 0.75], elf: [0.29, 0.06, 0.5, 0.57], dwarf: [0.745, 0.0, 1.0, 0.36] };
-const M2_MEN = [[0.3, 0.685, 0.555, 0.835], [0.47, 0.885, 0.655, 0.995]];
 // Gondor's fields beside Edoras: south of the White City and east of the White Mountains' end. It has no room at #map's
 // usual scale, so its stations falling off the map mark the plan as not fitting and m2Fit steps down a scale.
 const M2_FIELDS = [0.555, 0.892, 0.665, 0.998];
@@ -56,13 +55,19 @@ const m2RoamOf = (name) => M2_ROAM[Object.keys(M2_ROAM).find((k) => m2Plain(name
 // The plan for a world W by H units: places, regions, rivers, ranges, roads and stations. A region whose stations need
 // more room than its place gives grows south into the land below it.
 function m2Plan(W, H) {
+  const snap = drawSnap(); // the drawing's snapshot: with spread realms each realm is a machine of its own (realm-view.js)
   const at = (u, v) => [u * W, v * H];
   const plan = { W, H, wide: true, fits: W >= 480 && H >= 300, minW: 320, realms: [], stations: [], roads: [], places: {}, river: null };
   for (const [k, [u, v]] of Object.entries(M2_AT)) plan.places[k] = { x: u * W, y: v * H };
   // The named places and zones the other areas build on (scene2-core-places.js; the south, the patrols and the roam
   // spots follow once the realms have their final size, in m2PlanAfter).
   if (typeof m2PlanLands === 'function') m2PlanLands(plan);
-  const rohan = snap.machines.some((m) => !scRealm(m.host));
+  // Edoras is the realm keyed rohan, else the first Men's realm (a machine with no realm of its own); any other Men's
+  // realm takes Gondor's fields.
+  const folk = snap.machines.map((m) => scRealm(m.host) ?? ['man', 'Rohan', null]);
+  const keyed = folk.findIndex((f) => f[2] === 'rohan');
+  const edoras = keyed >= 0 ? keyed : folk.findIndex((f) => f[0] === 'man');
+  const rohan = edoras >= 0;
   if (rohan) {
     for (const [k, [u, v]] of Object.entries(M2_ROHAN.places)) {
       plan.places[k] = { x: u * W, y: v * H };
@@ -74,15 +79,14 @@ function m2Plan(W, H) {
   plan.rivers = Object.fromEntries(Object.entries(M2_RIVERS).map(([k, pts]) => [k, pts.map(([u, v]) => at(u, v))]));
   plan.ranges = Object.fromEntries(Object.entries({ ...M2_RANGES, ...(rohan ? M2_ROHAN.ranges : {}) }).map(([k, pts]) => [k, pts.map(([u, v]) => at(u, v))]));
   plan.mordor = { x0: 0.81 * W, y0: 0.69 * H, x1: W, y1: H };
-  let men = 0;
-  plan.realms = snap.machines.map((m) => {
-    const [kind, title] = scRealm(m.host) ?? ['man', 'Rohan'];
+  plan.realms = snap.machines.map((m, i) => {
+    const [kind, title, key] = folk[i];
     const live = snap.tickets.filter((t) => t.live && !t.adhoc && t.host === m.host);
     const n = Math.max(m.maxWorkers || 0, live.filter((t) => !t.sentry).length);
-    const fields = kind === 'man' && men > 0 && rohan;
-    const box = M2_REGION[kind] ?? (men++ ? (fields ? M2_FIELDS : M2_MEN[1]) : M2_ROHAN.region);
+    const fields = kind === 'man' && i !== edoras;
+    const box = M2_REGION[kind] ?? (fields ? M2_FIELDS : M2_ROHAN.region);
     const [x, y] = at(box[0], box[1]);
-    const r = { m, kind, title, n, x: Math.round(x), y: Math.round(y), w: Math.round((box[2] - box[0]) * W), h: Math.round((box[3] - box[1]) * H), spots: [], plan };
+    const r = { m, kind, key, title, n, x: Math.round(x), y: Math.round(y), w: Math.round((box[2] - box[0]) * W), h: Math.round((box[3] - box[1]) * H), spots: [], plan };
     // Edoras keeps a shallow back strip for Meduseld's hill, so its stations clear the White Mountains.
     // The fields' back strip (its steading) takes what is left above one desk row before the map's edge.
     r.back = fields ? Math.max(24, Math.min(52, H - 42 - r.y)) : kind === 'man' ? 52 : Math.max(46, Math.min(112, Math.round(r.h * 0.36)));
@@ -94,10 +98,15 @@ function m2Plan(W, H) {
     if (fields) r.row0 = 22;
     return r;
   });
+  plan.edoras = plan.realms[edoras] ?? null;
   m2PlanRiver(plan);
-  plan.realms.forEach((r) => m2PlanStations(plan, r));
+  // Edoras is laid out last, below the realms above it, and no realm may overlap another or run off the map
+  // (scene2-plan-realms.js).
+  plan.realms.forEach((r) => { if (r !== plan.edoras) m2PlanStations(plan, r); });
+  if (plan.edoras) { m2PlanUnder(plan, plan.edoras); m2PlanStations(plan, plan.edoras); }
+  m2PlanApart(plan);
   // A second Men realm whose stations fall off the map does not fit at this scale (m2Fit then tries a smaller one).
-  const second = plan.realms.filter((r) => r.kind === 'man')[1];
+  const second = plan.realms.find((r) => r.kind === 'man' && r !== plan.edoras);
   if (second && plan.stations.some((st) => st.realm === second && st.y > H - 2)) plan.fits = false;
   // Places that follow a realm's final size, such as Dale and the Long Lake below Erebor (scene2-core-places.js).
   if (typeof m2PlanAfter === 'function') m2PlanAfter(plan);
@@ -144,7 +153,7 @@ function m2PlanRoads(plan) {
   const shire = of('hobbit');
   const riv = of('elf');
   const ere = of('dwarf');
-  const men = plan.realms.filter((r) => r.kind === 'man');
+  const men = [plan.edoras, ...plan.realms.filter((r) => r.kind === 'man' && r !== plan.edoras)].filter(Boolean);
   const sy = shire?.roadY ?? 0.38 * H;
   const east = [[0, sy], ...across(shire, p('shire')), [0.19 * W, sy + 1], p('bree'), p('weathertop'), ...across(riv, [0.42 * W, 0.32 * H]),
     p('highPass'), p('oldFord'), [0.62 * W, 0.3 * H], [0.76 * W, 0.31 * H], ...(ere ? [[ere.x, ere.roadY], [ere.x + ere.w * 0.55, ere.roadY]] : [p('dale')])];
@@ -209,6 +218,7 @@ function m2PlanStations(plan, r) {
 // depend on, so the map is laid out again when they change. Each post is a lantern post that stands quiet until a rider
 // comes.
 function m2PlanPosts(plan) {
+  const snap = drawSnap();
   const lands = [...new Set(Object.values(M2_WATCH))];
   const need = Object.fromEntries(lands.map((l) => [l, 0]));
   const riders = snap.tickets.filter((t) => t.live && !t.adhoc && t.sentry);
@@ -235,6 +245,7 @@ function m2PlanPosts(plan) {
     for (let j = 0; j < Math.min(2, need[land]); j += 1) {
       plan.stations.push({ id: `watch:${land}:${j}`, land, realm: null, kind: 'ranger', sentry: true, shared: j > 0,
         x: Math.round(x + 8 + j * dx), y: Math.round(y + 4 + j * dy), hx: Math.round(x + j * dx), hy: Math.round(y + 3 + j * dy) });
+      if (land === 'weathertop') m2PlanPostClear(plan, plan.stations.at(-1));
     }
   }
 }

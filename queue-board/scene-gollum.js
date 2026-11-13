@@ -6,7 +6,7 @@
 // of them the more is forgotten on his machine, rocking and muttering; while a hot account is signed in there he
 // clutches the Ring and gazes at it instead. When his count falls he slinks off to hide a while; with nothing to keep,
 // he stays hidden. He hides in Rivendell's pool at the foot of the falls, behind the Shire's hill, in the shadow of
-// Erebor's gate and behind Rohan's tent, peeks out before he comes, creeps on all fours, and scuttles back fast when an
+// Erebor's gate and behind Rohan's stables, peeks out before he comes, creeps on all fours, and scuttles back fast when an
 // eagle comes down in his realm or flies off from it, or the Eye's beam falls near him. He is out mostly at night; by
 // day he keeps near his hiding place and ducks back into it now and then. In Rivendell he snatches at a fish in the
 // pool now and then. With reduced motion he is simply crouched at his hoard, still. Each has his own seed, so they
@@ -55,13 +55,7 @@ function golPlace(r) {
   } else if (r.kind === 'dwarf') {
     p = { hide: [cx - 2.5, G + 1.75], peek: [cx + 2.5, G + 1.75], dark: true, exit: [cx - 2.5, G + 4], spot: [cx - 2.5, G + 4], behind: (x, y) => y < G + 2.1 && Math.abs(x - cx) < 6,
       clip: (g) => { g.beginPath(); g.rect(cx - 5.5, G - 15, 11, 17.25); g.clip(); } };
-  } else {
-    // Behind the tent, on the side its pile of sacks leaves free.
-    const [c, s] = [cx + 0.5, realmProps(r).pile?.x > cx ? -1 : 1];
-    const top = (x) => G - 8 + 6 * (Math.abs(x - c) / 10) ** 0.85;
-    p = { hide: [c + s * 7, G - 0.5], peek: [c + s * 7.5, golQ(top(c + s * 7.5)) + 0.25], exit: [c + s * 12, G + 4], behind: (x, y) => y < G + 2 && Math.abs(x - c) < 12,
-      clip: cut([...curve(top, cx - 10, cx + 11, G - 1.5), [cx + 9, G + 2.25], [cx - 8, G + 2.25]]) };
-  }
+  } else p = rohanHide(r, cut);
   r.golPlace = { key, ...p };
   return r.golPlace;
 }

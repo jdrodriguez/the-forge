@@ -33,7 +33,8 @@ export const DEFAULTS = Object.freeze({
 // Every cue file under sounds/ and the event switch that governs it.
 export const CUES = {
   needs: 'needs', reminder: 'reminder', trouble: 'trouble', ci: 'ci',
-  'merge-rivendell': 'merge', 'merge-shire': 'merge', 'merge-erebor': 'merge', 'main-red': 'mainRed', 'main-green': 'mainGreen',
+  'merge-rivendell': 'merge', 'merge-shire': 'merge', 'merge-erebor': 'merge', 'merge-rohan': 'merge',
+  'main-red': 'mainRed', 'main-green': 'mainGreen',
 };
 const RANGE = { volume: [0, 100], musicVolume: [0, 100], reminderMinutes: [1, 240] };
 

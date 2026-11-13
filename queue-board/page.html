@@ -23,7 +23,7 @@
    Below 900px the panel fills the page and the sidebar becomes a bar along the bottom (mobile.css, linked in <body>).
    The look is Middle-earth (2026-11-06): parchment and iron-gall ink by day, Rivendell's night sky in dark mode.
    Cinzel sets headings and names, EB Garamond titles, and Inter stays for small data so numbers read cleanly.
-   Each machine keeps its realm's colour: Rivendell teal, Shire green, Erebor bronze. The config says which machine
+   Each machine keeps its realm's colour: Rivendell teal, Shire green, Erebor bronze, Rohan gold. The config says which machine
    holds which realm (snap.config.realms). */
 :root {
   --frame: #e4d6b3; --panel: #f5ecd7; --raised: #faf4e4; --group: #ede1c3; --sunk: #e8dbbb; --hover: rgb(110 78 32 / 0.06); --active: rgb(110 78 32 / 0.12);
@@ -31,7 +31,7 @@
   --accent: #2f6b4f; --accent-ink: #285c44; --tint: rgb(47 107 79 / 0.1); --gold: #a67c26;
   --ok: #3f7d3a; --run: #b07c12; --warn: #c25f1c; --bad: #a12b22; --merged: #6a4c97;
   --bad-tint: rgb(161 43 34 / 0.08);
-  --m1: #2e7d74; --m2: #5f8f2c; --m3: #9a5a26;
+  --m1: #2e7d74; --m2: #5f8f2c; --m3: #9a5a26; --m4: #a8860f;
   --shadow: 0 1px 0 rgb(90 60 20 / 0.06), 0 2px 8px rgb(90 60 20 / 0.08);
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .38 0 0 0 0 .27 0 0 0 0 .12 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   --sky: radial-gradient(ellipse at 15% -10%, rgb(255 249 232 / 0.75), transparent 55%), radial-gradient(ellipse at 110% 120%, rgb(120 80 30 / 0.16), transparent 55%);
@@ -47,7 +47,7 @@
   --accent: #5aa287; --accent-ink: #86cdb2; --tint: rgb(90 162 135 / 0.14); --gold: #d2ac57;
   --ok: #6dbb6f; --run: #e0b23e; --warn: #e8873a; --bad: #e25a4c; --merged: #a88bdc;
   --bad-tint: rgb(226 90 76 / 0.1);
-  --m1: #4fb3a7; --m2: #8cc152; --m3: #d08a4e; --shadow: none; color-scheme: dark;
+  --m1: #4fb3a7; --m2: #8cc152; --m3: #d08a4e; --m4: #e0bf45; --shadow: none; color-scheme: dark;
   --grain: none; --sky-size: 200px 200px;
   --sky: radial-gradient(1px 1px at 22px 34px, rgb(255 255 255 / 0.55), transparent), radial-gradient(1px 1px at 128px 92px, rgb(255 255 255 / 0.4), transparent), radial-gradient(1px 1px at 66px 150px, rgb(214 226 255 / 0.45), transparent), radial-gradient(1.5px 1.5px at 170px 20px, rgb(255 246 214 / 0.5), transparent);
 } }
@@ -57,7 +57,7 @@
   --accent: #5aa287; --accent-ink: #86cdb2; --tint: rgb(90 162 135 / 0.14); --gold: #d2ac57;
   --ok: #6dbb6f; --run: #e0b23e; --warn: #e8873a; --bad: #e25a4c; --merged: #a88bdc;
   --bad-tint: rgb(226 90 76 / 0.1);
-  --m1: #4fb3a7; --m2: #8cc152; --m3: #d08a4e; --shadow: none; color-scheme: dark;
+  --m1: #4fb3a7; --m2: #8cc152; --m3: #d08a4e; --m4: #e0bf45; --shadow: none; color-scheme: dark;
   --grain: none; --sky-size: 200px 200px;
   --sky: radial-gradient(1px 1px at 22px 34px, rgb(255 255 255 / 0.55), transparent), radial-gradient(1px 1px at 128px 92px, rgb(255 255 255 / 0.4), transparent), radial-gradient(1px 1px at 66px 150px, rgb(214 226 255 / 0.45), transparent), radial-gradient(1.5px 1.5px at 170px 20px, rgb(255 246 214 / 0.5), transparent);
 }
@@ -662,7 +662,7 @@ h2.gh::after { height: 7px; background: url("data:image/svg+xml,%3Csvg xmlns='ht
 </div>
 <script>
 const POLL_MS = 20000;
-const MC = ['var(--m1)', 'var(--m2)', 'var(--m3)'];
+const MC = ['var(--m1)', 'var(--m2)', 'var(--m3)', 'var(--m4)'];
 const PRI = { 1: 'Urgent', 2: 'High', 3: 'Medium', 4: 'Low' };
 const MERGED_SHOWN = 10;
 let snap = null, lastOk = 0, failing = null, timer = null, mergedAll = false, view = null;
@@ -709,20 +709,36 @@ const bundleLines = (t) => (t.bundle || []).map((b) => `<div class="rsub">With $
 const machineColor = (host) => MC[Math.max(0, snap.machines.findIndex((m) => m.host === host)) % MC.length];
 // Each machine's realm in Middle-earth and its people, whose pixel figure (sprites.js) its workers wear in the slots, the
 // cards and the Middle-earth view. Workers in the Sentry slot are Rangers, workers outside the queue wizards, and a
-// machine with no realm of its own is Rohan. The table is { host: [name, folk] }, as every script that reads it expects.
-// It starts empty and fillRealms() refills it in place from snap.config.realms ({ host: { name, folk } }) as each
-// snapshot arrives, before anything renders, so a script holding the object always sees the current table. Until the
-// first snapshot every machine reads as Rohan.
+// machine with no realm of its own (a fifth machine) is Men. The table is { host: [name, folk, key] }, as every script
+// that reads it expects. It starts empty and fillRealms() refills it in place from snap.config.realms ({ host: { key,
+// name, folk } }) as each snapshot arrives, before anything renders, so a script holding the object always sees the
+// current table. Until the first snapshot every machine reads as Rohan.
 const REALMS = {};
-function fillRealms(cfg) {
+// The realm table for a config and its machines. A machine with no entry is Men with no key: it takes Rohan's name when
+// no machine holds Rohan and no other unnamed machine came first (the map draws it at Edoras), else Gondor's (the map
+// gives it Gondor's fields).
+function realmsFor(cfg, machines) {
+  const out = {};
+  for (const [host, r] of Object.entries(cfg?.realms ?? {})) if (r && r.name) out[host] = [r.name, r.folk || 'man', r.key ?? null];
+  let rohan = Object.values(out).some((r) => r[2] === 'rohan');
+  for (const m of machines ?? []) {
+    if (Object.hasOwn(out, m.host)) continue;
+    out[m.host] = [rohan ? 'Gondor' : 'Rohan', 'man', null];
+    rohan = true;
+  }
+  return out;
+}
+function fillRealms(cfg, machines) {
   for (const k of Object.keys(REALMS)) delete REALMS[k];
-  for (const [host, r] of Object.entries(cfg?.realms ?? {})) if (r && r.name) REALMS[host] = [r.name, r.folk || 'man'];
+  Object.assign(REALMS, realmsFor(cfg, machines));
 }
 // The machine the board runs on (snap.config.boardHost, else the host that served the snapshot), by its display name.
 const boardHost = () => snap?.config?.boardHost ?? snap?.servedBy ?? null;
 const boardName = () => snap?.machines?.find((m) => m.host === boardHost())?.name ?? boardHost() ?? "the board's machine";
-const realmName = (host) => REALMS[host]?.[0] ?? 'Rohan';
-const realmKind = (host) => REALMS[host]?.[1] ?? 'man';
+// Read by own key only, so a host named like an inherited property ("constructor") reads as unnamed.
+const realmOfHost = (host) => (Object.hasOwn(REALMS, host) ? REALMS[host] : null);
+const realmName = (host) => realmOfHost(host)?.[0] ?? 'Rohan';
+const realmKind = (host) => realmOfHost(host)?.[1] ?? 'man';
 // A worker outside the queue is one of the wise wanderers the dispatcher names it after (its nicknames.adhoc): the
 // wizards Gandalf and Radagast, and Treebeard the Ent, Tom Bombadil and Beorn, who are no wizards (2026-11-07),
 // each drawn as himself once his figure exists (sprites-wanderers.js), else as a wizard.
@@ -743,7 +759,9 @@ function captainKind(name) {
 }
 // A Codex or Grok worker is drawn as its realm's own folk like any worker; only its mark (ai-marks.js) says what runs it
 // (2026-11-09: it is just a subagent executing work, so it needs no look of its own).
-const figureOf = (t) => (t.adhoc ? wandererKind(t.nickname) : t.sentry ? captainKind(t.nickname) : realmKind(t.host));
+// With spread realms (realm-view.js) a worker wears the folk of the realm it sits in, which need not be its machine's.
+const spreadFolk = (t) => (snap?.config?.spread && t.realm ? Object.values(snap.config.spreadRealms ?? {}).flat().find((r) => r.key === t.realm)?.folk ?? null : null);
+const figureOf = (t) => (t.adhoc ? wandererKind(t.nickname) : t.sentry ? captainKind(t.nickname) : spreadFolk(t) ?? realmKind(t.host));
 // A realm's sigil in its colour, wherever a machine is named: a leaf for Rivendell, a round door for the Shire, a gated
 // mountain for Erebor and a pennant for Rohan (drawn by CSS masks, .mdot[data-r]). mc overrides the colour, as red for
 // a machine that is down.
@@ -938,9 +956,9 @@ function sentrySlots(live) {
   return { total, used, text: total === 1 ? `Sentry slot ${used ? 'busy' : sentryHost() ? 'idle' : 'offline'}` : `${used} of ${total} Sentry slots busy` };
 }
 const sentryChip = (t) => (t.sentry ? `<span class="chip sentry" title="In ${esc(t.machine)}'s Sentry slot, apart from its regular slots">${ICON.sentry}Sentry</span>` : '');
-const mergedTickets = () => {
+const mergedTickets = (s = snap) => {
   const seen = new Set();
-  return snap.tickets.filter((t) => t.status === 'merged').sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).filter((t) => !seen.has(t.id) && seen.add(t.id));
+  return s.tickets.filter((t) => t.status === 'merged').sort((a, b) => b.mergedAt.localeCompare(a.mergedAt)).filter((t) => !seen.has(t.id) && seen.add(t.id));
 };
 
 // Worktree states (worktree-state.mjs) in the order the Worktrees view lists them: a label, the words after a count on
@@ -1197,7 +1215,7 @@ async function poll() {
     const first = !snap;
     snap = next; lastOk = Date.now(); failing = null;
     // The realm table comes from the config, so it is filled before anything renders.
-    fillRealms(snap.config);
+    fillRealms(snap.config, snap.machines);
     $('banner').innerHTML = '';
     same ? freshness() : render();
     // A link to one machine's card can only scroll once the cards exist.
@@ -1331,6 +1349,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/sprites-horse-art.js"></script>
 <script src="/sprites-horse-post.js"></script>
 <script src="/sprites-chores.js"></script>
+<script src="/sprites-rohan.js"></script>
 <script src="/realm-art-kit.js"></script>
 <script src="/realm-art.js"></script>
 <script src="/machines-accounts.js"></script>
@@ -1344,6 +1363,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scenery-land.js"></script>
 <script src="/scenery-land-qd.js"></script>
 <script src="/scenery-rohan.js"></script>
+<script src="/scenery-rohan-stables.js"></script>
 <script src="/scenery-falls.js"></script>
 <script src="/scenery-erebor.js"></script>
 <script src="/scenery-lights.js"></script>
@@ -1351,10 +1371,12 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scenery-props-hd.js"></script>
 <script src="/scenery-props-qd.js"></script>
 <script src="/scenery-farm.js"></script>
+<script src="/scenery-rohan-props.js"></script>
 <script src="/scenery-hoard.js"></script>
 <script src="/scenery-elves.js"></script>
 <script src="/scenery-heal.js"></script>
 <script src="/scenery-shire.js"></script>
+<script src="/realm-view.js"></script>
 <script src="/scene-tags.js"></script>
 <script src="/scene.js"></script>
 <script src="/scene-path.js"></script>
@@ -1371,6 +1393,8 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scene-hoard.js"></script>
 <script src="/scene-elves.js"></script>
 <script src="/scene-wild.js"></script>
+<script src="/scene-rohan.js"></script>
+<script src="/scene-rohan-horses.js"></script>
 <script src="/scene-duel.js"></script>
 <script src="/scene-orcs.js"></script>
 <script src="/scene-ride.js"></script>
@@ -1388,6 +1412,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scene-saruman.js"></script>
 <script src="/scene2.js"></script>
 <script src="/scene2-plan.js"></script>
+<script src="/scene2-plan-realms.js"></script>
 <script src="/scene2-core-places.js"></script>
 <script src="/scene2-plan-south.js"></script>
 <script src="/scene2-tiles.js"></script>
@@ -1417,6 +1442,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scene2-edoras-gondor.js"></script>
 <script src="/scene2-stations.js"></script>
 <script src="/scene2-station-art.js"></script>
+<script src="/scene2-rohan-shield.js"></script>
 <script src="/scene2-elf.js"></script>
 <script src="/scene2-folk.js"></script>
 <script src="/scene2-body-kit.js"></script>
@@ -1443,6 +1469,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/scene2-stock.js"></script>
 <script src="/scene2-stock-art.js"></script>
 <script src="/scene2-chores.js"></script>
+<script src="/scene2-rohan-banner.js"></script>
 <script src="/scene2-archery.js"></script>
 <script src="/scene2-life-beasts.js"></script>
 <script src="/scene2-horse-art.js"></script>

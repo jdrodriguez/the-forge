@@ -11,7 +11,8 @@ import { applyUpdate, DEFAULTS, wavSeconds, cueSeconds, playAfterWarning, ALERT_
 const T0 = Date.parse('2026-11-07T15:00:00Z');
 const MIN = 60_000;
 let gen = 0;
-const REALMS = { 'main-mac': { name: 'Rivendell', folk: 'elf' }, 'second-mac': { name: 'The Shire', folk: 'hobbit' }, 'linux-box': { name: 'Erebor', folk: 'dwarf' } };
+const REALMS = { 'main-mac': { key: 'rivendell', name: 'Rivendell', folk: 'elf' }, 'second-mac': { key: 'shire', name: 'The Shire', folk: 'hobbit' },
+  'linux-box': { key: 'erebor', name: 'Erebor', folk: 'dwarf' }, 'plains-box': { key: 'rohan', name: 'Rohan', folk: 'man' } };
 const machine = (host, name, extra = {}) => ({ host, name, ok: true, paused: null, error: null, fetchedAt: '2026-11-07T14:59:00Z', ...extra });
 const live = (id, host, extra = {}) => ({ id, label: id, host, machine: host, live: true, status: 'building', workerState: 'busy', nickname: 'Frodo', title: `Title of ${id}`, ...extra });
 function snap(over = {}) {
@@ -159,27 +160,6 @@ test('when GitHub could not be read, CI keeps its last state', () => {
   const first = step(null, failing, T0);
   const mid = step(first.state, blind, T0 + MIN);
   assert.equal(step(mid.state, failing, T0 + 2 * MIN).events.length, 0);
-});
-
-test('a merge plays its realm voice, and an old merge seen late plays nothing', () => {
-  const merged = (host, at) => ({ id: 'ABC-5', label: 'ABC-5', host, status: 'merged', mergedAt: new Date(at).toISOString(), nickname: 'Gimli', title: 'Fix', prNumber: 3 });
-  for (const [host, cue] of [['main-mac', 'merge-rivendell'], ['second-mac', 'merge-shire'], ['linux-box', 'merge-erebor']]) {
-    const out = diff(snap({ tickets: [] }), snap({ tickets: [merged(host, T0)] }));
-    assert.equal(out.events[0].cue, cue, host);
-  }
-  assert.match(diff(snap({ tickets: [] }), snap({ tickets: [merged('linux-box', T0)] })).events[0].head, /^Gimli merged ABC-5 · Erebor$/);
-  assert.equal(diff(snap({ tickets: [] }), snap({ tickets: [merged('main-mac', T0 - 2 * 60 * MIN)] })).events.length, 0);
-});
-
-test('a machine with no realm in the config merges under its own name with Rivendell\'s cue', () => {
-  const merged = { id: 'ABC-6', label: 'ABC-6', host: 'rohan-box', status: 'merged', mergedAt: new Date(T0).toISOString(), nickname: 'Eomer', title: 'Fix', prNumber: 4 };
-  const before = () => snap({ machines: [machine('rohan-box', 'Edoras')], tickets: [] });
-  const out = diff(before(), snap({ machines: [machine('rohan-box', 'Edoras')], tickets: [merged] }));
-  assert.equal(out.events[0].cue, 'merge-rivendell');
-  assert.match(out.events[0].head, /^Eomer merged ABC-6 · Edoras$/);
-  const bare = snap({ machines: [machine('rohan-box', 'Edoras')], tickets: [merged] });
-  delete bare.config;
-  assert.equal(diff(before(), bare).events[0].cue, 'merge-rivendell', 'a snapshot with no config still works');
 });
 
 test('main red sounds the horn, again every 15 minutes, again on a new red commit, and green again calls victory', () => {

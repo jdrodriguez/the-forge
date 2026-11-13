@@ -103,6 +103,20 @@ function drawRider(g, kind, name, x, y, gait, gframe, pose, frame, tool) {
   // A people may name its own horse's coat (sprites-captains.js: Éomer rides a grey, as Firefoot is); else by the name.
   const [near, far] = horsePal(...(PEOPLE[kind]?.coat ?? HORSE_COATS[(pxHash(name) >>> 5) % HORSE_COATS.length]));
   const by = y - (s.bob ?? 0);
+  let hand = null;
+  const { head, lift } = drawHorse(g, x, by, s, near, far, (up) => { hand = drawFigure(g, kind, name, x, by - HORSE_SEAT - (up ? up(0) : 0), pose, frame, tool); });
+  haDraw(g, HORSE_SADDLE, HORSE_TACK, x, by, lift);
+  haDraw(g, HORSE_LEG, qdFigurePal(kind, name), x, by, lift);
+  if (pose === 'reins') {
+    const [mx, my] = head.mouth;
+    horseRein(g, hand.x + 0.75, hand.y + 0.25, x + mx / 4, by + my / 4 - (lift ? lift(mx) : 0));
+  }
+  return hand;
+}
+// The horse alone at gait frame s, hooves on row by and its middle over column x, facing right, in the near and far
+// palettes: the far legs, tail and head, then mid(lift) (a rider), then the barrel and the near legs. Returns the head's
+// art (for its mouth) and the lift of a rearing horse.
+function drawHorse(g, x, by, s, near, far, mid) {
   const rise = s.rise ?? 0;
   // A rearing horse tips back on its hind legs: each quarter column X rises with its distance from the rump, in
   // quarter-unit steps.
@@ -122,17 +136,11 @@ function drawRider(g, kind, name, x, y, gait, gframe, pose, frame, tool) {
   haDraw(g, HA_TAILS[s.tail ?? 0], near, x, by, lift);
   const head = haHead(s.head ?? 'up', s.tail === 2);
   haDraw(g, head, near, x, by, lift);
-  const hand = drawFigure(g, kind, name, x, by - HORSE_SEAT - (lift ? lift(0) : 0), pose, frame, tool);
+  mid?.(lift);
   haDraw(g, HA_BODY, near, x, by, lift);
   leg(0, near);
   leg(2, near);
-  haDraw(g, HORSE_SADDLE, HORSE_TACK, x, by, lift);
-  haDraw(g, HORSE_LEG, qdFigurePal(kind, name), x, by, lift);
-  if (pose === 'reins') {
-    const [mx, my] = head.mouth;
-    horseRein(g, hand.x + 0.75, hand.y + 0.25, x + mx / 4, by + my / 4 - (lift ? lift(mx) : 0));
-  }
-  return hand;
+  return { head, lift };
 }
 // The reins from the rider's hand to the bit: a strap a quarter unit wide, dark under a lit edge, so it shows on the
 // mane and on the coat alike.

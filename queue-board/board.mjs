@@ -23,6 +23,9 @@ import { musicList, musicFile, musicEvents, musicAlert, alertPages } from './mus
 import { weatherNow } from './weather.mjs';
 import { extRuns } from './ext-runs.mjs';
 import { hostAllowed, certName, callerOf } from './host-ok.mjs';
+import { REALM_KINDS, realmTable } from './realms.mjs';
+import { spreadOn, realmsByHost, assignRealms } from './realm-spread.mjs';
+import { giveNames } from './worker-names.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const cfg = loadConfig();
@@ -49,25 +52,22 @@ const tilde = (p) => (p === HOME || p.startsWith(`${HOME}/`) ? `~${p.slice(HOME.
 // config loader expands a leading ~/ to this machine's home, so a path under it goes back to ~/ for the remote shell.
 const REMOTE_ROOT = tilde(qb.remoteRoot ?? ROOT);
 
+// A string a config table gives a host, by own key only (a host named "constructor" gets none).
+const ownStr = (table, host) => (table && Object.hasOwn(table, host) && typeof table[host] === 'string' ? table[host] : null);
 // How to reach each queue machine (dispatcher.enabledHosts): its name on the page from queueBoard.names and its ssh
 // destination from queueBoard.ssh, both the host name itself when unset. The one this runs on is read directly.
 const MACHINES = (dc.enabledHosts ?? []).map((host) => ({
   host,
-  name: qb.names?.[host] ?? host,
-  ssh: qb.ssh?.[host] ?? host,
+  name: ownStr(qb.names, host) ?? host,
+  ssh: ownStr(qb.ssh, host) ?? host,
   root: host === HERE ? tilde(ROOT) : REMOTE_ROOT,
 }));
 
-// The Middle-earth realm each machine is drawn as (queueBoard.realms, { host: "rivendell" | "shire" | "erebor" }). With
-// none set, the first three enabled hosts get Rivendell, the Shire and Erebor in that order. Any other host is a
-// machine of Rohan, which the page draws for a host with no entry here.
-const REALM_KINDS = {
-  rivendell: { name: 'Rivendell', folk: 'elf' },
-  shire: { name: 'The Shire', folk: 'hobbit' },
-  erebor: { name: 'Erebor', folk: 'dwarf' },
-};
-const REALM_OF = qb.realms ?? Object.fromEntries((dc.enabledHosts ?? []).slice(0, 3).map((h, i) => [h, Object.keys(REALM_KINDS)[i]]));
-const REALMS = Object.fromEntries(Object.entries(REALM_OF).filter(([, k]) => REALM_KINDS[k]).map(([h, k]) => [h, REALM_KINDS[k]]));
+// The Middle-earth realm each machine is drawn as (realms.mjs): queueBoard.realms, else the enabled hosts in order take
+// Rivendell, the Shire, Erebor and Rohan. A host with no realm (a fifth machine) is drawn as Men under its own name.
+// Spread realms (realm-spread.mjs) also decide the table when one computer's map names no realm for it.
+const SPREAD = spreadOn(qb.spreadRealms ?? 'auto', dc.enabledHosts);
+const REALMS = realmTable(dc.enabledHosts, qb.realms, { spread: SPREAD });
 
 // The owner's place (queueBoard.weather) for the page's sky clock, which needs sunrise and sunset there; null when unset.
 const PLACE = Number.isFinite(Number(qb.weather?.latitude)) && Number.isFinite(Number(qb.weather?.longitude)) && qb.weather?.latitude != null && qb.weather?.longitude != null
@@ -489,45 +489,36 @@ function heartbeats() {
   }));
 }
 
-// Nicknames: the board shows each live worker under a Middle-earth name from the pools in queueBoard.nicknames, keyed by
-// realm (rivendell, shire, erebor), or by host, with sentry for Sentry-slot workers, adhoc for workers some session
-// started outside the queue (the wanderers), and other for every machine of Rohan. A name the dispatcher already gave a
-// ticket (its nickname) wins. A board-given name stays with its entry while the entry shows, and the least recently given
-// free name goes out next. <stateDir>/queue-board-names.json keeps them across restarts.
+// Nicknames (worker-names.mjs) and the realm each worker sits in (realm-spread.mjs), each kept across restarts in
+// <stateDir>: queue-board-names.json and queue-board-realms.json. With spread realms on (queueBoard.spreadRealms; "auto"
+// is on with exactly one enabled host) a machine also holds the realms no machine holds, a worker takes the one with the
+// fewest live workers when its ticket starts and keeps it, and its name comes from that realm's pool.
+const REALMS_BY_HOST = realmsByHost(dc.enabledHosts, qb.realms, SPREAD);
+const SPREAD_REALMS = SPREAD ? Object.fromEntries(Object.entries(REALMS_BY_HOST).map(([h, keys]) => [h, keys.map((k) => ({ ...REALM_KINDS[k] }))])) : null;
 const NAMES_FILE = path.join(STATE_DIR, 'queue-board-names.json');
-const names = (() => {
-  try { return JSON.parse(fs.readFileSync(NAMES_FILE, 'utf8')); } catch { return { given: {}, lastGiven: {} }; }
-})();
-function nameWorkers(tickets) {
-  const pools = qb.nicknames;
-  if (!pools) return;
-  const key = (t) => `${t.host}/${t.id}`;
-  const before = JSON.stringify(names);
-  const shown = new Set(tickets.map(key));
-  for (const k of Object.keys(names.given)) if (!shown.has(k)) delete names.given[k];
-  const live = tickets.filter((t) => t.live).sort((a, b) => (a.dispatchedAt || '').localeCompare(b.dispatchedAt || ''));
-  const taken = new Set(live.map((t) => t.nickname ?? names.given[key(t)]).filter(Boolean));
-  for (const t of live) {
-    if (t.nickname || names.given[key(t)]) continue;
-    // A Codex or Grok worker takes its realm's names like any worker.
-    const pool = (t.adhoc && pools.adhoc) || (t.sentry && pools.sentry) || pools[t.host] || pools[REALM_OF[t.host]] || pools.other;
-    if (!pool?.length) continue;
-    const free = pool.filter((n) => !taken.has(n)).sort((a, b) => (names.lastGiven[a] ?? '').localeCompare(names.lastGiven[b] ?? ''));
-    // A pool with every name in use (more live workers than names) numbers its least recently given name.
-    let name = free[0];
-    for (let i = 2; !name; i++) name = pool.map((n) => `${n} ${i}`).find((n) => !taken.has(n));
-    names.given[key(t)] = name;
-    names.lastGiven[name] = new Date().toISOString();
-    taken.add(name);
-  }
-  for (const t of tickets) t.nickname ??= names.given[key(t)] ?? null;
-  if (JSON.stringify(names) === before) return;
+const REALMS_FILE = path.join(STATE_DIR, 'queue-board-realms.json');
+const readState = (file, empty) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return empty; } };
+const names = readState(NAMES_FILE, { given: {}, lastGiven: {} });
+let seats = readState(REALMS_FILE, {});
+let seatsSaved = 0;
+function saveState(file, value, what) {
   try {
-    writeState(`${NAMES_FILE}.tmp`, JSON.stringify(names, null, 2));
-    fs.renameSync(`${NAMES_FILE}.tmp`, NAMES_FILE);
+    writeState(`${file}.tmp`, JSON.stringify(value, null, 2));
+    fs.renameSync(`${file}.tmp`, file);
   } catch (e) {
-    console.error(`${new Date().toISOString()} could not save worker names: ${errText(e)}`);
+    console.error(`${new Date().toISOString()} could not save ${what}: ${errText(e)}`);
   }
+}
+function nameWorkers(tickets) {
+  const before = JSON.stringify(seats);
+  seats = assignRealms(tickets, REALMS_BY_HOST, seats, Date.now());
+  // The seen stamps change every snapshot, so the file is written when a realm was given or let go, and hourly besides.
+  const shape = (s) => JSON.stringify(Object.entries(s).map(([k, v]) => [k, v.realm]));
+  if (shape(seats) !== shape(JSON.parse(before)) || Date.now() - seatsSaved > 3600_000) { saveState(REALMS_FILE, seats, 'worker realms'); seatsSaved = Date.now(); }
+  if (!qb.nicknames) return;
+  const was = JSON.stringify(names);
+  giveNames(tickets, qb.nicknames, names, { spread: SPREAD });
+  if (JSON.stringify(names) !== was) saveState(NAMES_FILE, names, 'worker names');
 }
 
 // The base branch's CI as the dispatcher's main-watch.mjs last saw it (within seconds of a red run or a recovery, and
@@ -689,10 +680,11 @@ async function build() {
     // The Codex and Grok calls running on this machine (ext-runs.mjs), for Saruman at his palantir.
     seer: extRuns(),
     // maxDispatchesPerDay null means no daily cap; the worker slots bound the queue then. The names, labels, realms and
-    // the board's own host are for the page's own text and map.
+    // the board's own host are for the page's own text and map. spread says whether one machine's workers sit in several
+    // realms; spreadRealms lists each host's realms then ({ host: [{ key, name, folk }] }, its own first), else null.
     config: { maxConcurrent: dc.maxConcurrent, maxDispatchesPerDay: dc.maxDispatchesPerDay ?? null, stallHours: dc.stallHours, spinHours: dc.spinHours, headroomFloorPercent: dc.headroomFloorPercent, tickMinutes: TICK_MINUTES,
       sentryHeartbeatMinutes: dc.sentryHeartbeatMinutes ?? 45, sentryCascade: sentryOrder(), human: HUMAN, orchestrator: ORCHESTRATOR, reviewer: cfg.reviewer?.name ?? null,
-      repo: REPO.split('/')[1] ?? REPO, boardHost: HERE, realms: REALMS, place: PLACE, repoDir: tilde(ROOT),
+      repo: REPO.split('/')[1] ?? REPO, boardHost: HERE, realms: REALMS, spread: SPREAD, spreadRealms: SPREAD_REALMS, place: PLACE, repoDir: tilde(ROOT),
       addAccountScript: path.join(ROOT, 'fleet/setup/add-account.sh'), workspaceFolder: cfg.workspaceCwd ? path.basename(cfg.workspaceCwd) : null,
       labels: { ready: LABELS.ready, building: LABELS.building, stuck: LABELS.stuck, sentry: LABELS.sentry, needsHuman: LABELS.needsHuman } },
     machines: machines.map((m) => ({
@@ -881,7 +873,7 @@ const hostOk = (req) => hostAllowed(req.headers.host, { port: PORT, me: ME, bind
 const caller = (req) => callerOf(req, { port: PORT, own: [tailscaleIp, ...BIND] });
 
 // In the order page.html loads them, so a test page built from this list loads them the same way.
-const PAGE_SCRIPTS = ['/mobile.js', '/ai-marks.js', '/session.js', '/inbox.js', '/worktrees.js', '/gollum-data.js', '/sessions.js', '/sprites.js', '/sprites-gear.js', '/sprites-gear-stations.js', '/sprites-hd.js', '/sprites-hd-folk.js', '/sprites-qd.js', '/sprites-wanderers.js', '/sprites-wanderers-folk.js', '/sprites-wanderers-gear.js', '/sprites-captains.js', '/sprites-work.js', '/sprites-horse.js', '/sprites-horse-art.js', '/sprites-horse-post.js', '/sprites-chores.js', '/realm-art-kit.js', '/realm-art.js', '/machines-accounts.js', '/machines.js', '/gollum-view.js', '/scenery-sun.js', '/scenery.js', '/scenery-qd.js', '/scenery-sky.js', '/scenery-sky-qd.js', '/scenery-land.js', '/scenery-land-qd.js', '/scenery-rohan.js', '/scenery-falls.js', '/scenery-erebor.js', '/scenery-lights.js', '/scenery-props.js', '/scenery-props-hd.js', '/scenery-props-qd.js', '/scenery-farm.js', '/scenery-hoard.js', '/scenery-elves.js', '/scenery-heal.js', '/scenery-shire.js', '/scene-tags.js', '/scene.js', '/scene-path.js', '/scene-weather.js', '/scene-weather-fall.js', '/scenery-weather.js', '/scenery-storm.js', '/scenery-snow.js', '/scene-wind.js', '/scene-glow.js', '/scene-work.js', '/scene-jobs.js', '/scene-farm.js', '/scene-hoard.js', '/scene-elves.js', '/scene-wild.js', '/scene-duel.js', '/scene-orcs.js', '/scene-ride.js', '/scene-tower.js', '/scene-call.js', '/scene-call-light.js', '/sprites-eagle.js', '/sprites-eagle-fly.js', '/scene-eagle.js', '/sprites-gollum.js', '/scene-gollum.js', '/scene-gollum-tag.js', '/sprites-saruman.js', '/sprites-saruman-stone.js', '/scene-saruman.js', '/scene2.js', '/scene2-plan.js', '/scene2-core-places.js', '/scene2-plan-south.js', '/scene2-tiles.js', '/scene2-build.js', '/scene2-trees.js', '/scene2-rivendell.js', '/scene2-rivendell-trees.js', '/scene2-rivendell-house.js', '/scene2-rivendell-garden.js', '/scene2-shire.js', '/scene2-shire-hill.js', '/scene2-shire-holes.js', '/scene2-shire-oak.js', '/scene2-shire-props.js', '/scene2-shire-pen.js', '/scene2-shire-mill.js', '/scene2-shire-front.js', '/scene2-shire-fill.js', '/scene2-erebor.js', '/scene2-erebor-gate.js', '/scene2-erebor-river.js', '/scene2-erebor-works.js', '/scene2-erebor-yard.js', '/scene2-rohan.js', '/scene2-edoras.js', '/scene2-edoras-stable.js', '/scene2-edoras-gondor.js', '/scene2-stations.js', '/scene2-station-art.js', '/scene2-elf.js', '/scene2-folk.js', '/scene2-body-kit.js', '/scene2-body-parts.js', '/scene2-body-head.js', '/scene2-tool.js', '/scene2-body-elf.js', '/scene2-body-man.js', '/scene2-body-hobbit.js', '/scene2-body-dwarf.js', '/scene2-body-wizard.js', '/scene2-body-captains.js', '/scene2-body-ent.js', '/scene2-body-wild.js', '/scene2-body-v1.js', '/scene2-move.js', '/scene2-path.js', '/scene2-life-fx.js', '/scene2-jobs.js', '/scene2-life.js', '/scene2-life-road.js', '/scene2-haul.js', '/scene2-haul-jobs.js', '/scene2-stock.js', '/scene2-stock-art.js', '/scene2-chores.js', '/scene2-archery.js', '/scene2-life-beasts.js', '/scene2-horse-art.js', '/scene2-horse.js', '/scene2-rider.js', '/scene2-rider-draw.js', '/scene2-rider-v1.js', '/scene2-fx.js', '/scene2-orc-art.js', '/scene2-orc-body.js', '/scene2-duel.js', '/scene2-orcs.js', '/scene2-orc-draw.js', '/scene2-war.js', '/scene2-rider-fight.js', '/scene2-rider-bug.js', '/scene2-life-deer.js', '/scene2-eye.js', '/scene2-eagle-art.js', '/scene2-call.js', '/scene2-eagle.js', '/scene2-call-bar.js', '/scene2-gollum-art.js', '/scene2-gollum.js', '/scene2-gollum-lairs.js', '/scene2-foes-v1.js', '/scene2-saruman.js', '/scene2-weather.js', '/scene2-wind.js', '/scene2-weather-fall.js', '/scene2-glow.js', '/scene2-tags.js', '/scene2-notes.js', '/scene2-mist.js', '/scene2-fireworks.js', '/scene2-saruman-tag.js', '/scene2-lands.js', '/scene2-land-peaks.js', '/scene2-land-peaks-draw.js', '/scene2-places.js', '/scene2-land-eriador.js', '/scene2-land-eriador-bree.js', '/scene2-land-eriador-trolls.js', '/scene2-land-eriador-willow.js', '/scene2-land-vale.js', '/scene2-land-vale-beorn.js', '/scene2-land-vale-wild.js', '/scene2-land-lake.js', '/scene2-land-lake-town.js', '/scene2-moria.js', '/scene2-moria-east.js', '/scene2-lorien.js', '/scene2-world.js', '/scene2-gondor.js', '/scene2-mordor.js', '/scene2-mordor-gate.js', '/scene2-mordor-doom.js', '/scene2-helm.js', '/scene2-helm-caves.js', '/scene2-isengard-orthanc.js', '/scene2-isengard.js', '/scene2-gondor-city.js', '/scene2-gondor-citybuild.js', '/scene2-gondor-osgiliath.js', '/scene2-gondor-fields.js', '/scene2-gondor-river.js', '/scene2-gondor-sea.js', '/scene2-gondor-ithilien.js', '/horn.js', '/sound-ui.js', '/music.js', '/music-duck.js'];
+const PAGE_SCRIPTS = ['/mobile.js', '/ai-marks.js', '/session.js', '/inbox.js', '/worktrees.js', '/gollum-data.js', '/sessions.js', '/sprites.js', '/sprites-gear.js', '/sprites-gear-stations.js', '/sprites-hd.js', '/sprites-hd-folk.js', '/sprites-qd.js', '/sprites-wanderers.js', '/sprites-wanderers-folk.js', '/sprites-wanderers-gear.js', '/sprites-captains.js', '/sprites-work.js', '/sprites-horse.js', '/sprites-horse-art.js', '/sprites-horse-post.js', '/sprites-chores.js', '/sprites-rohan.js', '/realm-art-kit.js', '/realm-art.js', '/machines-accounts.js', '/machines.js', '/gollum-view.js', '/scenery-sun.js', '/scenery.js', '/scenery-qd.js', '/scenery-sky.js', '/scenery-sky-qd.js', '/scenery-land.js', '/scenery-land-qd.js', '/scenery-rohan.js', '/scenery-rohan-stables.js', '/scenery-falls.js', '/scenery-erebor.js', '/scenery-lights.js', '/scenery-props.js', '/scenery-props-hd.js', '/scenery-props-qd.js', '/scenery-farm.js', '/scenery-rohan-props.js', '/scenery-hoard.js', '/scenery-elves.js', '/scenery-heal.js', '/scenery-shire.js', '/realm-view.js', '/scene-tags.js', '/scene.js', '/scene-path.js', '/scene-weather.js', '/scene-weather-fall.js', '/scenery-weather.js', '/scenery-storm.js', '/scenery-snow.js', '/scene-wind.js', '/scene-glow.js', '/scene-work.js', '/scene-jobs.js', '/scene-farm.js', '/scene-hoard.js', '/scene-elves.js', '/scene-wild.js', '/scene-rohan.js', '/scene-rohan-horses.js', '/scene-duel.js', '/scene-orcs.js', '/scene-ride.js', '/scene-tower.js', '/scene-call.js', '/scene-call-light.js', '/sprites-eagle.js', '/sprites-eagle-fly.js', '/scene-eagle.js', '/sprites-gollum.js', '/scene-gollum.js', '/scene-gollum-tag.js', '/sprites-saruman.js', '/sprites-saruman-stone.js', '/scene-saruman.js', '/scene2.js', '/scene2-plan.js', '/scene2-plan-realms.js', '/scene2-core-places.js', '/scene2-plan-south.js', '/scene2-tiles.js', '/scene2-build.js', '/scene2-trees.js', '/scene2-rivendell.js', '/scene2-rivendell-trees.js', '/scene2-rivendell-house.js', '/scene2-rivendell-garden.js', '/scene2-shire.js', '/scene2-shire-hill.js', '/scene2-shire-holes.js', '/scene2-shire-oak.js', '/scene2-shire-props.js', '/scene2-shire-pen.js', '/scene2-shire-mill.js', '/scene2-shire-front.js', '/scene2-shire-fill.js', '/scene2-erebor.js', '/scene2-erebor-gate.js', '/scene2-erebor-river.js', '/scene2-erebor-works.js', '/scene2-erebor-yard.js', '/scene2-rohan.js', '/scene2-edoras.js', '/scene2-edoras-stable.js', '/scene2-edoras-gondor.js', '/scene2-stations.js', '/scene2-station-art.js', '/scene2-rohan-shield.js', '/scene2-elf.js', '/scene2-folk.js', '/scene2-body-kit.js', '/scene2-body-parts.js', '/scene2-body-head.js', '/scene2-tool.js', '/scene2-body-elf.js', '/scene2-body-man.js', '/scene2-body-hobbit.js', '/scene2-body-dwarf.js', '/scene2-body-wizard.js', '/scene2-body-captains.js', '/scene2-body-ent.js', '/scene2-body-wild.js', '/scene2-body-v1.js', '/scene2-move.js', '/scene2-path.js', '/scene2-life-fx.js', '/scene2-jobs.js', '/scene2-life.js', '/scene2-life-road.js', '/scene2-haul.js', '/scene2-haul-jobs.js', '/scene2-stock.js', '/scene2-stock-art.js', '/scene2-chores.js', '/scene2-rohan-banner.js', '/scene2-archery.js', '/scene2-life-beasts.js', '/scene2-horse-art.js', '/scene2-horse.js', '/scene2-rider.js', '/scene2-rider-draw.js', '/scene2-rider-v1.js', '/scene2-fx.js', '/scene2-orc-art.js', '/scene2-orc-body.js', '/scene2-duel.js', '/scene2-orcs.js', '/scene2-orc-draw.js', '/scene2-war.js', '/scene2-rider-fight.js', '/scene2-rider-bug.js', '/scene2-life-deer.js', '/scene2-eye.js', '/scene2-eagle-art.js', '/scene2-call.js', '/scene2-eagle.js', '/scene2-call-bar.js', '/scene2-gollum-art.js', '/scene2-gollum.js', '/scene2-gollum-lairs.js', '/scene2-foes-v1.js', '/scene2-saruman.js', '/scene2-weather.js', '/scene2-wind.js', '/scene2-weather-fall.js', '/scene2-glow.js', '/scene2-tags.js', '/scene2-notes.js', '/scene2-mist.js', '/scene2-fireworks.js', '/scene2-saruman-tag.js', '/scene2-lands.js', '/scene2-land-peaks.js', '/scene2-land-peaks-draw.js', '/scene2-places.js', '/scene2-land-eriador.js', '/scene2-land-eriador-bree.js', '/scene2-land-eriador-trolls.js', '/scene2-land-eriador-willow.js', '/scene2-land-vale.js', '/scene2-land-vale-beorn.js', '/scene2-land-vale-wild.js', '/scene2-land-lake.js', '/scene2-land-lake-town.js', '/scene2-moria.js', '/scene2-moria-east.js', '/scene2-lorien.js', '/scene2-world.js', '/scene2-gondor.js', '/scene2-mordor.js', '/scene2-mordor-gate.js', '/scene2-mordor-doom.js', '/scene2-helm.js', '/scene2-helm-caves.js', '/scene2-isengard-orthanc.js', '/scene2-isengard.js', '/scene2-gondor-city.js', '/scene2-gondor-citybuild.js', '/scene2-gondor-osgiliath.js', '/scene2-gondor-fields.js', '/scene2-gondor-river.js', '/scene2-gondor-sea.js', '/scene2-gondor-ithilien.js', '/horn.js', '/sound-ui.js', '/music.js', '/music-duck.js'];
 // What makes the board installable as an app: the manifest, the service worker and the icons, each by exact path.
 const APP_FILES = {
   '/manifest.webmanifest': 'application/manifest+json',

@@ -29,7 +29,7 @@ const PEOPLE = {
   ranger: { h: 15, w: 6, legs: 4, tool: 'sword', iris: ['#5d6b78'], hair: [['#3a2a20', '#2a1d16']], cloth: [['#3e5a3c', '#2c422b']] },
   wizard: { h: 15, w: 6, legs: 4, hat: true, staff: true, tool: 'staff', iris: ['#4a6a9a', '#5d6b78'],
     hair: [['#ececec', '#c4c4c4']], cloth: [['#9aa1a8', '#717880']] },
-  man: { h: 14, w: 6, legs: 4, tool: 'quill', weapon: 'sword', iris: ['#3f7fae', '#6b4a2b', '#5d6b78'],
+  man: { h: 14, w: 6, legs: 4, tool: 'hammer', weapon: 'sword', iris: ['#3f7fae', '#6b4a2b', '#5d6b78'],
     hair: [['#8a5a2b', '#6a4220'], ['#d6b25e', '#ad8e44']], cloth: [['#5b6fa8', '#43528a'], ['#8f3d3d', '#6b2c2c']] },
   orc: { h: 13, w: 8, legs: 3, tool: 'blade', skin: ['#8c9a6a', '#66744b'], eyes: PX.red, helm: ['#4e4a55', '#2e2b33'],
     hair: [['#1d1a1c', '#121012']], cloth: [['#3c3940', '#28262b'], ['#4a3a30', '#30251d'], ['#38403a', '#262c27']] },
