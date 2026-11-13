@@ -53,7 +53,8 @@ to the config as forge-answers.json, where doctor and the next init find them.
 
 Checks node, git, jq, curl, perl, gh and its sign-in, Claude Code, each Claude account this computer uses, Codex and
 Grok where this computer runs them, Tailscale and ssh to each other computer (from the board's computer), the Linear
-key, the config against the example, and the skill links. Only reads. Exits 1 when something is missing.
+key, the config against the example, and the skill links. It only reads, apart from the engine check's own
+10-minute cache. Exits 1 when something is missing.
 
   --json            print the checks as JSON
   --answers <file>  the answers file (default forge-answers.json next to the config)`,
