@@ -23,6 +23,8 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | Key | Example | What it does |
 |---|---|---|
 | `orchestrator.sessionName` | `"Specdesk"` | The pinned Claude Code session that writes specs and watches the queue. Emergency responders message it by this name. |
+| `orchestrator.lockFile` | `null` | The driver lock: the session ID of the one session allowed to approve and merge. merge-approved.sh refuses any other Claude Code session, and reads the lock again right before each merge. A shell outside Claude Code counts as the human and passes. null means <paths.sharedDir>/orchestrator-session, so a takeover on one machine stops the driver on every other. |
+| `orchestrator.approvalsFile` | `null` | The approvals ledger merge-approved.sh writes: one JSON line per approved PR head, closed by a merged line. An approval covers only the exact head it names. null means <paths.sharedDir>/approvals.jsonl, so a session on another machine sees the same approvals. |
 
 ## `paths`
 
@@ -41,7 +43,8 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | `github.ciWorkflow` | `"CI"` | The workflow name the pre-merge check and the main watcher read. |
 | `github.reviewCheck` | `"Claude Code Review"` | The status check that must pass before a PR counts as green. null skips the review check. |
 | `github.rerunLabel` | `"review:rerun"` | merge-when-ready.sh adds this label once when the review check reads "Re-review not requested". null if your review bot re-runs on every push. |
-| `github.fixesMainLabel` | `"fixes-main"` | A PR with this label (or a revert) may merge while main is red. |
+| `github.fixesMainLabel` | `"fixes-main"` | A PR with this label may merge while main is red or the merge queue is held. |
+| `github.fixTitlePrefix` | `null` | Optional title prefix that also marks a PR as a fix for merge-approved.sh, e.g. "Revert \"" for GitHub's revert PRs. null means only the label counts. |
 | `github.branchTemplate` | `"agent/{id}"` | The branch a worker builds on. {id} is the lowercased ticket ID, so ENG-123 builds on agent/eng-123. |
 
 ## `linear`
@@ -56,7 +59,9 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | `linear.sizeLabelGroup` | `"Size"` | The Linear label group whose child labels (S, M, L) size a ticket. |
 | `linear.labels` | `{"ready":"agent-ready","building":"agent-building","stuck":"agent-s...` | ready, building and stuck are the queue's states. needsHuman marks a ticket with an open ask. sentry, mechanical and judgment drive the Sentry lane; leave them as they are if you have no Sentry triage. |
 | `linear.states` | `{"inProgress":"In Progress","verifying":"Verifying"}` | Workflow state names on the team. A claimed ticket moves to inProgress, a merged one to verifying. |
-| `linear.verifyEvidenceHeading` | `"## Verify evidence"` | merged-to-verifying.mjs leaves a ticket in Done only when its newest comment with this heading came after the merge and has no FAIL cell (docs/ticket-spec.md). |
+| `linear.verifyEvidenceHeading` | `"## Verify evidence"` | The heading a verify evidence comment opens with (docs/ticket-spec.md). merged-to-verifying.mjs leaves a ticket in Done only when its newest evidence comment by an accepted author came after the merge and passes: the footer, at least one PASS row, and no FAIL or malformed row. |
+| `linear.verifyEnvironments` | `["staging","production"]` | The environment names an evidence footer may name (_Verified <ISO> on <env> as <persona> against <sha>_). |
+| `linear.verifyEvidenceAuthors` | `[]` | Linear user IDs whose evidence comments count, besides the user the Linear API key belongs to. A comment by anyone else is ignored. |
 
 ## `slack`
 
@@ -129,6 +134,23 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | `dispatcher.sentryHeartbeatMinutes` | `45` | While a host with sentryWorkers is unpaused and wrote its heartbeat (sharedDir/heartbeats) less than this many minutes ago, other machines leave Sentry tickets to it. |
 | `dispatcher.sentryTriage` | `{"enabled":false,"host":"main-mac","module":"sentry-triage.mjs"}` | An optional triage module you write; this repo ships none. It loads from dispatcher/ on host only, when enabled. It exports kickFromTick({ cfg, dry, log }), which should start its run in a detached process, and statusLine(cfg). It labels the tickets it queues with linear.labels.sentry plus mechanical or judgment. A throw or syntax error in it costs one log line and never stops a tick. |
 | `dispatcher.externalBuilders` | `{"fallback":{"enabled":false,"engines":["codex","grok"],"sizes":["S...` | Codex and Grok as queue workers (dispatcher/README.md, "Codex and Grok as queue workers"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push. |
+
+## `merge`
+
+The gate merge-approved.sh applies to github.repo: not a draft, no approval on file for an older head (running the script on a PR with none is the approval), merge state CLEAN, HAS_HOOKS or UNSTABLE, at least one check reported and every one passing, and the pre-merge check passing against current main. It stops at the first PR that does not pass. A process without CLAUDE_CODE_SESSION_ID (a script, CI) skips the driver lock.
+
+| Key | Example | What it does |
+|---|---|---|
+| `merge.mode` | `"queue"` | How merge-approved.sh lands a PR in github.repo: "queue" enqueues it in GitHub's merge queue and waits for it to land (a repo without a queue merges at once), "direct" squash-merges it. |
+| `merge.ciHold` | `true` | In queue mode, hold the merge queue when its two most recent finished runs failed on the same job, until a later run passes that job. A rollup job that fails only because another job did never counts. A fix (github.fixesMainLabel) still goes in, and QUEUE_PROBE_PR=<n> lets one PR in to give the hold a new run to read. |
+| `merge.reviewChecks` | `null` | Check names that count as the passed review: one of them must pass on the head, and none may have failed on it. null means [github.reviewCheck]. With both empty no review is required, and every run says so. |
+| `merge.reviewSupportChecks` | `[]` | Checks that only request or stamp the review, e.g. ["request-review"]. Their failure does not hold a PR once a review check passed. |
+| `merge.requiredChecks` | `[]` | Checks that must have passed, besides every reported check passing. Use it for a check that may not have reported yet. |
+| `merge.ignoreChecks` | `[]` | Regex sources for checks left out of the gate entirely, e.g. a preview deploy that fails on forks. |
+| `merge.reviewGateBlocks` | `false` | true accepts merge state BLOCKED, for a repo whose branch rule (a code-owner review, say) blocks a PR the gate otherwise passes. Pair it with adminMerge. |
+| `merge.adminMerge` | `false` | Merge with gh pr merge --admin, bypassing branch rules. Only for a repo where the gate above is the review you want. |
+| `merge.resolvedThreads` | `false` | Hold a PR that has an unresolved review thread. |
+| `merge.repos` | `{"your-org/your-site":{"mode":"direct","ciHold":false,"reviewChecks...` | Other repos merge-approved.sh --repo <owner/name> may merge, each with the keys above. A key an entry leaves out falls back to the top-level value. The pre-merge check, migration order, and the red-main hold apply only to github.repo. Leave it {} if the queue builds one repo. |
 
 ## `push`
 
