@@ -79,7 +79,28 @@ function withRepo(key, e) {
   const dir = e.path ?? path.join(WORKSPACE ?? HOME, path.basename(e.github));
   return { key, github: e.github, path: dir, base: e.base ?? BASE, brief: e.brief ?? 'worker-brief.md', mergeMode: e.mergeMode ?? 'orchestrator',
     mergeReason: e.mergeReason ?? null, reviewCheck: e.reviewCheck === undefined ? REVIEW_CHECK : e.reviewCheck, requiredChecks: e.requiredChecks ?? null,
-    ignoreChecks: e.ignoreChecks ?? null, reviewGateBlocks: Boolean(e.reviewGateBlocks), worktrees: path.join(dir, conf.worktreesDir ?? '.claude/worktrees'), isDefault: false };
+    ignoreChecks: patterns(key, 'ignoreChecks', e.ignoreChecks, ''), reviewGateBlocks: Boolean(e.reviewGateBlocks),
+    risky: e.riskyPathPatterns ? patterns(key, 'riskyPathPatterns', e.riskyPathPatterns, 'i') : null,
+    worktrees: path.join(dir, conf.worktreesDir ?? '.claude/worktrees'), isDefault: false };
+}
+// A repo entry's regex list, compiled once. An invalid pattern is logged once and marked bad: an ignoreChecks list with one
+// keeps the PR from reading green, and a bad riskyPathPatterns entry matches every path, so the PR goes to the
+// orchestrator.
+const badPatterns = new Set();
+function patterns(key, field, list, flags) {
+  if (!list) return null;
+  return list.map((rx) => {
+    try {
+      return new RegExp(rx, flags);
+    } catch (e) {
+      const k = `${key}.${field}.${rx}`;
+      if (!badPatterns.has(k)) {
+        badPatterns.add(k);
+        log(`repos.${key}.${field}: ${JSON.stringify(rx)} is not a valid regex (${e.message}); the queue merges none of this repo's PRs until it is fixed`);
+      }
+      return { bad: rx, test: () => true };
+    }
+  });
 }
 // The repo a Linear project builds in, or null when the config says it has none.
 function repoForProject(name) {
@@ -113,14 +134,29 @@ function allRepos() {
   return [...seen.values()];
 }
 const ghRepo = (pr) => pr?.repo ?? REPO;
-// Whether the folder at a mapped repo's path is a checkout of that repo: its origin names owner/name on GitHub.
-function checkoutOf(R) {
+// The owner/name a GitHub remote URL names (https, ssh or scp form, with or without .git), or null for anything else.
+function githubOf(url) {
+  const m = String(url).trim().match(/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+// Why a mapped repo's checkout cannot be used here, or null when it can. Its path is absolute with no "..", its
+// worktrees folder resolves inside it, and its origin names exactly the repo the config maps. Checked at the claim, at
+// a replacement and before a teardown, since the folder can change between them.
+function repoProblem(R) {
+  if (R.isDefault) return null;
+  const wtDir = conf.worktreesDir ?? '.claude/worktrees';
+  if (!R.path || !path.isAbsolute(R.path) || R.path.split(/[\\/]/).includes('..')) return `a checkout path for ${R.github} that is not absolute or holds ".." (${R.path})`;
+  if (path.isAbsolute(wtDir) || wtDir.split(/[\\/]/).includes('..')) return `a worktreesDir outside the checkout (${wtDir})`;
+  if (!fs.existsSync(R.path)) return `no checkout of ${R.github} at ${R.path}`;
+  const real = fs.realpathSync(R.path);
+  const wts = fs.existsSync(R.worktrees) ? fs.realpathSync(R.worktrees) : path.resolve(real, wtDir);
+  if (!wts.startsWith(`${real}${path.sep}`)) return `a worktrees folder ${wts} outside the checkout ${real}`;
+  let origin = null;
   try {
-    const url = run('git', ['-C', R.path, 'remote', 'get-url', 'origin'], { timeout: 10_000 });
-    return url.replace(/\.git$/, '').replace(/\/$/, '').toLowerCase().endsWith(R.github.toLowerCase());
-  } catch {
-    return false;
-  }
+    origin = githubOf(run('git', ['-C', R.path, 'remote', 'get-url', 'origin'], { timeout: 10_000 }));
+  } catch { /* no origin */ }
+  if (origin !== R.github.toLowerCase()) return `a checkout at ${R.path} whose origin is ${origin ?? 'not a GitHub repo'}, not ${R.github}`;
+  return null;
 }
 const DRY = process.argv.includes('--dry-run');
 // `tick --dry-run --bundle` shows what bundling would do while the config still has it off.
@@ -696,8 +732,9 @@ const checkName = (c) => c.name ?? c.context;
 function greenByChecks(pr, R) {
   const ok = ['CLEAN', 'HAS_HOOKS', 'UNSTABLE', ...(R.reviewGateBlocks ? ['BLOCKED'] : [])];
   if (!ok.includes(pr.mergeStateStatus)) return `merge state ${pr.mergeStateStatus}`;
-  const ignored = (R.ignoreChecks ?? []).map((rx) => new RegExp(rx));
-  const all = (pr.statusCheckRollup ?? []).filter((c) => !ignored.some((rx) => rx.test(checkName(c) ?? '')));
+  const bad = (R.ignoreChecks ?? []).find((rx) => rx.bad);
+  if (bad) return `ignoreChecks pattern ${JSON.stringify(bad.bad)} is not a valid regex`;
+  const all = (pr.statusCheckRollup ?? []).filter((c) => !(R.ignoreChecks ?? []).some((rx) => rx.test(checkName(c) ?? '')));
   const passed = (name) => all.some((c) => checkName(c) === name && (c.conclusion ?? c.state) === 'SUCCESS');
   for (const name of [...(R.requiredChecks ?? []), ...(R.reviewCheck ? [R.reviewCheck] : [])]) {
     if (!passed(name)) return `${name} not passed`;
@@ -734,7 +771,8 @@ function riskyPaths(pr) {
   const rows = out ? out.split('\n') : [];
   const paths = rows.flatMap((r) => r.split('\t')).filter(Boolean);
   if (rows.length < pr.changedFiles) return [`(only ${rows.length} of ${pr.changedFiles} files could be read)`];
-  return [...new Set(paths.filter((p) => RISKY.some((rx) => rx.test(p))))];
+  const rules = pr.repoCfg?.risky ?? RISKY;
+  return [...new Set(paths.filter((p) => rules.some((rx) => rx.test(p))))];
 }
 
 const MERGE_REQUESTS = path.join(SHARED, 'merge-requests');
@@ -1915,8 +1953,9 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
     }
   }
   const R = repoOf(t);
-  if (!R.path || !fs.existsSync(R.path)) {
-    t.teardown = { ...rec, skipped: `no checkout of ${R.github} on ${HOST}` };
+  const problem = R.isDefault ? (!R.path || !fs.existsSync(R.path) ? `no checkout of ${R.github} on ${HOST}` : null) : repoProblem(R);
+  if (problem) {
+    t.teardown = { ...rec, skipped: problem };
     return;
   }
   const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json', 'number,state,headRefOid'])) : null;
@@ -2563,9 +2602,7 @@ async function dispatch(st, m) {
     // machine that has its checkout and its brief; any other machine leaves the ticket for one that has.
     const repo = repoForIssue(issue);
     if (!repo.isDefault) {
-      const missing = !repo.path || !fs.existsSync(repo.path) ? `no checkout of ${repo.github} at ${repo.path}`
-        : !checkoutOf(repo) ? `a checkout at ${repo.path} whose origin is not ${repo.github}`
-        : !fs.existsSync(briefFile(repo)) ? `no worker brief ${repo.brief} for ${repo.github}` : null;
+      const missing = repoProblem(repo) ?? (!fs.existsSync(briefFile(repo)) ? `no worker brief ${repo.brief} for ${repo.github}` : null);
       if (missing) {
         log(`${issue.identifier}: builds in ${repo.github}, but ${HOST} has ${missing}, so it is left for a machine that has`);
         continue;
@@ -2736,8 +2773,14 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null, say = n
   if (!mayWake(st, id, t, why ?? say ?? 'a replacement worker')) return null;
   noteStart(id, false);
   const members = [];
-  for (const x of [id, ...(t.bundle ?? [])]) members.push((await gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id: x })).issue);
+  for (const x of [id, ...(t.bundle ?? [])]) members.push((await gql('query($id:String!){ issue(id:$id){ id identifier title url description labels{ nodes{ name } } } }', { id: x })).issue);
   const [issue] = members;
+  // The checkout and the platform label are checked again: either can change between the claim and a replacement.
+  const R = repoOf(t);
+  const problem = repoProblem(R);
+  if (problem) throw new Error(`not replaced on ${HOST}: it builds in ${R.github}, and this machine has ${problem}`);
+  const needs = members.map(requiredPlatform).find((p) => p && p.platform !== process.platform);
+  if (needs) throw new Error(`not replaced on ${HOST}: it is labeled ${needs.label}, which needs a ${needs.platform} machine, and this one is ${process.platform}`);
   const acct = pickAccount(JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 })));
   if (!acct) return null;
   const model = modelFor(acct);
