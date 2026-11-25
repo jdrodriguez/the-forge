@@ -27,10 +27,11 @@ try {
 }
 
 const args = process.argv.slice(2);
-// The check reads the dry run's porcelain lines, so options that change or hide that output are refused.
-const hiding = args.filter((a) => /^(-q|--quiet|-v|--verbose|--progress|--no-progress)$/.test(a) || /^-[a-zA-Z]*[qv]/.test(a) && !a.startsWith('--'));
-if (hiding.length) {
-  console.log(`gated-push: REFUSED. ${hiding.join(' ')} would hide where the push lands; push without it`);
+// Only a remote, refspecs and -u/--set-upstream are taken: any other option could hide the dry run's output or undo
+// the dry run itself (--no-dry-run), so it is refused.
+const odd = args.filter((a) => a.startsWith('-') && !['-u', '--set-upstream'].includes(a));
+if (odd.length) {
+  console.log(`gated-push: REFUSED. It takes a remote, refspecs and -u only, not ${odd.join(' ')}`);
   process.exit(1);
 }
 const protectedRefs = [...new Set(cfg.push?.protectedBranches ?? [cfg.github?.baseBranch ?? 'main', 'main', 'master'])];

@@ -69,17 +69,14 @@ SH
   sed "s|@BASE@|$EW_BASE|g" > "$t/git" <<'SH'
 #!/bin/bash
 . "$(dirname "$0")/_real"
-# A dry run pushes nothing, so it may skip the hooks: gated-push asks where a push lands with one.
-# An option's value (-o --dry-run) is not the flag, so the values of the options that take one are skipped.
-dry=0; seen=0; skip=0
-for a in "$@"; do
-  if [ $seen = 0 ]; then [ "$a" = push ] && seen=1; continue; fi
-  if [ $skip = 1 ]; then skip=0; continue; fi
-  case "$a" in
-    -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
-    -n|--dry-run) dry=1 ;;
-  esac
-done
+# A dry run pushes nothing, so it may skip the hooks: gated-push asks where a push lands with exactly
+# `git push --dry-run --no-verify --porcelain <remote and refspecs>`. Only that form counts as a dry run, and any later
+# option (one that could undo the dry run, such as --no-dry-run) disqualifies it.
+dry=0
+if [ "${1:-}" = push ] && [ "${2:-}" = --dry-run ] && [ "${3:-}" = --no-verify ] && [ "${4:-}" = --porcelain ]; then
+  dry=1
+  for a in "${@:5}"; do case "$a" in -u|--set-upstream) ;; -*) dry=0 ;; esac; done
+fi
 seen=0
 for a in "$@"; do
   if [ $seen = 0 ]; then [ "$a" = push ] && seen=1; continue; fi
