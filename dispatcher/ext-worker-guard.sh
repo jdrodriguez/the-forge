@@ -70,10 +70,15 @@ SH
 #!/bin/bash
 . "$(dirname "$0")/_real"
 # A dry run pushes nothing, so it may skip the hooks: gated-push asks where a push lands with one.
-dry=0; seen=0
+# An option's value (-o --dry-run) is not the flag, so the values of the options that take one are skipped.
+dry=0; seen=0; skip=0
 for a in "$@"; do
   if [ $seen = 0 ]; then [ "$a" = push ] && seen=1; continue; fi
-  case "$a" in -n|--dry-run) dry=1 ;; esac
+  if [ $skip = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -o|--push-option|--repo|--receive-pack|--exec) skip=1 ;;
+    -n|--dry-run) dry=1 ;;
+  esac
 done
 seen=0
 for a in "$@"; do

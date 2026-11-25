@@ -118,3 +118,26 @@ test('the pre-merge check clears each package build output and skips a stray fil
   assert.ok(fs.existsSync(path.join(pkgs, 'api/index.ts')));
   assert.ok(fs.existsSync(path.join(pkgs, '.DS_Store')));
 });
+
+test('gated-push refuses options that would hide where the push lands', () => {
+  const c = clone();
+  const r = gatedPush(c, ['--quiet', 'origin', 'HEAD:main'], config(c.dir));
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /REFUSED\. --quiet would hide where the push lands/);
+  assert.notEqual(git(c.origin, 'rev-parse', 'main'), git(c.repo, 'rev-parse', 'HEAD'));
+});
+
+test("the engine's git shim does not read an option's value as a dry run", () => {
+  const dir = tmp('shim2-');
+  const fake = path.join(dir, 'fake');
+  fs.mkdirSync(fake);
+  fs.writeFileSync(path.join(fake, 'git'), '#!/bin/sh\necho "real $*"\n', { mode: 0o755 });
+  const ew = path.join(dir, 'ew');
+  spawnSync('bash', ['-c', `lib() { return 1; }; . "${path.join(ROOT, 'dispatcher/ext-worker-guard.sh')}"; write_shims`],
+    { env: { ...process.env, EW: ew, EW_BASE: 'main', NET: '/dev/null' }, encoding: 'utf8' });
+  const shim = fs.readdirSync(ew).map((d) => path.join(ew, d, 'git')).find((f) => fs.existsSync(f));
+  const r = spawnSync('bash', [shim, 'push', '-o', '--dry-run', '--no-verify', 'origin', 'HEAD:refs/heads/x'],
+    { env: { ...process.env, PATH: `${path.dirname(shim)}:${fake}:/usr/bin:/bin` }, encoding: 'utf8' });
+  assert.equal(r.status, 126);
+  assert.match(r.stderr, /refused: git push --no-verify/);
+});

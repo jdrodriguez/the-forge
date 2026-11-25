@@ -27,6 +27,12 @@ try {
 }
 
 const args = process.argv.slice(2);
+// The check reads the dry run's porcelain lines, so options that change or hide that output are refused.
+const hiding = args.filter((a) => /^(-q|--quiet|-v|--verbose|--progress|--no-progress)$/.test(a) || /^-[a-zA-Z]*[qv]/.test(a) && !a.startsWith('--'));
+if (hiding.length) {
+  console.log(`gated-push: REFUSED. ${hiding.join(' ')} would hide where the push lands; push without it`);
+  process.exit(1);
+}
 const protectedRefs = [...new Set(cfg.push?.protectedBranches ?? [cfg.github?.baseBranch ?? 'main', 'main', 'master'])];
 // --no-verify applies to the dry run only (a dry run still fires the pre-push hook); the real push below keeps it.
 const dry = spawnSync('git', ['push', '--dry-run', '--no-verify', '--porcelain', ...args], { cwd: root, encoding: 'utf8' });
@@ -39,6 +45,11 @@ if (landsOn.length) {
 }
 if (dry.status !== 0) {
   console.log(`gated-push: REFUSED. The dry run that checks where this push lands failed (exit ${dry.status}):\n${dest.trim()}`);
+  process.exit(1);
+}
+// A dry run that names no ref says nothing about where the push lands, so it refuses too.
+if (!dest.split('\n').some((l) => /^\S?\t[^\t]*:refs\//.test(l))) {
+  console.log(`gated-push: REFUSED. The dry run named no destination ref:\n${dest.trim()}`);
   process.exit(1);
 }
 
