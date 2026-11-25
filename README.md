@@ -44,7 +44,7 @@ flowchart LR
 | `specdesk/` | The spec desk's standing brief (`SPECDESK.md`) and its skill. |
 | `dispatcher/` | The queue: `dispatcher.mjs` (the tick), `worker-brief.md`, `premerge-check.mjs`, `main-watch.mjs` (red-main responder), `gated-push.mjs`, `install.sh` (launchd or systemd). |
 | `fleet/` | `fleet.sh`: start, list, read and stop Claude Code background sessions on several accounts on one machine, with plan usage per account. Plus its skill and account setup. |
-| `inbox/` | `ask-human.sh` (questions, in Linear and Slack), the orchestrator's watchers (`inbox-watch.sh`, `merge-request-watch.sh`, `main-red-watch.sh`) and the merge helpers (`merge-approved.sh`, `merge-when-ready.sh`, `merged-to-verifying.mjs`). |
+| `inbox/` | `ask-human.sh` (questions, in Linear and Slack), the orchestrator's watchers (`inbox-watch.sh`, `merge-request-watch.sh`, `main-red-watch.sh`, `dispatcher-events-watch.sh`) and the merge helpers (`merge-approved.sh`, `merge-when-ready.sh`, `merged-to-verifying.mjs`). |
 | `queue-board/` | The board (below), and `hourly-check.mjs`, which wakes the orchestrator only when something new needs it. |
 | `learning/` | The weekly failure sweep. |
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |
@@ -71,7 +71,7 @@ You need Claude Code (one Claude account is enough), Node 22 or newer, git, gh, 
 | `the-forge start`, `stop`, `status`, `open` | Load or unload the jobs, show them, open the board. |
 | `the-forge update`, `copy-to <host>` | Refresh the lasting copy and reload the jobs. Copy it to another computer over SSH. |
 
-Once it runs, open a Claude Code session, pin it, name it after `orchestrator.sessionName`, and run `/specdesk`. In it, start these watchers with Bash `run_in_background`, and re-arm each one after it wakes the session: `inbox/inbox-watch.sh`, `inbox/merge-request-watch.sh`, `inbox/main-red-watch.sh` and `queue-board/hourly-check.mjs`.
+Once it runs, open a Claude Code session, pin it, name it after `orchestrator.sessionName`, and run `/specdesk`. In it, start these watchers with Bash `run_in_background`, and re-arm each one after it wakes the session: `inbox/inbox-watch.sh`, `inbox/merge-request-watch.sh`, `inbox/main-red-watch.sh`, `inbox/dispatcher-events-watch.sh` and `queue-board/hourly-check.mjs`.
 
 ## The board
 

@@ -22,7 +22,7 @@
     "stateDir": "~/.agent-queue",
     "stateDirNote": "Per machine: state.json, logs, the PAUSED flag, the tick lock, and the secret files (slack-webhook, slack-bot-token, linear-api-key).",
     "sharedDir": "~/.agent-queue/shared",
-    "sharedDirNote": "Shared across machines: merge-requests/, heartbeats/, bundles/ and main-state.json. With more than one machine, point it at a folder Syncthing or Dropbox keeps in sync."
+    "sharedDirNote": "Shared across machines: merge-requests/, heartbeats/, bundles/, wake-requests/, orchestrator-events/ and main-state.json. With more than one machine, point it at a folder Syncthing or Dropbox keeps in sync."
   },
 
   "github": {
@@ -157,7 +157,7 @@
     "stuckInARowTrips": 2,
     "stuckInARowTripsNote": "This many stuck tickets in a row pause the dispatcher.",
     "maxRedispatches": 1,
-    "maxRedispatchesNote": "Replacement workers a ticket gets when its worker's session dies, a reboot say, before it can go stuck. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once.",
+    "maxRedispatchesNote": "Replacement workers a ticket gets before it can go stuck: when its worker's session dies (a reboot, say), and when its worker ends on a PR that conflicts with the base branch or holds unresolved review threads (seen on two ticks). The old session is stopped first; a replacement never starts while it could not be. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once.",
     "flakeWaitMinutes": 90,
     "flakeWaitMinutesNote": "How long a failure on a merge commit waits for a later main commit to pass the same workflow before it pauses the queue.",
     "model": "opus",
@@ -248,6 +248,15 @@
         "briefNote": "Path to your own engine brief template, relative to the repo root. null uses dispatcher/engine-worker-brief.md."
       }
     },
+    "worktreeCleanup": {
+      "enabled": true,
+      "dryRun": true,
+      "sweepHours": 24,
+      "atRiskAskDays": 7,
+      "trashDir": null,
+      "repos": []
+    },
+    "worktreeCleanupNote": "When a ticket's PR merges or closes, the next tick stops its worker, removes its worktree and then its session (claude rm). Every sweepHours each machine sweeps every worktree of repoPath and of each repos entry ({\"path\", \"github\", \"base\"}; base defaults to github.baseBranch) and moves orphan folders in the worktrees folder to the trash: trashDir, or the system trash when null. A worktree goes only when it is clean, its PR merged or closed, HEAD is in the PR's head or on origin/<base>, and no live process holds it; anything else is kept, and kept work asks the human (at teardown at once, in the sweep after atRiskAskDays). dryRun true logs what it would do and changes nothing: set it false to act. enabled false turns both off. Codex and Grok clones are never touched.",
     "externalBuildersNote": "Codex and Grok as queue workers (dispatcher/README.md, \"Codex and Grok as queue workers\"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push."
   },
 
@@ -258,7 +267,9 @@
     ],
     "gatesNote": "Commands gated-push.mjs runs in the worktree before pushing, each an argv array. A failing gate fails the push.",
     "env": {},
-    "envNote": "Extra environment for the git push itself, e.g. {\"SKIP_PREPUSH\": \"1\"} when the gates replace a slow pre-push hook."
+    "envNote": "Extra environment for the git push itself, e.g. {\"SKIP_PREPUSH\": \"1\"} when the gates replace a slow pre-push hook.",
+    "protectedBranches": null,
+    "protectedBranchesNote": "Branches gated-push.mjs never pushes to. Before any gate it asks git where the push lands (a dry run) and refuses a protected branch, or a dry run that fails. null means github.baseBranch, main and master."
   },
 
   "premerge": {
@@ -275,9 +286,10 @@
     "migrations": {
       "dir": "migrations",
       "pattern": "^\\d{14}_.*\\.sql$",
-      "prefixLength": 14
+      "prefixLength": 14,
+      "policy": "prefix"
     },
-    "migrationsNote": "Catches two PRs that each pick the same migration prefix, which pass alone and clash once merged. null if your migrations have no ordered prefix.",
+    "migrationsNote": "Catches two PRs that each pick the same migration prefix, which pass alone and clash once merged. policy \"prefix\" fails a new file whose prefix the base branch already uses; \"filename\", for a migrator that applies any unapplied file whatever its prefix, fails only a file name the base branch already has. A green PR whose new migration clashes goes back to its worker to rename it before it merges. null if your migrations have no ordered prefix.",
     "actionlint": true,
     "actionlintNote": "When the merged workflows differ from main's, lint both with actionlint (if installed) and fail on findings main does not have. false skips it."
   },

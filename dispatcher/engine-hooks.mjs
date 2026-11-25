@@ -58,7 +58,7 @@ export function makeEngineHooks(getHelpers) {
     t.mergedWithoutReview = x.iso();
     x.saveState(st);
     x.log(`${id}: ALERT: PR ${pr.url} was merged while ${t.engine} drove it and the dispatcher never sent it to the orchestrator, so ${t.engine} most likely merged it itself`);
-    await x.notify(`${id} merged without review`, `${t.engine} most likely merged ${pr.url} itself, past its lockdown`, { id, link: pr.url, progress: true });
+    await x.notify(`${id} merged without review`, `${t.engine} most likely merged ${pr.url} itself, past its lockdown`, { id, link: pr.url, progress: true, orchestrator: true });
     await x.effects(t, id, [
       [`stop ${id}'s ${t.engine} run`, () => x.run(x.EXT_WORKER, ['stop', id], { timeout: 60_000 })],
       [`ask ${x.HUMAN} about ${id}'s unreviewed merge`, () => x.askHuman(id, 'blocked',

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { CLAUDE_T, ENGINE_T, HEAD, OLD, ROOM, claude, claudeBriefs, engineBox, issue, mergeRequest, merges, plans, starts, tick, ticket } from './engine-sandbox.mjs';
-import { state } from './sandbox.mjs';
+import { editConfig, state } from './sandbox.mjs';
 
 const DIRTY = { mergeStateStatus: 'DIRTY' };
 const marker = (box, id = 'ENG-9') => {
@@ -109,4 +109,15 @@ test('a ticket waiting for a slot whose PR no longer needs a round leaves the wa
   assert.match(tick(box), /ENG-9: left the wake queue, it no longer needs a worker/);
   assert.deepEqual(state(box).wakeQueue, []);
   assert.equal(starts(box).length, 0);
+});
+
+test('a round never starts while the engines are off; the ticket goes back to the queue, or waits here while new work is held', () => {
+  const off = engineBox({ fallback: { enabled: false }, tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
+  assert.match(tick(off), /ENG-9: .*no engine can run its next round on host-a \(the engines are off\)/);
+  assert.equal(starts(off).length, 0);
+  const held = engineBox({ fallback: { enabled: false }, tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
+  editConfig(held, (cfg) => ({ ...cfg, dispatcher: { ...cfg.dispatcher, holdNewWork: true } }));
+  assert.match(tick(held), /ENG-9: no engine can run its next round on host-a \(the engines are off\); new work is held, so it waits here/);
+  assert.equal(starts(held).length, 0);
+  assert.equal(ticket(held).status, 'building', 'it stays on this machine');
 });

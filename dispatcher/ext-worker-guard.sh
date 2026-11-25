@@ -69,12 +69,18 @@ SH
   sed "s|@BASE@|$EW_BASE|g" > "$t/git" <<'SH'
 #!/bin/bash
 . "$(dirname "$0")/_real"
+# A dry run pushes nothing, so it may skip the hooks: gated-push asks where a push lands with one.
+dry=0; seen=0
+for a in "$@"; do
+  if [ $seen = 0 ]; then [ "$a" = push ] && seen=1; continue; fi
+  case "$a" in -n|--dry-run) dry=1 ;; esac
+done
 seen=0
 for a in "$@"; do
   if [ $seen = 0 ]; then [ "$a" = push ] && seen=1; continue; fi
   case "$a" in
     -f|--force|--force-with-lease|--force-with-lease=*|--force-if-includes|--mirror|--all|--delete|-d|--prune) refuse "git push $a" ;;
-    --no-verify) refuse "git push --no-verify" ;;
+    --no-verify) [ $dry = 1 ] || refuse "git push --no-verify" ;;
     +*) refuse "a force refspec ($a)" ;;
     main|master|@BASE@|*:main|*:master|*:@BASE@|refs/heads/main|refs/heads/master|refs/heads/@BASE@|*:refs/heads/main|*:refs/heads/master|*:refs/heads/@BASE@) refuse "pushing to the base branch" ;;
   esac
