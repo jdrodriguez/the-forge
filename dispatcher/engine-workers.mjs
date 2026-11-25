@@ -181,6 +181,7 @@ function creditBacked(c, engine, usage, balance, st) {
 }
 
 // Appends one credit reading per tick and returns the burn rate over the last 24 hours as text for a log line.
+const CREDIT_DAYS = 7;
 function recordCredits(c, engine, balance) {
   if (typeof balance !== 'number' || c.DRY) return '';
   const file = path.join(c.LOCAL, 'engine-credits.jsonl');
@@ -190,15 +191,25 @@ function recordCredits(c, engine, balance) {
   } catch {
     return '';
   }
+  // The file keeps CREDIT_DAYS of readings: older ones, and lines that do not parse, are dropped when it is read.
   let first = null;
   try {
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      if (!line.trim()) continue;
-      const r = JSON.parse(line);
-      if (r.engine === engine && now - Date.parse(r.at) <= 24 * 3600_000) {
-        first = r;
-        break;
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.trim());
+    const kept = [];
+    for (const line of lines) {
+      let r;
+      try {
+        r = JSON.parse(line);
+      } catch {
+        continue;
       }
+      if (!(now - Date.parse(r.at) <= CREDIT_DAYS * 24 * 3600_000)) continue;
+      kept.push(line);
+      if (!first && r.engine === engine && now - Date.parse(r.at) <= 24 * 3600_000) first = r;
+    }
+    if (kept.length < lines.length) {
+      fs.writeFileSync(`${file}.tmp`, `${kept.join('\n')}\n`);
+      fs.renameSync(`${file}.tmp`, file);
     }
   } catch {
     return '';

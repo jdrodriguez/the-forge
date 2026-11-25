@@ -43,7 +43,8 @@ globalThis.fetch = async (url, init) => {
   }
   if (query.includes('issueLabels(')) return json({ issueLabels: { nodes: [{ id: 'L-mech', name: 'sentry-mechanical', parent: null }, { id: 'L-judg', name: 'sentry-human-review', parent: null }] } });
   if (query.includes('title description')) return json({ issue: { title: 'Fix the select', description: 'x\\n\\n## Merge path\\n\\nReason: it needs a human call.\\n' } });
-  if (query.includes('identifier title url description')) return json({ issue: { id: 'uuid-' + variables.id.split('-')[1], identifier: variables.id, title: 'Ticket', url: 'https://linear.app/x/issue/' + variables.id, description: ${JSON.stringify(SCEN)} } });
+  if (query.includes('identifier title url description')) return json({ issue: { id: 'uuid-' + variables.id.split('-')[1], identifier: variables.id, title: 'Ticket', url: 'https://linear.app/x/issue/' + variables.id, description: ${JSON.stringify(SCEN)},
+    labels: { nodes: (file('labels.json', {})[variables.id] ?? []).map((name) => ({ name })) } } });
   if (query.includes('issue(id:$id){ id }')) return json({ issue: { id: 'uuid-' + variables.id.split('-')[1] } });
   if (query.includes('inverseRelations')) return json({ issues: { nodes: file('ready.json', []).filter((i) => !fs.existsSync(H + '/claimed-' + i.identifier)) } });
   if (query.includes('issue(id:$id){ labels')) return json({ issue: { labels: { nodes: (file('issue-labels.json', {})[variables.id] ?? ['agent-ready']).map((name) => ({ name })) } } });

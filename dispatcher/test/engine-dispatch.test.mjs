@@ -202,3 +202,17 @@ test('fallback.prefer puts an engine with room ahead of a Claude account with mo
   tick(preferred);
   assert.equal(starts(preferred)[0]?.[1], 'codex');
 });
+
+test('the credit readings file keeps seven days: older readings and broken lines are dropped when it is read', () => {
+  const box = engineBox({ fallback: CREDIT, ready: [issue(11)], extUsage: spentCodex(62000) });
+  const file = path.join(box.stateDir, 'engine-credits.jsonl');
+  const ago = (days) => new Date(Date.now() - days * 24 * 3600_000).toISOString();
+  fs.writeFileSync(file, [
+    JSON.stringify({ at: ago(30), engine: 'codex', balance: 90000 }),
+    'not json',
+    JSON.stringify({ at: ago(2), engine: 'codex', balance: 70000 }),
+  ].join('\n') + '\n');
+  tick(box);
+  const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => r.balance), [70000, 62000]);
+});

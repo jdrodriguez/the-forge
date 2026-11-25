@@ -288,7 +288,7 @@
         "creditBackedPercent": 50,
         "creditBackedPercentNote": "The weekly usage a credit-backed engine ranks with while it runs on credits.",
         "creditFloor": 10000,
-        "creditFloorNote": "The credit balance a credit-backed engine keeps untouched.",
+        "creditFloorNote": "The credit balance a credit-backed engine keeps untouched. The reserve counts only the tickets this machine is building: machines sharing one account each hold back for their own, so set the floor with the others in mind. Follow-up rounds on a ticket already started are not checked against the floor.",
         "creditReservePerTicket": 2000,
         "creditReservePerTicketNote": "Credits held back for each ticket a credit-backed engine is building, so running tickets finish.",
         "codexModel": null,
