@@ -17,7 +17,7 @@ trap 'if [ "${FLEET_TEST_KEEP:-0}" = 1 ]; then echo "kept: $T"; else rm -rf "$T"
 # dispatch uses the current folder when --cwd is missing and refuses the home folder, so the suite runs from its own temp folder.
 cd "$T" || exit 1
 
-unset CLAUDE_CONFIG_DIR CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_FLEET_HOME FLEET_SOCK_DIR FLEET_ADDR_WAIT CLAUDE_JOB_DIR FLEET_MAX_WORKERS FLEET_USAGE_TIMEOUT FLEET_USAGE_RETRY_WAIT AGENT_QUEUE_CONFIG
+unset CLAUDE_CONFIG_DIR CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_FLEET_HOME FLEET_SOCK_DIR FLEET_ADDR_WAIT CLAUDE_JOB_DIR FLEET_MAX_WORKERS FLEET_USAGE_TIMEOUT FLEET_USAGE_RETRY_WAIT FLEET_REFRESH_GRACE AGENT_QUEUE_CONFIG
 
 # dispatch names the human from human.name in the repo config and points the worker at the repo's scripts. The suite
 # gives fleet.sh a config of its own, so a real agent-queue.config.json is never read.
@@ -168,7 +168,6 @@ case ${1-} in
       exit 66
     fi
     # The alarm fleet.sh armed survives the exec, so a replacement process can read what is left of it.
-    if [ -f "$d/usage.alarm" ]; then exec perl -e 'print alarm(0), "\n"' >"$d/usage.alarm.out"; fi
     if [ -f "$d/usage.sleep" ]; then exec sleep "$(cat "$d/usage.sleep")"; fi
     if [ -f "$d/usage.delay" ]; then sleep "$(cat "$d/usage.delay")"; fi
     # $d/usage.skip counts the runs that print the text and exit 0 without saving anything, as the CLI does when the usage endpoint answers badly.
@@ -463,7 +462,7 @@ if [ -f "$SKILL_MD" ]; then
   eq "SKILL.md closes the frontmatter" "---" "$(sed -n '4p' "$SKILL_MD")"
   contrast=$(grep -nE ', not |rather than' "$SKILL_MD" || true)
   eq "SKILL.md has no 'X, not Y' contrast phrasing" "" "$contrast"
-  for flag in --agent --model --effort --max-workers --force --allow-nested --no-report --no-delegation-note --dry-run FLEET_MAX_WORKERS FLEET_USAGE_TIMEOUT; do
+  for flag in --agent --model --effort --max-workers --force --allow-nested --no-report --no-delegation-note --dry-run FLEET_MAX_WORKERS FLEET_USAGE_TIMEOUT FLEET_REFRESH_GRACE; do
     has "SKILL.md documents $flag" "$flag" "$skill_text"
   done
   has "SKILL.md documents the usage command" "fleet.sh usage" "$skill_text"
@@ -493,7 +492,7 @@ eq "executing fleet.sh through its shebang works" 0 "$RC"
 has "help lists dispatch" "fleet.sh dispatch <label|auto>" "$OUT"
 run "${FLEET_CMD[@]}" help
 for sub in accounts ps usage address logs stop; do has "help lists $sub" "fleet.sh $sub" "$OUT"; done
-for flag in --cwd --name --mode --agent --model --effort --max-workers --force --allow-nested --no-report --no-delegation-note --dry-run FLEET_MAX_WORKERS FLEET_USAGE_TIMEOUT; do has "help documents $flag" "$flag" "$OUT"; done
+for flag in --cwd --name --mode --agent --model --effort --max-workers --force --allow-nested --no-report --no-delegation-note --dry-run FLEET_MAX_WORKERS FLEET_USAGE_TIMEOUT FLEET_REFRESH_GRACE; do has "help documents $flag" "$flag" "$OUT"; done
 has "help usage line lists [--dry-run]" "[--dry-run]" "$OUT"
 has "help describes --dry-run in the dispatch text" "--dry-run runs every check" "$OUT"
 has "help lists the worker cap exit code" "6 worker cap reached" "$OUT"
@@ -813,15 +812,32 @@ for lim in 1 2; do
   if [ "$usage_took" -ge "$lim" ] && [ "$usage_took" -le $((lim + 3)) ]; then pass "usage: FLEET_USAGE_TIMEOUT=$lim ends the refresh after about $lim seconds (${usage_took}s)"; else fail "usage: FLEET_USAGE_TIMEOUT=$lim ends the refresh after about $lim seconds" "took ${usage_took}s"; fi
 done
 new_world
-: >"$W/data/b/usage.alarm"
 for t in "" 0 00 abc -3 1234567 7; do
   want=20
   if [ "$t" = 7 ]; then want=7; fi
-  rm -f "$W/data/b/usage.alarm.out"
+  put_usage_fail b 142 ""
   run env FLEET_USAGE_TIMEOUT="$t" "${FLEET_CMD[@]}" usage --json
-  armed=$(cat "$W/data/b/usage.alarm.out" 2>/dev/null)
-  if [ "$armed" = "$want" ] || [ "$armed" = "$((want - 1))" ]; then pass "usage: FLEET_USAGE_TIMEOUT='$t' arms a ${want} second alarm (${armed} left)"; else fail "usage: FLEET_USAGE_TIMEOUT='$t' arms a ${want} second alarm" "alarm left: '$armed'"; fi
+  jqeq "usage: FLEET_USAGE_TIMEOUT='$t' sets a ${want} second limit" "$OUT" '.[1].usage.refresh_error' "timed out after ${want}s"
 done
+# A refresh that reaches the limit while the account's sign-in refresh holds its lock is left to finish, because a
+# claude killed then loses the new login.
+new_world
+mkdir "$W/home/.claude-b/.oauth_refresh.lock"
+printf '3' >"$W/data/b/usage.delay"
+put_usage b "$(util 4 12)"
+usage_start=$SECONDS
+run env FLEET_USAGE_TIMEOUT=1 "${FLEET_CMD[@]}" usage --json
+usage_took=$((SECONDS - usage_start))
+jqeq "usage: a refresh holding the sign-in lock past the limit finishes" "$OUT" '.[1].usage | [.available, (.refresh_error // "none")] | @tsv' "$(printf 'true\tnone')"
+if [ "$usage_took" -ge 3 ]; then pass "usage: the limit waited for the sign-in lock (${usage_took}s)"; else fail "usage: the limit waited for the sign-in lock" "took ${usage_took}s"; fi
+new_world
+mkdir "$W/home/.claude-b/.oauth_refresh.lock"
+printf '30' >"$W/data/b/usage.sleep"
+usage_start=$SECONDS
+run env FLEET_USAGE_TIMEOUT=1 FLEET_REFRESH_GRACE=2 "${FLEET_CMD[@]}" usage --json
+usage_took=$((SECONDS - usage_start))
+jqeq "usage: a refresh still holding the sign-in lock after the grace is ended" "$OUT" '.[1].usage.refresh_error' "timed out after 1s"
+if [ "$usage_took" -ge 3 ] && [ "$usage_took" -le 6 ]; then pass "usage: FLEET_REFRESH_GRACE=2 ends it about 2 seconds after the limit (${usage_took}s)"; else fail "usage: FLEET_REFRESH_GRACE=2 ends it about 2 seconds after the limit" "took ${usage_took}s"; fi
 new_world
 for lab in a b c; do
   printf '3' >"$W/data/$lab/usage.delay"

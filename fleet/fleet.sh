@@ -18,6 +18,11 @@ case $USAGE_RETRY_WAIT in '' | *[!0123456789]*) USAGE_RETRY_WAIT=2 ;; esac
 USAGE_TIMEOUT="${FLEET_USAGE_TIMEOUT:-20}"
 case $USAGE_TIMEOUT in '' | *[!0123456789]*) USAGE_TIMEOUT=20 ;; esac
 if [ "${#USAGE_TIMEOUT}" -gt 6 ] || [ -z "${USAGE_TIMEOUT//0/}" ]; then USAGE_TIMEOUT=20; fi
+# FLEET_REFRESH_GRACE is how many more seconds a timed run gets while its account's sign-in refresh is in progress.
+# Claude treats that lock as stale after 60 seconds, so waiting longer buys nothing.
+REFRESH_GRACE="${FLEET_REFRESH_GRACE:-60}"
+case $REFRESH_GRACE in '' | *[!0123456789]*) REFRESH_GRACE=60 ;; esac
+if [ "${#REFRESH_GRACE}" -gt 6 ]; then REFRESH_GRACE=60; fi
 # The CLI lists acceptEdits, auto, bypassPermissions, manual, dontAsk and plan. It still parses default.
 VALID_MODES=(default acceptEdits auto bypassPermissions manual dontAsk plan)
 VALID_EFFORTS=(low medium high xhigh max)
@@ -92,6 +97,8 @@ usage      Prints each account's remaining 5-hour and weekly plan usage with the
            times), a snapshot up to an hour old stands in and AGE shows how old it is.
            A dash means the figure is unknown.
            FLEET_USAGE_TIMEOUT sets how many seconds one refresh may take (default 20).
+           A refresh that reaches it while the account's sign-in is being renewed gets up
+           to FLEET_REFRESH_GRACE more seconds (default 60), so the new login is saved.
 address    Prints the uds: address of a session.
 logs       Prints the last N (default 40) lines of a background session's output,
            cleaned of terminal escape codes.
@@ -413,14 +420,40 @@ plan_usage_fresh() { # label
   read_plan_usage "$1" | jq -e --argjson fresh "$USAGE_FRESH" '(now - .fetched_ms / 1000) | (. >= 0 and . < $fresh)' >/dev/null 2>&1
 }
 
-# run_claude with a time limit. perl's alarm survives the exec, so the time limit ends claude itself (exit 142).
+# The time limit for run_claude_timed, as a perl program. Args: seconds, grace, lock path, then the command. At the
+# limit it sends SIGTERM, then SIGKILL 5 seconds later, and exits 142, the code a timeout always had. While the lock
+# path exists, claude is refreshing the account's sign-in: the server has already replaced the refresh token, and a
+# claude killed before it saves the new one leaves the account signed out. So the limit waits
+# for the lock to clear, for up to grace more seconds. Otherwise the exit code is claude's own.
+# shellcheck disable=SC2016 # perl variables, not shell ones
+TIMED_PERL='use POSIX ":sys_wait_h"; use Time::HiRes qw(time sleep);
+my ($secs, $grace, $lock) = splice(@ARGV, 0, 3);
+my $pid = fork; die "fork: $!\n" unless defined $pid;
+if (!$pid) { exec @ARGV; exit 127 }
+my ($status, $deadline) = (undef, time + $secs);
+sub reaped { my $r = waitpid($pid, WNOHANG); $status = $? if $r == $pid; return $r == $pid || $r == -1 }
+while (1) {
+  if (reaped()) { exit(!defined $status ? 1 : $status & 127 ? 128 + ($status & 127) : $status >> 8) }
+  my $now = time;
+  if ($now >= $deadline && !(-e $lock && $now < $deadline + $grace)) {
+    kill "TERM", $pid;
+    for (1 .. 50) { last if reaped(); sleep 0.1 }
+    kill "KILL", $pid;
+    waitpid($pid, 0);
+    exit 142;
+  }
+  sleep 0.1;
+}'
+
+# run_claude with a time limit that never cuts off a sign-in refresh (see TIMED_PERL).
 run_claude_timed() { # label seconds args...
-  local label=$1 secs=$2
+  local label=$1 secs=$2 lock
   shift 2
+  lock="$(acct_dir "$label")/.oauth_refresh.lock"
   if [ "$label" = a ]; then
-    env -u CLAUDE_CONFIG_DIR perl -e 'alarm shift; exec @ARGV' "$secs" claude "$@" </dev/null
+    env -u CLAUDE_CONFIG_DIR perl -e "$TIMED_PERL" "$secs" "$REFRESH_GRACE" "$lock" claude "$@" </dev/null
   else
-    CLAUDE_CONFIG_DIR="$(acct_dir "$label")" perl -e 'alarm shift; exec @ARGV' "$secs" claude "$@" </dev/null
+    CLAUDE_CONFIG_DIR="$(acct_dir "$label")" perl -e "$TIMED_PERL" "$secs" "$REFRESH_GRACE" "$lock" claude "$@" </dev/null
   fi
 }
 

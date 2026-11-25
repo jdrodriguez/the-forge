@@ -44,7 +44,7 @@ flowchart LR
 | `specdesk/` | The spec desk's standing brief (`SPECDESK.md`) and its skill. |
 | `dispatcher/` | The queue: `dispatcher.mjs` (the tick), `worker-brief.md`, `premerge-check.mjs`, `main-watch.mjs` (red-main responder), `gated-push.mjs`, `install.sh` (launchd or systemd). |
 | `fleet/` | `fleet.sh`: start, list, read and stop Claude Code background sessions on several accounts on one machine, with plan usage per account. Plus its skill and account setup. |
-| `inbox/` | `ask-human.sh` (questions, in Linear and Slack), the orchestrator's watchers (`inbox-watch.sh`, `merge-request-watch.sh`, `main-red-watch.sh`) and the merge helpers (`merge-approved.sh`, `merge-when-ready.sh`, `merged-to-verifying.mjs`). |
+| `inbox/` | `ask-human.sh` (questions, in Linear and Slack), the orchestrator's handoff (`takeover.sh`, the lease, the Stop hook, the supervisor), its watchers (`orchestrator-watch.mjs`, `pr-sweep.mjs`) and the merge helpers (`merge-approved.sh`, `merge-when-ready.sh`, `merged-to-verifying.mjs`). |
 | `queue-board/` | The board (below), and `hourly-check.mjs`, which wakes the orchestrator only when something new needs it. |
 | `learning/` | The weekly failure sweep. |
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |

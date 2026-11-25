@@ -34,7 +34,7 @@ the-forge <command> --help says more. docs/setup.md is the full guide.`,
 Copies The Forge to a folder that stays (default ${DEFAULT_COPY}). A copy npx unpacked sits in npm's cache, which
 can be cleaned at any time, and a global install sits under node_modules, which npm replaces on upgrade, so the
 config and the scheduled jobs live in the lasting copy. Then it lists the programs this
-computer is missing, links the skills into ~/.claude (forge-setup, specdesk, fleet, and ask-human.sh) and the-forge
+computer is missing, links the skills into ~/.claude (forge-setup, forge-takeover, specdesk, fleet, and ask-human.sh) and the-forge
 into ~/.local/bin, and starts Claude Code on the forge-setup skill, which interviews you and does the rest.
 
   --dir <folder>  where the lasting copy goes

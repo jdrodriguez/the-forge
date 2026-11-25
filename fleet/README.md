@@ -73,6 +73,7 @@ Workers build in worktrees under `<repoPath>/<worktreesDir>`. The hook blocks Ed
 | `CLAUDE_FLEET_HOME` | all | Root of the account folders. Default `$HOME`. |
 | `FLEET_MAX_WORKERS` | `fleet.sh` | Working background sessions one account may hold before `dispatch` refuses. Default 4. |
 | `FLEET_USAGE_TIMEOUT` | `fleet.sh` | Seconds one `claude -p /usage` refresh may take. Default 20. |
+| `FLEET_REFRESH_GRACE` | `fleet.sh` | Extra seconds a refresh gets past `FLEET_USAGE_TIMEOUT` while the account's sign-in is being renewed, so the new login is saved. Default 60. |
 | `FLEET_SOCK_DIR`, `FLEET_ADDR_WAIT`, `FLEET_USAGE_RETRY_WAIT` | `fleet.sh` | The socket folder (default `/tmp/cc-socks`), the seconds `dispatch` waits for an address (5) and between usage refreshes (2). The tests set them. |
 | `AGENT_QUEUE_CONFIG` | all | The config file. Default `agent-queue.config.json` at the repo root. |
 | `CLAUDE_FLEET_PRIMARY` | mirror | The primary account's folder. Default `$CLAUDE_FLEET_HOME/.claude`. |
