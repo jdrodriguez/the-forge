@@ -69,7 +69,7 @@ const branchFor = (id) => (conf.github.branchTemplate ?? 'agent/{id}').replaceAl
 // The queue builds in repoPath (github.repo) unless dispatcher.repos maps a ticket's Linear project to another repo:
 // { "<project name>": { github, path, base, brief, mergeMode, mergeNote, reviewCheck, requiredChecks, ignoreChecks,
 // reviewGateBlocks } }. The repo is chosen once, at the claim, and kept on the ticket (t.repo, its github name), so
-// every later step reads the same one. mergeMode "queue" merges a green PR here, after the pre-merge check for repoPath;
+// every later step reads the same one, by its config key (t.repoKey). mergeMode "queue" merges a green PR here, after the pre-merge check for repoPath;
 // "orchestrator" (the default for a mapped repo) sends every green PR to the orchestrator. An entry whose github is
 // null names a project with no repo the queue builds in, and a "default" entry of null leaves unlisted projects with
 // none; the queue sends those tickets back. Codex and Grok, Sentry merge paths and migration checks are repoPath's only.
@@ -89,13 +89,21 @@ function repoForProject(name) {
   return repos.default === null ? null : DEFAULT_REPO;
 }
 const repoForIssue = (issue) => repoForProject(issue?.project?.name ?? null);
-// A repo by its github name. One the config no longer lists keeps the orchestrator's merge, never this file's own.
+// A repo by its github name, for a PR read back from GitHub. A name the config lists once resolves to that entry; one it
+// no longer lists, or lists more than once, keeps the orchestrator's merge, never this file's own.
 function repoByGithub(github) {
   if (!github || github === REPO) return DEFAULT_REPO;
-  const hit = Object.entries(cfg.repos ?? {}).find(([k, e]) => k !== 'default' && e?.github === github);
-  return hit ? withRepo(hit[0], hit[1]) : withRepo(github, { github, mergeMode: 'orchestrator' });
+  const hits = Object.entries(cfg.repos ?? {}).filter(([k, e]) => k !== 'default' && e?.github === github);
+  return hits.length === 1 ? withRepo(hits[0][0], hits[0][1]) : withRepo(github, { github, mergeMode: 'orchestrator' });
 }
-const repoOf = (t) => repoByGithub(t?.repo);
+// A ticket's repo: the entry its claim recorded by key, while that entry still names the same github repo. Anything
+// else that names a repo (an entry renamed or changed since the claim) keeps the orchestrator's merge.
+function repoOf(t) {
+  if (!t?.repo) return DEFAULT_REPO;
+  const e = t.repoKey && t.repoKey !== 'default' ? cfg.repos?.[t.repoKey] : null;
+  if (e?.github === t.repo) return withRepo(t.repoKey, e);
+  return withRepo(t.repo, { github: t.repo, mergeMode: 'orchestrator' });
+}
 // Every repo the queue builds in, repoPath's first, once each.
 function allRepos() {
   const seen = new Map([[REPO, DEFAULT_REPO]]);
@@ -641,7 +649,10 @@ function findPr(t, id) {
     'number,url,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
   if (pr.headRefName !== t.branch || pr.baseRefName !== R.base) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${R.base} (${id})`);
   // The PR carries its repo, so every later read of it goes to the same one.
-  if (!R.isDefault) pr.repo = R.github;
+  if (!R.isDefault) {
+    pr.repo = R.github;
+    pr.repoCfg = R;
+  }
   return pr;
 }
 
@@ -649,7 +660,7 @@ function findPr(t, id) {
 // no review thread is open. A repo with requiredChecks or ignoreChecks is judged by its checks instead (greenByChecks).
 function greenReason(pr) {
   if (pr.isDraft) return 'draft';
-  const R = repoByGithub(pr.repo);
+  const R = pr.repoCfg ?? repoByGithub(pr.repo);
   if (R.requiredChecks || R.ignoreChecks) return greenByChecks(pr, R);
   if (!['CLEAN', 'HAS_HOOKS'].includes(pr.mergeStateStatus)) return `merge state ${pr.mergeStateStatus}`;
   if (R.reviewCheck) {
@@ -2615,7 +2626,7 @@ async function dispatch(st, m) {
 
     // Journal the claim before touching Linear, so a crash anywhere below is reconciled next tick.
     // t.repo only for a mapped repo: a ticket with none builds in repoPath.
-    const inRepo = repo.isDefault ? {} : { repo: repo.github };
+    const inRepo = repo.isDefault ? {} : { repo: repo.github, repoKey: repo.key };
     const t = { status: 'claiming', claimedAt: iso(), branch, priorStateId: issue.state.id, ...inRepo,
       ...(bundleIds.length ? { bundle: bundleIds } : {}), ...(useSentrySlot ? { sentry: true } : {}) };
     st.tickets[id] = t;
