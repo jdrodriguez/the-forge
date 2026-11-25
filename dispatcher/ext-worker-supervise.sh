@@ -19,7 +19,9 @@ finish() { # <status> <exitCode> <report> [question]
 
 engine_command() {
   if [ "$ENGINE" = codex ]; then
-    local model; model=$(sed -n 's/^model = "\(.*\)"/\1/p' "$HOME/.codex/config.toml" 2>/dev/null | head -1)
+    # externalBuilders.fallback.codexModel picks the queue's Codex model; unset, the user config's model.
+    local model=${EW_CODEX_MODEL:-}
+    [ -n "$model" ] || model=$(sed -n 's/^model = "\(.*\)"/\1/p' "$HOME/.codex/config.toml" 2>/dev/null | head -1)
     # Codex's own sandbox can't nest inside this one (macOS refuses a nested sandbox once the outer profile denies
     # anything), so it is off and this one holds the whole tree. The features switched off keep account connectors,
     # browsers and memories out of reach; --ignore-user-config alone left connectors reachable. Codex strips *TOKEN*

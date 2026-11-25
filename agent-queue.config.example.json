@@ -155,7 +155,7 @@
         "accounts": ["b", "c"],
         "sentryWorkers": 1
       },
-      "hostsNote": "Per machine. maxWorkers is a hard limit on working sessions there: queue workers, engine runs and sessions started outside the queue all count, and nothing automatic starts, respawns or wakes a session past it (a ticket that needs one waits in the wake queue). 0 drains its regular slots; set sentryWorkers to 0 too to drain the machine. accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. burstWorkers (default 0) are extra regular slots that open while the machine is calm (burstLoadPerCore, burstMinMemoryFreePercent below, which a host entry may override); the Sentry pool and a drained machine get none. engines (optional) lists the engines that may run on that machine, out of dispatcher.externalBuilders.fallback.engines: absent means every one of them, [] means none."
+      "hostsNote": "Per machine. maxWorkers is a hard limit on working sessions there: queue workers, engine runs and sessions started outside the queue all count, and nothing automatic starts, respawns or wakes a session past it (a ticket that needs one waits in the wake queue). 0 drains its regular slots; set sentryWorkers to 0 too to drain the machine. accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. burstWorkers (default 0) are extra regular slots that open while the machine is calm (burstLoadPerCore, burstMinMemoryFreePercent below, which a host entry may override); the Sentry pool and a drained machine get none. platform (optional) is the machine's Node platform (darwin, linux) for platformLabels, when its heartbeat has not said yet. engines (optional) lists the engines that may run on that machine, out of dispatcher.externalBuilders.fallback.engines: absent means every one of them, [] means none."
     },
     "holdNewWork": false,
     "holdNewWorkNote": "true stops this machine from claiming a new ready ticket. To hold every machine at once, run `dispatcher.mjs hold` (it writes <paths.sharedDir>/HOLD; `release` removes it). Unlike a pause, which also stops merges, work already claimed carries on: PRs merge, workers are replaced and woken, and the wake queue drains. Sentry triage queues nothing while held.",
@@ -281,6 +281,18 @@
         "claudeOnlyLabelNote": "A ticket with this Linear label never goes to an engine. Put it on work that needs access the sandbox withholds.",
         "withholdPatterns": [],
         "withholdPatternsNote": "Extra regular expressions that keep a ticket from the engines when its title or description matches, on top of the built-in email, phone and SSN checks.",
+        "prefer": [],
+        "preferNote": "Engines that take a ticket ahead of every Claude account while they have room, in this order, e.g. [\"codex\"]. Burn accounts still go first. [] ranks engines with the Claude accounts by usage left.",
+        "creditBacked": [],
+        "creditBackedNote": "Engines that keep taking tickets on paid credits once their plan window is spent, e.g. [\"codex\"]. This spends money: off ([]) by default. Such an engine reads as creditBackedPercent of its week left while its balance, less creditReservePerTicket for each ticket it is building and the new one, stays at creditFloor. An unreadable balance counts as none. Every reading goes to <paths.stateDir>/engine-credits.jsonl.",
+        "creditBackedPercent": 50,
+        "creditBackedPercentNote": "The weekly usage a credit-backed engine ranks with while it runs on credits.",
+        "creditFloor": 10000,
+        "creditFloorNote": "The credit balance a credit-backed engine keeps untouched. The reserve counts only the tickets this machine is building: machines sharing one account each hold back for their own, so set the floor with the others in mind. Follow-up rounds on a ticket already started are not checked against the floor.",
+        "creditReservePerTicket": 2000,
+        "creditReservePerTicketNote": "Credits held back for each ticket a credit-backed engine is building, so running tickets finish.",
+        "codexModel": null,
+        "codexModelNote": "The model Codex queue workers run (codex -m). null uses the model in ~/.codex/config.toml.",
         "brief": null,
         "briefNote": "Path to your own engine brief template, relative to the repo root. null uses dispatcher/engine-worker-brief.md."
       }
@@ -299,11 +311,32 @@
       "repos": [],
       "reposNote": "Other checkouts to sweep, each {\"path\", \"github\", \"base\"}; base defaults to github.baseBranch.",
       "rebuildableIgnored": null,
-      "rebuildableIgnoredNote": "Ignored files and folders a build or an install makes again (glob names matched against each path part). Any other ignored file keeps a worktree, except an unchanged copy of the main checkout's file at the same path. null, an empty list or an invalid one means the built-in list: node_modules, dist, build, out, .turbo, .next, .nuxt, .svelte-kit, .output, coverage, .nyc_output, .cache, .parcel-cache, .vite, .eslintcache, *.tsbuildinfo, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .venv, target, .gradle, .DS_Store.",
+      "rebuildableIgnoredNote": "Ignored files and folders a build, tests or hooks make again. A pattern without a slash matches any part of a path; one with a slash matches that path from the checkout's root. Any other ignored file keeps a worktree, except an unchanged copy of the main checkout's file at the same path. null, an empty list or an invalid one means the built-in list: node_modules, dist, build, out, .turbo, .next, .nuxt, .svelte-kit, .output, coverage, .nyc_output, .cache, .parcel-cache, .vite, .eslintcache, *.tsbuildinfo, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .venv, target, .gradle, .DS_Store.",
       "clones": "dry-run",
       "clonesNote": "The standalone clones ext-worker.sh makes for Codex and Grok in the worktrees folder. \"dry-run\" (the default) logs what would happen and counts them by rule, whatever dryRun says; \"on\" moves one to the trash once its PR merged or closed, it holds no changes, no operation in progress and no ignored file beyond the rebuildable ones, its HEAD is in the PR's head or on origin/<base>, no process is inside, and no live ticket names its branch; \"off\" leaves them alone."
     },
     "worktreeCleanupNote": "When a ticket's PR merges or closes, the next tick stops its worker, removes its worktree and then its session (claude rm); a session whose worktree can't be told apart is left, and asked about. The sweep moves former worktrees of this repo that git no longer tracks to the trash, and reports any other folder there once. Only worktrees inside the worktrees folder are touched, compared by real path. A worktree goes only when it is clean (untracked files included, nothing in progress), holds no ignored file beyond rebuildableIgnored, its PR merged or closed, HEAD is in the PR's head or on origin/<base>, and no live process holds it; anything else is kept, and kept work asks the human (at teardown at once, in the sweep after atRiskAskDays). Codex and Grok clones are never touched.",
+    "codexAutoReset": {
+      "enabled": false,
+      "enabledNote": "Spends the Codex account's free rate-limit resets so they are not wasted. Off by default.",
+      "host": null,
+      "hostNote": "The one machine that spends them, since one Codex account serves every machine. null means the first of enabledHosts.",
+      "weeklyTriggerPercent": 100,
+      "weeklyTriggerPercentNote": "A window at this percent used, with its own reset more than minHoursToNaturalReset away, spends a reset.",
+      "minHoursToNaturalReset": 12,
+      "minHoursToNaturalResetNote": "A window that resets on its own sooner than this is left to do so.",
+      "expiringWithinHours": 48,
+      "expiringWithinHoursNote": "A reset expiring within this many hours is spent once the weekly window is at expiringMinWeeklyPercent.",
+      "expiringMinWeeklyPercent": 50,
+      "expiringMinWeeklyPercentNote": "The weekly usage at which a reset about to expire is worth spending.",
+      "minHoursBetweenResets": 24,
+      "minHoursBetweenResetsNote": "At most one reset in this many hours. Every spend goes to <paths.stateDir>/codex-resets.json."
+    },
+    "codexAutoResetNote": "dispatcher/codex-reset.mjs: `node codex-reset.mjs` prints what the rules decide now and changes nothing; the tick spends a reset on codexAutoReset.host when they say so.",
+    "platformLabels": {},
+    "platformLabelsNote": "Linear labels that limit a ticket to machines of one Node platform, e.g. {\"needs-mac\": \"darwin\"}. Such a ticket builds only there, never on an engine, never in a bundle with a ticket that needs another platform, and its Sentry fix is left only to a Sentry machine of that platform. A machine whose platform is unknown never matches.",
+    "repos": {},
+    "reposNote": "Linear project names mapped to other repos the queue builds in: {\"<project>\": {\"github\": \"org/site\", \"path\": \"~/dev/site\", \"base\": \"main\", \"brief\": \"site-brief.md\", \"mergeMode\": \"orchestrator\", \"mergeReason\": \"...\", \"reviewCheck\": null, \"requiredChecks\": [], \"ignoreChecks\": [], \"riskyPathPatterns\": null, \"reviewGateBlocks\": false}}. path defaults to <workspaceCwd>/<repo name>, base to github.baseBranch, brief (relative to dispatcher/) to worker-brief.md. mergeMode \"orchestrator\" (the default) sends every green PR to the orchestrator; \"queue\" merges it here on green, without the pre-merge check, which covers repoPath only. requiredChecks or ignoreChecks judge green by the checks, and reviewGateBlocks lets a BLOCKED review gate through. riskyPathPatterns, when set, replaces dispatcher.riskyPathPatterns for that repo's PRs. An invalid pattern in either list is logged, and the queue merges none of that repo's PRs until it is fixed. {\"github\": null, \"why\": \"...\"} names a project with no repo, and a \"default\": null entry leaves unlisted projects with none; the queue sends those tickets back. The checkout path must be absolute with no \"..\", its worktrees folder must resolve inside it, and its origin must name exactly the mapped repo; this is checked at the claim, at a replacement and before a teardown. A machine without such a checkout or without the brief leaves the ticket for one that has. Codex and Grok, Sentry merge paths and migration checks cover repoPath only.",
     "externalBuildersNote": "Codex and Grok as queue workers (dispatcher/README.md, \"Codex and Grok as queue workers\"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push."
   },
 

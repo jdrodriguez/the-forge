@@ -71,7 +71,7 @@ test('redispatch gives a stuck engine ticket to a Claude worker kept out of the 
   assert.equal(t.account, 'b');
   assert.equal(t.workerId, 'w0');
   assert.deepEqual(t.engineHistory.map((h) => [h.engine, h.rounds]), [['codex', 5]]);
-  assert.deepEqual(labelOps(box), ['+L-agent-building', '-L-agent-stuck']);
+  assert.deepEqual(labelOps(box), ['+L-agent-building', '-L-agent-ready', '-L-agent-stuck']);
 
   box.put('pr.json', {});
   box.put('ps.json', [{ label: 'b', id: 'w0', status: 'idle', kind: 'background' }]);

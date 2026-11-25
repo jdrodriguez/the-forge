@@ -158,3 +158,61 @@ test('an engine worker is never counted as a worker outside the queue', () => {
   assert.doesNotMatch(out, /outside the queue/);
   assert.equal(claudeBriefs(box).length, 1);
 });
+
+// Codex past its plan window on paid credits (fallback.creditBacked), above creditFloor with creditReservePerTicket held
+// back per ticket.
+const spentCodex = (credits) => {
+  const p = plans({ codex: 99 });
+  p.services[0].credits = credits;
+  return p;
+};
+const CREDIT = { creditBacked: ['codex'], creditFloor: 10000, creditReservePerTicket: 2000 };
+
+test('a credit-backed engine keeps taking tickets after its plan window is spent; without creditBacked it does not', () => {
+  const off = engineBox({ ready: [issue(11)], extUsage: spentCodex(62000) });
+  tick(off);
+  assert.equal(starts(off).length, 0, 'a 99%-used Codex with no credit backing gets no ticket');
+  const on = engineBox({ fallback: CREDIT, ready: [issue(11)], extUsage: spentCodex(62000) });
+  tick(on);
+  assert.equal(starts(on)[0]?.[1], 'codex');
+  const limited = spentCodex(62000);
+  limited.services[0].limited = 'rate_limit';
+  const lim = engineBox({ fallback: CREDIT, ready: [issue(11)], extUsage: limited });
+  tick(lim);
+  assert.equal(starts(lim)[0]?.[1], 'codex', 'a reached plan limit does not stop a credit-backed engine');
+});
+
+test('the credit floor stops new tickets before the balance runs low, and holds within one tick', () => {
+  const low = engineBox({ fallback: CREDIT, ready: [issue(11)], extUsage: spentCodex(11000) });
+  assert.match(tick(low), /takes no new tickets on credits \(balance 11000/);
+  assert.equal(starts(low).length, 0);
+  const unknown = engineBox({ fallback: CREDIT, ready: [issue(11)], extUsage: spentCodex(undefined) });
+  tick(unknown);
+  assert.equal(starts(unknown).length, 0, 'an unreadable balance counts as no credits');
+  const three = engineBox({ fallback: CREDIT, host: { maxWorkers: 8 }, ready: [issue(11), issue(12), issue(13)], extUsage: spentCodex(15000) });
+  tick(three);
+  assert.equal(starts(three).length, 2, '15,000 covers two 2,000 reserves above the 10,000 floor, not a third');
+});
+
+test('fallback.prefer puts an engine with room ahead of a Claude account with more usage left', () => {
+  const plain = engineBox({ usage: ROOM, ready: [issue(11)], extUsage: plans({ codex: 40 }) });
+  tick(plain);
+  assert.equal(starts(plain).length, 0, 'the Claude account has more left, so it takes the ticket');
+  const preferred = engineBox({ fallback: { prefer: ['codex'] }, usage: ROOM, ready: [issue(11)], extUsage: plans({ codex: 40 }) });
+  tick(preferred);
+  assert.equal(starts(preferred)[0]?.[1], 'codex');
+});
+
+test('the credit readings file keeps seven days: older readings and broken lines are dropped when it is read', () => {
+  const box = engineBox({ fallback: CREDIT, ready: [issue(11)], extUsage: spentCodex(62000) });
+  const file = path.join(box.stateDir, 'engine-credits.jsonl');
+  const ago = (days) => new Date(Date.now() - days * 24 * 3600_000).toISOString();
+  fs.writeFileSync(file, [
+    JSON.stringify({ at: ago(30), engine: 'codex', balance: 90000 }),
+    'not json',
+    JSON.stringify({ at: ago(2), engine: 'codex', balance: 70000 }),
+  ].join('\n') + '\n');
+  tick(box);
+  const rows = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(rows.map((r) => r.balance), [70000, 62000]);
+});

@@ -12,7 +12,8 @@ export const HEAD = 'abc123';
 const SCEN = '## Acceptance scenarios\n1. Given a, when b, then c.';
 
 // Linear: ready tickets from $HOME/ready.json (less those $HOME/claimed-<ID> marks taken), each ticket's labels from
-// $HOME/labels.json, the building list from $HOME/building.json. Every mutation goes to $HOME/mutations.
+// $HOME/labels.json, a single issue's fresh labels from $HOME/issue-labels.json (default agent-ready), the label check's
+// list from $HOME/label-check.json, the building list from $HOME/building.json. Every mutation goes to $HOME/mutations.
 const PRELOAD = `
 import os from 'node:os';
 import fs from 'node:fs';
@@ -42,10 +43,12 @@ globalThis.fetch = async (url, init) => {
   }
   if (query.includes('issueLabels(')) return json({ issueLabels: { nodes: [{ id: 'L-mech', name: 'sentry-mechanical', parent: null }, { id: 'L-judg', name: 'sentry-human-review', parent: null }] } });
   if (query.includes('title description')) return json({ issue: { title: 'Fix the select', description: 'x\\n\\n## Merge path\\n\\nReason: it needs a human call.\\n' } });
-  if (query.includes('identifier title url description')) return json({ issue: { id: 'uuid-' + variables.id.split('-')[1], identifier: variables.id, title: 'Ticket', url: 'https://linear.app/x/issue/' + variables.id, description: ${JSON.stringify(SCEN)} } });
+  if (query.includes('identifier title url description')) return json({ issue: { id: 'uuid-' + variables.id.split('-')[1], identifier: variables.id, title: 'Ticket', url: 'https://linear.app/x/issue/' + variables.id, description: ${JSON.stringify(SCEN)},
+    labels: { nodes: (file('labels.json', {})[variables.id] ?? []).map((name) => ({ name })) } } });
   if (query.includes('issue(id:$id){ id }')) return json({ issue: { id: 'uuid-' + variables.id.split('-')[1] } });
   if (query.includes('inverseRelations')) return json({ issues: { nodes: file('ready.json', []).filter((i) => !fs.existsSync(H + '/claimed-' + i.identifier)) } });
-  if (query.includes('issue(id:$id){ labels')) return json({ issue: { labels: { nodes: [{ name: 'agent-ready' }] } } });
+  if (query.includes('issue(id:$id){ labels')) return json({ issue: { labels: { nodes: (file('issue-labels.json', {})[variables.id] ?? ['agent-ready']).map((name) => ({ name })) } } });
+  if (query.includes('labelCheck')) return json({ issues: { nodes: file('label-check.json', []) } });
   if (query.includes('issues(')) return json({ issues: { nodes: (variables.label === 'agent-building' ? file('building.json', []) : []).map((identifier) => ({ identifier })) } });
   throw new Error('unhandled query ' + query.slice(0, 80));
 };
@@ -58,7 +61,7 @@ const H = process.env.HOME;
 const a = process.argv.slice(2);
 const read = (f, d) => (fs.existsSync(H + '/' + f) ? fs.readFileSync(H + '/' + f, 'utf8') : d);
 const prs = JSON.parse(read('prs.json', '{}'));
-const view = (n) => { const p = prs[n]; return { number: Number(n), url: 'https://github.com/x/pull/' + n, state: p.state ?? 'OPEN', isDraft: Boolean(p.draft),
+const view = (n) => { const p = prs[n]; return { number: Number(n), url: 'https://github.com/x/pull/' + n, title: p.title ?? 'ENG-' + n + ': x', state: p.state ?? 'OPEN', isDraft: Boolean(p.draft),
   mergeStateStatus: p.merge ?? 'CLEAN', headRefOid: '${HEAD}', headRefName: p.branch, baseRefName: 'main', changedFiles: 1, mergeCommit: null,
   statusCheckRollup: [{ name: 'Claude Code Review', conclusion: 'SUCCESS' }], updatedAt: '2026-11-01T00:00:00Z', body: 'Fix.', mergedAt: null }; };
 if (a[0] === 'auth') console.log('fake-gh-token');

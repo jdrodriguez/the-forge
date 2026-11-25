@@ -188,7 +188,7 @@ function newestMtime(dir) {
 // rebuildable one, less a file identical to the main checkout's file at the same path. git collapses an ignored folder
 // to one entry, which counts by its own name.
 function unsafeIgnored(dir, repo, rebuildable) {
-  const rx = rebuildableList(rebuildable).map(globRx);
+  const rx = rebuildableList(rebuildable).filter((g) => !g.includes('/')).map(globRx);
   const same = (f) => {
     try {
       return fs.statSync(path.join(dir, f)).isFile() && fs.readFileSync(path.join(dir, f)).equals(fs.readFileSync(path.join(repo, f)));
@@ -199,7 +199,15 @@ function unsafeIgnored(dir, repo, rebuildable) {
   const listed = git(dir, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory']).split('\n').filter(Boolean);
   // git also lists each parent folder of an ignored entry; a folder that only holds other listed entries is not one.
   const leaves = listed.filter((f) => !(f.endsWith('/') && listed.some((o) => o !== f && o.startsWith(f))));
-  return leaves.filter((f) => !f.replace(/\/$/, '').split('/').some((seg) => rx.some((r) => r.test(seg))) && !same(f));
+  // A pattern with a slash names a path from the checkout's root (that path, or anything under it); one without names any
+  // single part of a path.
+  const pathRx = rebuildableList(rebuildable).filter((g) => g.includes('/')).map((g) => globRx(g.replace(/\/$/, '')));
+  const rebuilt = (f) => {
+    const parts = f.replace(/\/$/, '').split('/');
+    if (parts.some((seg) => rx.some((r) => r.test(seg)))) return true;
+    return parts.some((_, i) => pathRx.some((r) => r.test(parts.slice(0, i + 1).join('/'))));
+  };
+  return leaves.filter((f) => !rebuilt(f) && !same(f));
 }
 // What a checkout still holds that git or GitHub lacks, or null: changes, an operation in progress, ignored files.
 function localWork(dir, repo, rebuildable) {

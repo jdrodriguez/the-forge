@@ -77,6 +77,7 @@ export function shellConfig(conf) {
     `EW_GH_TOKEN_FILE=${shq(fb.ghTokenFile ?? path.join(conf.paths.stateDir, 'engine-gh-token'))}`,
     `EW_LOOPBACK=${shq(ports.join(' '))}`,
     `EW_EXTRA_HOSTS=${shq(hosts.join(' '))}`,
+    `EW_CODEX_MODEL=${shq(/^[\w.:-]+$/.test(String(fb.codexModel ?? '')) ? fb.codexModel : '')}`,
     shArr('EW_INSTALL', install),
     shArr('EW_ENV', env),
   ].join('\n');
