@@ -65,6 +65,44 @@ const GATED_PUSH = `node ${path.join(DIR, 'gated-push.mjs')}`;
 // bypassPermissions. dispatcher.permissionMode overrides it for every worker this dispatcher starts.
 const MODE_ARGS = cfg.permissionMode ? ['--mode', cfg.permissionMode] : [];
 const branchFor = (id) => (conf.github.branchTemplate ?? 'agent/{id}').replaceAll('{id}', id.toLowerCase());
+// --- repos ---------------------------------------------------------------------------------------------------
+// The queue builds in repoPath (github.repo) unless dispatcher.repos maps a ticket's Linear project to another repo:
+// { "<project name>": { github, path, base, brief, mergeMode, mergeNote, reviewCheck, requiredChecks, ignoreChecks,
+// reviewGateBlocks } }. The repo is chosen once, at the claim, and kept on the ticket (t.repo, its github name), so
+// every later step reads the same one. mergeMode "queue" merges a green PR here, after the pre-merge check for repoPath;
+// "orchestrator" (the default for a mapped repo) sends every green PR to the orchestrator. An entry whose github is
+// null names a project with no repo the queue builds in, and a "default" entry of null leaves unlisted projects with
+// none; the queue sends those tickets back. Codex and Grok, Sentry merge paths and migration checks are repoPath's only.
+const DEFAULT_REPO = { key: 'default', github: REPO, path: conf.repoPath, base: BASE, brief: 'worker-brief.md', mergeMode: 'queue',
+  reviewCheck: REVIEW_CHECK, worktrees: WORKTREES, isDefault: true };
+function withRepo(key, e) {
+  const dir = e.path ?? path.join(WORKSPACE ?? HOME, path.basename(e.github));
+  return { key, github: e.github, path: dir, base: e.base ?? BASE, brief: e.brief ?? 'worker-brief.md', mergeMode: e.mergeMode ?? 'orchestrator',
+    mergeNote: e.mergeNote ?? null, reviewCheck: e.reviewCheck === undefined ? REVIEW_CHECK : e.reviewCheck, requiredChecks: e.requiredChecks ?? null,
+    ignoreChecks: e.ignoreChecks ?? null, reviewGateBlocks: Boolean(e.reviewGateBlocks), worktrees: path.join(dir, conf.worktreesDir ?? '.claude/worktrees'), isDefault: false };
+}
+// The repo a Linear project builds in, or null when the config says it has none.
+function repoForProject(name) {
+  const repos = cfg.repos;
+  if (!repos) return DEFAULT_REPO;
+  if (name && name !== 'default' && Object.hasOwn(repos, name)) return repos[name]?.github ? withRepo(name, repos[name]) : null;
+  return repos.default === null ? null : DEFAULT_REPO;
+}
+const repoForIssue = (issue) => repoForProject(issue?.project?.name ?? null);
+// A repo by its github name. One the config no longer lists keeps the orchestrator's merge, never this file's own.
+function repoByGithub(github) {
+  if (!github || github === REPO) return DEFAULT_REPO;
+  const hit = Object.entries(cfg.repos ?? {}).find(([k, e]) => k !== 'default' && e?.github === github);
+  return hit ? withRepo(hit[0], hit[1]) : withRepo(github, { github, mergeMode: 'orchestrator' });
+}
+const repoOf = (t) => repoByGithub(t?.repo);
+// Every repo the queue builds in, repoPath's first, once each.
+function allRepos() {
+  const seen = new Map([[REPO, DEFAULT_REPO]]);
+  for (const [k, e] of Object.entries(cfg.repos ?? {})) if (k !== 'default' && e?.github && !seen.has(e.github)) seen.set(e.github, withRepo(k, e));
+  return [...seen.values()];
+}
+const ghRepo = (pr) => pr?.repo ?? REPO;
 const DRY = process.argv.includes('--dry-run');
 // `tick --dry-run --bundle` shows what bundling would do while the config still has it off.
 const FORCE_BUNDLE = DRY && process.argv.includes('--bundle');
@@ -230,7 +268,7 @@ function trackProgress(t, sha, prUpdatedAt, state) {
 }
 function branchSha(t) {
   try {
-    return gh(['api', `repos/${REPO}/branches/${encodeURIComponent(t.branch)}`, '--jq', '.commit.sha']) || null;
+    return gh(['api', `repos/${repoOf(t).github}/branches/${encodeURIComponent(t.branch)}`, '--jq', '.commit.sha']) || null;
   } catch {
     return null; // not pushed yet
   }
@@ -531,12 +569,12 @@ function inboxSweep() {
 
 // Whether a later push to main that contains `sha` passed the named workflow. Errors read as "no", so a failure to
 // check never hides a real break.
-function laterGreenRun(workflow, sha) {
+function laterGreenRun(workflow, sha, repo = DEFAULT_REPO) {
   try {
-    const runs = JSON.parse(gh(['run', 'list', '--repo', REPO, '--branch', BASE, '--workflow', workflow, '--event', 'push',
+    const runs = JSON.parse(gh(['run', 'list', '--repo', repo.github, '--branch', repo.base, '--workflow', workflow, '--event', 'push',
       '--json', 'headSha,status,conclusion', '--limit', '15']));
     return runs.some((r) => r.headSha !== sha && r.status === 'completed' && r.conclusion === 'success'
-      && ['ahead', 'identical'].includes(gh(['api', `repos/${REPO}/compare/${sha}...${r.headSha}`, '--jq', '.status']).trim()));
+      && ['ahead', 'identical'].includes(gh(['api', `repos/${repo.github}/compare/${sha}...${r.headSha}`, '--jq', '.status']).trim()));
   } catch {
     return false;
   }
@@ -549,7 +587,7 @@ async function checkMerged(st) {
     try {
       // Only the runs the merge's push started. A nightly job that lands on this commit, or a manual run (a production
       // promote that refused a SHA, say), says nothing about the merge, and both had paused the queue.
-      runs = JSON.parse(gh(['run', 'list', '--repo', REPO, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100']))
+      runs = JSON.parse(gh(['run', 'list', '--repo', repoOf(t).github, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100']))
         .filter((r) => r.event === 'push');
     } catch (e) {
       log(`${id}: could not read main's runs (${errText(e)})`);
@@ -560,7 +598,7 @@ async function checkMerged(st) {
       // A flaky test fails one commit and passes the next (an e2e test did on one merge), and
       // pausing the whole queue for it costs hours. So a failure counts only once no later main commit containing
       // this merge has passed the same workflow, and only after waiting up to flakeWaitMinutes for one to run.
-      const recovered = failed.every((r) => laterGreenRun(r.name, t.mergedSha));
+      const recovered = failed.every((r) => laterGreenRun(r.name, t.mergedSha, repoOf(t)));
       if (recovered) {
         log(`${id}: ${failed.map((r) => r.name).join(', ')} failed on the merge commit but passed on a later main commit that contains it, so it was flaky; not pausing`);
         t.ciChecked = true;
@@ -583,47 +621,71 @@ async function checkMerged(st) {
 // reuses its branch name, so only a PR opened after this claim counts: a reopened ticket's old merged PR once read as
 // the rebuild's PR and the ticket went to Verifying 20 minutes into the build.
 function findPr(t, id) {
+  const R = repoOf(t);
   // A ticket an engine worked on and put back in the queue: its PR was opened before this claim, so the search below
   // would skip it. The shared record names it; it is taken while it is still open.
-  const carried = !t.prNumber && engines.marked(id)?.prNumber;
+  const carried = !t.prNumber && R.isDefault && engines.marked(id)?.prNumber;
   if (carried) {
-    const p = JSON.parse(gh(['pr', 'view', String(carried), '--repo', REPO, '--json', 'state,headRefName']));
+    const p = JSON.parse(gh(['pr', 'view', String(carried), '--repo', R.github, '--json', 'state,headRefName']));
     if (p.state === 'OPEN' && p.headRefName === t.branch) t.prNumber = carried;
   }
   if (!t.prNumber) {
-    const list = JSON.parse(gh(['pr', 'list', '--repo', REPO, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']));
+    const list = JSON.parse(gh(['pr', 'list', '--repo', R.github, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']));
     const since = Date.parse(t.claimedAt ?? t.dispatchedAt ?? 0);
-    const mine = list.filter((p) => p.baseRefName === BASE && !p.isCrossRepository && Date.parse(p.createdAt) >= since);
+    const mine = list.filter((p) => p.baseRefName === R.base && !p.isCrossRepository && Date.parse(p.createdAt) >= since);
     if (mine.length > 1) throw new Error(`${mine.length} PRs on ${t.branch}; pin one by setting prNumber in state.json`);
     if (!mine.length) return null;
     t.prNumber = mine[0].number;
   }
-  const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json',
+  const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json',
     'number,url,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
-  if (pr.headRefName !== t.branch || pr.baseRefName !== BASE) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${BASE} (${id})`);
+  if (pr.headRefName !== t.branch || pr.baseRefName !== R.base) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${R.base} (${id})`);
+  // The PR carries its repo, so every later read of it goes to the same one.
+  if (!R.isDefault) pr.repo = R.github;
   return pr;
 }
 
-// Green means GitHub calls it mergeable, the AI review check (github.reviewCheck) passed, and no review thread is open.
+// Green means GitHub calls it mergeable, the AI review check (github.reviewCheck, or the repo's reviewCheck) passed, and
+// no review thread is open. A repo with requiredChecks or ignoreChecks is judged by its checks instead (greenByChecks).
 function greenReason(pr) {
   if (pr.isDraft) return 'draft';
+  const R = repoByGithub(pr.repo);
+  if (R.requiredChecks || R.ignoreChecks) return greenByChecks(pr, R);
   if (!['CLEAN', 'HAS_HOOKS'].includes(pr.mergeStateStatus)) return `merge state ${pr.mergeStateStatus}`;
-  if (REVIEW_CHECK) {
-    const review = (pr.statusCheckRollup ?? []).find((c) => (c.name ?? c.context) === REVIEW_CHECK);
-    if (!review || (review.conclusion ?? review.state) !== 'SUCCESS') return `${REVIEW_CHECK} not passed`;
+  if (R.reviewCheck) {
+    const review = (pr.statusCheckRollup ?? []).find((c) => (c.name ?? c.context) === R.reviewCheck);
+    if (!review || (review.conclusion ?? review.state) !== 'SUCCESS') return `${R.reviewCheck} not passed`;
   }
   return openThreads(pr);
 }
 // The logins that opened the PR's unresolved review threads. A bot login ends in [bot] or is learning.reviewBotLogin.
 const isBot = (login) => /\[bot\]$/.test(login ?? '') || login === conf.learning?.reviewBotLogin;
 function threadAuthors(pr) {
-  const [owner, name] = REPO.split('/');
+  const [owner, name] = ghRepo(pr).split('/');
   const d = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
     'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']));
   return d.data.repository.pullRequest.reviewThreads.nodes.filter((n) => !n.isResolved).map((n) => n.comments?.nodes?.[0]?.author?.login ?? null);
 }
+// Green in a repo whose base branch has a review gate of its own (GitHub reads BLOCKED on every PR until a person
+// approves): no conflict, every check passing except the ones ignoreChecks names, each required check and the review
+// check passed, and no open review thread. reviewGateBlocks lets BLOCKED through, since the checks are read here.
+const PASSING_CHECK = new Set(['SUCCESS', 'SKIPPED', 'NEUTRAL']);
+const checkName = (c) => c.name ?? c.context;
+function greenByChecks(pr, R) {
+  const ok = ['CLEAN', 'HAS_HOOKS', 'UNSTABLE', ...(R.reviewGateBlocks ? ['BLOCKED'] : [])];
+  if (!ok.includes(pr.mergeStateStatus)) return `merge state ${pr.mergeStateStatus}`;
+  const ignored = (R.ignoreChecks ?? []).map((rx) => new RegExp(rx));
+  const all = (pr.statusCheckRollup ?? []).filter((c) => !ignored.some((rx) => rx.test(checkName(c) ?? '')));
+  const passed = (name) => all.some((c) => checkName(c) === name && (c.conclusion ?? c.state) === 'SUCCESS');
+  for (const name of [...(R.requiredChecks ?? []), ...(R.reviewCheck ? [R.reviewCheck] : [])]) {
+    if (!passed(name)) return `${name} not passed`;
+  }
+  const notPassing = all.filter((c) => !PASSING_CHECK.has(c.conclusion ?? c.state));
+  if (notPassing.length) return `check(s) not passed: ${[...new Set(notPassing.map(checkName))].join(', ')}`;
+  return openThreads(pr);
+}
 function openThreads(pr) {
-  const [owner, name] = REPO.split('/');
+  const [owner, name] = ghRepo(pr).split('/');
   const threads = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
     'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']));
   const rt = threads.data.repository.pullRequest.reviewThreads;
@@ -634,9 +696,9 @@ function openThreads(pr) {
 
 // Every changed path and rename source, paginated. A count short of changedFiles is treated as risky.
 // The PR's entry in the base branch's merge queue, or null when it is not queued (or the queue cannot be read).
-function queueEntry(number) {
+function queueEntry(number, repo = REPO) {
   try {
-    const [owner, name] = REPO.split('/');
+    const [owner, name] = repo.split('/');
     const out = gh(['api', 'graphql', '-f', `query=query{repository(owner:"${owner}",name:"${name}"){pullRequest(number:${Number(number)}){mergeQueueEntry{state position}}}}`,
       '--jq', '.data.repository.pullRequest.mergeQueueEntry']);
     return out && out !== 'null' ? JSON.parse(out) : null;
@@ -646,7 +708,7 @@ function queueEntry(number) {
 }
 
 function riskyPaths(pr) {
-  const out = gh(['api', `repos/${REPO}/pulls/${pr.number}/files`, '--paginate', '--jq', '.[] | "\\(.filename)\\t\\(.previous_filename // "")"']);
+  const out = gh(['api', `repos/${ghRepo(pr)}/pulls/${pr.number}/files`, '--paginate', '--jq', '.[] | "\\(.filename)\\t\\(.previous_filename // "")"']);
   const rows = out ? out.split('\n') : [];
   const paths = rows.flatMap((r) => r.split('\t')).filter(Boolean);
   if (rows.length < pr.changedFiles) return [`(only ${rows.length} of ${pr.changedFiles} files could be read)`];
@@ -846,6 +908,8 @@ async function settleCompanions(st, m, id, t, how, { pr = null, reason = '' } = 
 // updates the PR branch with main, so CI re-runs, goes red and the worker fixes the clash. A check that could not run
 // (no CI run found, or the type-check was killed, as earlyoom does on a small box) holds the merge to the next tick.
 async function freshEnough(id, t, pr) {
+  // The pre-merge check and the red-main watcher cover repoPath only; a mapped repo in "queue" mode merges on green.
+  if (!repoOf(t).isDefault) return true;
   // While main is red (main-watch.mjs, every 3 minutes, synced to every machine), no queue PR merges: piling onto a
   // red main hides the next break, and every pre-merge check would fail on main's own error. The responder's fix PR
   // is not a queue ticket, so it is never held here. A state file older than 15 minutes is ignored.
@@ -1199,7 +1263,7 @@ async function settleStuck(st) {
     if (t.status !== 'stuck' || !t.prNumber || (t.stuckCheckedAt && hoursSince(t.stuckCheckedAt) < 1)) continue;
     t.stuckCheckedAt = iso();
     try {
-      const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json', 'state,mergedAt,mergeCommit,url']));
+      const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', repoOf(t).github, '--json', 'state,mergedAt,mergeCommit,url']));
       if (pr.state === 'MERGED') {
         clearMergeRequest(id);
         Object.assign(t, { status: 'merged', mergedAt: pr.mergedAt, mergedSha: pr.mergeCommit?.oid ?? null, ciChecked: true,
@@ -1236,7 +1300,7 @@ async function finishMerged(st, m, id, t, pr) {
   // already deleted is fine.
   if (!DRY && t.branch) {
     try {
-      gh(['api', '-X', 'DELETE', `repos/${REPO}/git/refs/heads/${t.branch}`]);
+      gh(['api', '-X', 'DELETE', `repos/${repoOf(t).github}/git/refs/heads/${t.branch}`]);
     } catch (e) {
       if (!/Reference does not exist|Not Found|422|404/i.test(errText(e))) log(`${id}: could not delete ${t.branch} (${errText(e)})`);
     }
@@ -1353,7 +1417,8 @@ async function advance(st, m, workers) {
     if (pr) {
       // Labels unread: a known judgment PR keeps waiting on the reviewer, and every other green PR is held, since a label
       // may have changed to judgment since the last read.
-      if (sentryLabels === null) path = t.sentryPath === 'judgment' ? 'judgment' : 'unknown';
+      if (!repoOf(t).isDefault) path = null;
+      else if (sentryLabels === null) path = t.sentryPath === 'judgment' ? 'judgment' : 'unknown';
       else path = mergePathOf(id, t, sentryLabels);
       if (path) t.sentryPath = path;
       if (path === 'judgment' && t.status === 'merge-asked') {
@@ -1399,7 +1464,7 @@ async function advance(st, m, workers) {
     // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
     // its round has ended, it goes to the orchestrator the way a risky-path PR does. That includes a PR an engine built
     // and a Claude worker finished, since the engine's code has had no review.
-    if (!notGreen && pr) {
+    if (!notGreen && pr && repoOf(t).isDefault) {
       let clash = { stale: [] };
       try {
         clash = await migrationClash(id, pr);
@@ -1524,13 +1589,17 @@ async function advance(st, m, workers) {
           }
           continue;
         }
-      } else if (risky.length) {
-        t.note = 'green, waiting on the orchestrator\'s review and merge';
+      } else if (risky.length || repoOf(t).mergeMode !== 'queue') {
+        // A repo whose mergeMode is not "queue" sends every green PR to the orchestrator, and its request names the repo.
+        const R = repoOf(t);
+        const review = R.mergeMode !== 'queue' ? `${R.github}: ${R.mergeNote ?? 'its PRs merge only through the orchestrator'}` : null;
+        t.note = `green, waiting on the orchestrator's review and merge${review ? ` (${review})` : ''}`;
         if (t.status !== 'merge-asked' || t.riskySha !== pr.headRefOid) {
           Object.assign(t, { status: 'merge-asked', mergeAskedAt: t.mergeAskedAt ?? iso(), riskySha: pr.headRefOid });
           saveState(st);
-          log(`${id}: green but touches ${risky.length} reviewed path(s), sent to the orchestrator to review and merge`);
-          await effects(t, id, [[`request the orchestrator's merge of ${id}`, () => requestMerge(id, pr, risky)]]);
+          log(`${id}: green ${risky.length ? `but touches ${risky.length} reviewed path(s)` : `and ${review}`}, sent to the orchestrator to review and merge`);
+          const extra = { ...(review ? { review } : {}), ...(R.isDefault ? {} : { repo: R.github }) };
+          await effects(t, id, [[`request the orchestrator's merge of ${id}`, () => requestMerge(id, pr, risky, extra)]]);
           saveState(st);
         }
         continue;
@@ -1543,7 +1612,7 @@ async function advance(st, m, workers) {
       }
       // With a merge queue on the base branch, `gh pr merge` enqueues the PR and the queue lands it after its
       // merge_group run; a queued PR is left to the queue, and the tick that sees it MERGED finishes it.
-      const queued = queueEntry(pr.number);
+      const queued = queueEntry(pr.number, ghRepo(pr));
       if (queued) {
         t.note = `green, in the merge queue (${queued.state.toLowerCase()}, position ${queued.position})`;
         continue;
@@ -1569,14 +1638,14 @@ async function advance(st, m, workers) {
       }
       try {
         // No --delete-branch: gh refuses it while the merge queue is on. finishMerged deletes the branch.
-        gh(['pr', 'merge', String(pr.number), '--repo', REPO, '--squash', '--match-head-commit', pr.headRefOid]);
+        gh(['pr', 'merge', String(pr.number), '--repo', ghRepo(pr), '--squash', '--match-head-commit', pr.headRefOid]);
       } catch (e) {
         log(`${id}: merge refused, trying next tick (${errText(e)})`);
         continue;
       }
       const after = findPr(t, id);
       if (after.state === 'MERGED') await finishMerged(st, m, id, t, after);
-      else if (queueEntry(pr.number)) log(`${id}: added to the merge queue`);
+      else if (queueEntry(pr.number, ghRepo(pr))) log(`${id}: added to the merge queue`);
       else log(`${id}: merge did not complete (state ${after.state}), trying next tick`);
       continue;
     }
@@ -1619,7 +1688,7 @@ function prNeedsWorker(id, pr, notGreen) {
   }
   return { dirty, threads, what: [dirty ? `PR #${pr.number} conflicting with ${BASE}` : null, threads].filter(Boolean).join(' and ') };
 }
-const fixNote = (id, t, pr, fix) => `Your previous worker on ${id} ended, but its PR ${pr.url} cannot merge yet: ${fix.what}. Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them.${fix.dirty ? ` Merge origin/${BASE} into the branch (no rebase, no force-push) and resolve every conflict keeping both sides: what ${BASE} changed and what this ticket adds. Run the checks the conflicted files touch before you push.` : ''}${fix.threads ? ' Read every unresolved review thread on the PR, fix the code where the finding is right, reply on each thread saying what changed or why it stays, and resolve it.' : ''} Push once through ${GATED_PUSH} and drive the PR to green. Then carry on with the brief below.\n\n`;
+const fixNote = (id, t, pr, fix) => `Your previous worker on ${id} ended, but its PR ${pr.url} cannot merge yet: ${fix.what}. Continue its work instead of starting over: the worktree for ${t.branch} under ${repoOf(t).worktrees}/ may hold commits that were never pushed, so check it first and push them.${fix.dirty ? ` Merge origin/${BASE} into the branch (no rebase, no force-push) and resolve every conflict keeping both sides: what ${BASE} changed and what this ticket adds. Run the checks the conflicted files touch before you push.` : ''}${fix.threads ? ' Read every unresolved review thread on the PR, fix the code where the finding is right, reply on each thread saying what changed or why it stays, and resolve it.' : ''} Push once through ${GATED_PUSH} and drive the PR to green. Then carry on with the brief below.\n\n`;
 
 // Never fails a ticket for taking long. A long run gets an informational post every longRunNoticeHours; a ticket
 // that stops moving gets one note to the human and stays in the queue; only a worker that is gone, with nothing
@@ -1728,7 +1797,7 @@ const wtMod = async () => (wtModule ??= await import('./worktree-teardown.mjs'))
 const wtDry = () => DRY || WT_CFG.dryRun;
 const trashDir = async () => (await wtMod()).trashDirFor(WT_CFG.trashDir);
 // The checkouts the sweep covers: repoPath, then each worktreeCleanup.repos entry ({ path, github, base }).
-const cleanupRepos = () => [{ path: conf.repoPath, github: REPO, base: BASE }, ...WT_CFG.repos.map((r) => ({ base: BASE, ...r }))]
+const cleanupRepos = () => [...allRepos().map((r) => ({ path: r.path, github: r.github, base: r.base })), ...WT_CFG.repos.map((r) => ({ base: BASE, ...r }))]
   .filter((r) => r.path && fs.existsSync(r.path));
 const claudeEnv = (label) => {
   const env = { ...process.env };
@@ -1802,7 +1871,12 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
       }
     }
   }
-  const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json', 'number,state,headRefOid'])) : null;
+  const R = repoOf(t);
+  if (!R.path || !fs.existsSync(R.path)) {
+    t.teardown = { ...rec, skipped: `no checkout of ${R.github} on ${HOST}` };
+    return;
+  }
+  const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json', 'number,state,headRefOid'])) : null;
   // A worktree on a live ticket's branch, or naming a live ticket, is never this ticket's to remove.
   const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
   const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
@@ -1811,10 +1885,10 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   // else the one at the PR's head, else the only one naming the ticket.
   const idRx = new RegExp(`${id}(?!\\d)`, 'i');
   const mine = (x) => (t.branch && x.branch === t.branch) || (pr?.headRefOid && x.head === pr.headRefOid) || idRx.test(`${path.basename(x.path)} ${x.branch ?? ''}`);
-  const all = wt.listWorktrees(conf.repoPath);
+  const all = wt.listWorktrees(R.path);
   // Only worktrees in the worktrees folder, compared by real path as git reports them: one a person made elsewhere is
   // theirs. One of this ticket's found outside it makes the ticket's worktree unknown.
-  const folder = wt.key(WORKTREES);
+  const folder = wt.key(R.worktrees);
   const inFolder = (x) => wt.key(x.path).startsWith(`${folder}/`);
   const outside = all.filter((x) => !inFolder(x) && mine(x));
   const listed = all.filter((x) => inFolder(x) && !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
@@ -1827,7 +1901,7 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   // left alone.
   const absent = !entry && Boolean(t.branch) && !named.length && !outside.length;
   if (!entry) named.push(...outside);
-  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: conf.repoPath, base: BASE, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
+  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: R.path, base: R.base, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
     rebuildable: WT_CFG.rebuildableIgnored })
     : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
       : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
@@ -2249,16 +2323,16 @@ function pickAccount(accounts, engines = []) {
 }
 
 // The worker brief's config placeholders, filled once before the ticket placeholders.
-const fillConfig = (text) => text
+const fillConfig = (text, R = DEFAULT_REPO) => text
   .replaceAll('{{HUMAN}}', HUMAN)
-  .replaceAll('{{REPO}}', REPO)
-  .replaceAll('{{REPO_NAME}}', REPO_NAME)
-  .replaceAll('{{REPO_PATH}}', conf.repoPath ?? '')
-  .replaceAll('{{WORKTREES}}', WORKTREES)
-  .replaceAll('{{BASE}}', BASE)
+  .replaceAll('{{REPO}}', R.github)
+  .replaceAll('{{REPO_NAME}}', R.github.split('/')[1])
+  .replaceAll('{{REPO_PATH}}', R.path ?? '')
+  .replaceAll('{{WORKTREES}}', R.worktrees)
+  .replaceAll('{{BASE}}', R.base)
   .replaceAll('{{ROOT}}', ROOT)
   .replaceAll('{{GATED_PUSH}}', GATED_PUSH)
-  .replaceAll('{{REVIEW_CHECK}}', REVIEW_CHECK ?? 'the AI review check')
+  .replaceAll('{{REVIEW_CHECK}}', R.reviewCheck ?? 'the AI review check')
   .replaceAll('{{REVIEWER}}', RV)
   .replaceAll('{{JUDGMENT_LABEL}}', L.judgment)
   .replaceAll('{{GATES}}', GATES)
@@ -2272,8 +2346,10 @@ const GATES = (() => {
 })();
 
 // The worker brief for one ticket, or for a bundle: the lead first, then its companions. A bundle gets one header,
-// a note on building the tickets together, and one ticket section per ticket.
-function brief(issues, branch) {
+// a note on building the tickets together, and one ticket section per ticket. The template is the repo's brief: a path
+// relative to the dispatcher folder, or absolute.
+const briefFile = (R) => path.resolve(DIR, R.brief ?? 'worker-brief.md');
+function brief(issues, branch, R = DEFAULT_REPO) {
   const [lead] = issues;
   const fill = (text, issue) => text
     .replaceAll('{{ID}}', issue.identifier)
@@ -2281,7 +2357,7 @@ function brief(issues, branch) {
     .replaceAll('{{TITLE}}', issue.title)
     .replaceAll('{{URL}}', issue.url)
     .replaceAll('{{DESCRIPTION}}', issue.description || `(The ticket has no description. Ask ${HUMAN} before building.)`);
-  const template = fillConfig(fs.readFileSync(path.join(DIR, 'worker-brief.md'), 'utf8'));
+  const template = fillConfig(fs.readFileSync(briefFile(R), 'utf8'), R);
   if (issues.length === 1) return fill(template, lead);
   const at = template.search(/^## Ticket \{\{ID\}\}/m);
   const head = at < 0 ? template : template.slice(0, at);
@@ -2290,7 +2366,7 @@ function brief(issues, branch) {
   const list = ids.join(', ');
   const note = `This is a bundle. The agent dispatcher gave you ${issues.length} tickets from one Linear project, ${list}, to build together as one pull request, because every extra PR costs CI runs and a review round. Where the brief below says ${lead.identifier}, it means the whole bundle, except in ask-human commands. Build every ticket's full spec: each ticket's acceptance scenarios must run. Give each ticket its own commits, each subject starting with that ticket's ID. The PR title starts with "${list}: ". The PR body keeps every section of the repo's pull request template once for the whole PR, and adds one short section per ticket for what it changed. A question about one ticket goes to ask-human.sh with that ticket's own ID, in both the ask and the wait command. If one ticket turns out not to belong in this PR (a decision that blocks only it, or a risky change that deserves its own review), ask about it with its ID and keep building the others.\n\n`;
   const header = fill(head, lead)
-    .replace(`Build Linear ticket ${lead.identifier} in ${REPO_NAME} as one pull request.`, `Build Linear tickets ${list} in ${REPO_NAME} as one pull request.`)
+    .replace(`Build Linear ticket ${lead.identifier} in ${R.github.split('/')[1]} as one pull request.`, `Build Linear tickets ${list} in ${R.github.split('/')[1]} as one pull request.`)
     .replace(`PR title starts with "${lead.identifier}: "`, `PR title starts with "${list}: "`);
   return note + header + issues.map((i) => fill(section, i)).join('\n');
 }
@@ -2348,6 +2424,7 @@ function readyProblems(issue) {
   if (!size) problems.push(`no ${SIZE_GROUP} label (${cfg.queueSizes.join(' or ')})`);
   else if (!cfg.queueSizes.includes(size)) problems.push(`${SIZE_GROUP} ${size} is too big for one worker, so split it`);
   if (!issue.priority) problems.push('no priority');
+  if (!repoForIssue(issue)) problems.push(`its Linear project "${issue.project?.name ?? '(none)'}" has no repo the queue builds in (dispatcher.repos${cfg.repos?.[issue.project?.name]?.why ? `: ${cfg.repos[issue.project.name].why}` : ''})`);
   return problems;
 }
 
@@ -2377,7 +2454,7 @@ async function dispatch(st, m) {
 
   const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}},
     labels:{name:{eq:$ready}}, state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{
-      id identifier title url priority createdAt description state{ id } project{ id } parent{ identifier }
+      id identifier title url priority createdAt description state{ id } project{ id name } parent{ identifier }
       labels{ nodes{ name parent{ name } } }
       relations(first:50){ nodes{ type relatedIssue{ identifier } } }
       inverseRelations(first:100){ nodes{ type issue{ identifier state{ name type } } } } } } }`, { team: TEAM, ready: L.ready });
@@ -2438,6 +2515,17 @@ async function dispatch(st, m) {
       log(`${issue.identifier}: needs a ${needs.platform} machine (labeled ${needs.label}), left for one`);
       continue;
     }
+    // The repo its project builds in (readyProblems sent back a project with none). A mapped repo builds only on a
+    // machine that has its checkout and its brief; any other machine leaves the ticket for one that has.
+    const repo = repoForIssue(issue);
+    if (!repo.isDefault) {
+      const missing = !repo.path || !fs.existsSync(repo.path) ? `no checkout of ${repo.github} at ${repo.path}`
+        : !fs.existsSync(briefFile(repo)) ? `no worker brief ${repo.brief} for ${repo.github}` : null;
+      if (missing) {
+        log(`${issue.identifier}: builds in ${repo.github}, but ${HOST} has ${missing}, so it is left for a machine that has`);
+        continue;
+      }
+    }
     // A platform-labeled Sentry ticket is left only to a Sentry machine of its platform.
     const sentryAhead = needs && sentrySlots === 0 ? liveSentryHost({ platform: needs.platform }) : sentryHost;
     if (isSentry(issue) && sentryAhead) {
@@ -2453,6 +2541,7 @@ async function dispatch(st, m) {
     // part only while the engines are on and the ticket is one an engine may take (engine-workers.mjs skipReason).
     const notForEngine = !engines.on() ? 'the engines are off'
       : needs ? `it is labeled ${needs.label}: it builds only on a ${needs.platform} machine, which an engine sandbox is not`
+      : !repo.isDefault ? `it builds in ${repo.github}, and Codex and Grok build ${REPO} only`
       : await engines.call(`checking ${issue.identifier} for an engine`, 'the engine module could not be read', (e, c) => e.skipReason(c, issue));
     if (!notForEngine) engineRows ??= await engines.call('reading the engine accounts', [], (e, c) => e.accounts(c, st));
     let acct = pickAccount(accounts, notForEngine ? [] : engineRows);
@@ -2505,7 +2594,7 @@ async function dispatch(st, m) {
       continue;
     }
     const mates = [];
-    for (const c of pickCompanions(issue, ready, taken)) {
+    for (const c of pickCompanions(issue, ready, taken).filter((x) => repoForIssue(x)?.github === repo.github)) {
       const cur = await gql('query($id:String!){ issue(id:$id){ labels{ nodes{ name } } } }', { id: c.identifier });
       if (cur.issue.labels.nodes.some((l) => l.name === L.ready)) mates.push(c);
     }
@@ -2525,10 +2614,12 @@ async function dispatch(st, m) {
     if (isPaused()) return log('paused mid-tick, stopping dispatch');
 
     // Journal the claim before touching Linear, so a crash anywhere below is reconciled next tick.
-    const t = { status: 'claiming', claimedAt: iso(), branch, priorStateId: issue.state.id,
+    // t.repo only for a mapped repo: a ticket with none builds in repoPath.
+    const inRepo = repo.isDefault ? {} : { repo: repo.github };
+    const t = { status: 'claiming', claimedAt: iso(), branch, priorStateId: issue.state.id, ...inRepo,
       ...(bundleIds.length ? { bundle: bundleIds } : {}), ...(useSentrySlot ? { sentry: true } : {}) };
     st.tickets[id] = t;
-    for (const c of mates) st.tickets[c.identifier] = { status: 'claiming', claimedAt: iso(), branch, priorStateId: c.state.id, bundledInto: id };
+    for (const c of mates) st.tickets[c.identifier] = { status: 'claiming', claimedAt: iso(), branch, priorStateId: c.state.id, ...inRepo, bundledInto: id };
     saveState(st);
     let out = null;
     try {
@@ -2539,7 +2630,7 @@ async function dispatch(st, m) {
       }
       out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
         '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
-        ...MODE_ARGS, '--no-report', '--', brief(members, branch)],
+        ...MODE_ARGS, '--no-report', '--', brief(members, branch, repo)],
       { timeout: 180_000 }));
     } catch (e) {
       log(`${id}: claim or dispatch failed, reconciling (${errText(e)})`);
@@ -2615,13 +2706,13 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null, say = n
   const fromEngine = engineDriven(t);
   const note = fromEngine
     ? `${engines.guard(id, t)}Continue the work on ${id} from origin/${t.branch} instead of starting over. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`
-    : `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
+    : `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${repoOf(t).worktrees}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
   t.replacing = { at: iso(), fromAccount: t.account ?? null, fromWorker: t.workerId ?? null };
   saveState(st);
   // A dispatch that throws may still have started the session, so the marker stays for the next run to adopt.
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
     '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
-    ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+    ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch, repoOf(t))], { timeout: 180_000 }));
   delete t.replacing;
   noteStart(id, true);
   if (fromEngine) {
@@ -2929,7 +3020,7 @@ else if (cmd === 'check') {
     console.log(`usage: node dispatcher.mjs check ${TEAM}-123`);
     process.exitCode = 2;
   } else {
-    const { issue } = await gql(`query($id:String!){ issue(id:$id){ identifier title priority description
+    const { issue } = await gql(`query($id:String!){ issue(id:$id){ identifier title priority description project{ name }
       labels{ nodes{ name parent{ name } } } } }`, { id: rest[0] });
     const problems = readyProblems(issue);
     console.log(problems.length ? `${issue.identifier} is not ready: ${problems.join('; ')}` : `${issue.identifier} passes the queue's mechanical checks (scenarios, size, priority)`);
