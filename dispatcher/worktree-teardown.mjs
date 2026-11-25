@@ -163,6 +163,11 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
   const head = git(wtPath, ['rev-parse', 'HEAD']);
   const onlyHere = Number(git(wtPath, ['rev-list', '--count', 'HEAD', '--not', '--remotes']));
   const openPr = pr?.state === 'OPEN';
+  // git worktree remove deletes ignored files too, and an ignored local settings file (.env and the like) may be the
+  // only copy, so one keeps the worktree. Rebuildable ignored folders (node_modules, dist) show as one entry each.
+  const envFiles = git(wtPath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory']).split('\n')
+    .filter((f) => /(^|\/)\.env(\.|$)/.test(f.replace(/\/$/, '')));
+  if (!status && envFiles.length) return { ...meta, verdict: 'keep', atRisk: !openPr, reason: `ignored local settings that git does not keep: ${envFiles.slice(0, 3).join(', ')}` };
   if (status) {
     const n = status.split('\n').length;
     return { ...meta, verdict: 'keep', atRisk: !openPr, reason: `${n} uncommitted or untracked path(s), first: ${status.split('\n')[0].trim().slice(0, 80)}` };

@@ -224,3 +224,19 @@ test('classifyWorktree reports a missing folder as gone', () => {
   const { repo } = setup();
   assert.equal(classifyWorktree(path.join(repo, '.claude/worktrees/nope'), { repo, dirs: [] }).verdict, 'gone');
 });
+
+test('a merged worktree holding an ignored .env is kept: git worktree remove would delete the only copy', () => {
+  const { repo } = setup();
+  const { wt, head } = worktree(repo, 'withenv');
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.env\n');
+  fs.writeFileSync(path.join(wt, '.gitignore'), '.env\n');
+  git(wt, 'add', '.gitignore');
+  git(wt, 'commit', '-q', '-m', 'ignore');
+  git(wt, 'push', '-q', 'origin', 'HEAD:refs/heads/withenv');
+  fs.writeFileSync(path.join(wt, '.env'), 'SECRET=only-here');
+  const r = teardownWorktree({ path: wt, repo, pr: merged(git(wt, 'rev-parse', 'HEAD')), dirs: [] });
+  assert.equal(r.action, 'kept', r.reason);
+  assert.match(r.reason, /ignored local settings.*\.env/);
+  assert.ok(fs.existsSync(path.join(wt, '.env')));
+  void head;
+});

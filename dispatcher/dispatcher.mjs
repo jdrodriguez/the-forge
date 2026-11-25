@@ -1339,7 +1339,6 @@ async function advance(st, m, workers) {
     t.note = notGreen ? `not green: ${notGreen}` : 'green';
     reached.add(id);
     // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
-    if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
     // its round has ended, it goes to the orchestrator the way a risky-path PR does. That includes a PR an engine built
     // and a Claude worker finished, since the engine's code has had no review.
@@ -1377,6 +1376,8 @@ async function advance(st, m, workers) {
         log(`${id}: ${clash.stale.join(', ')} clashes with ${BASE}, and worker ${t.account}/${t.workerId} could not be told (${why})`);
       }
     }
+    // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
+    if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     if (!notGreen && engineDriven(t)) {
       const ready = await engines.call(`checking ${id}'s engine run`, 'hold', (e, c) => e.greenState(c, st, m, id, t, pr));
       if (ready === 'ready' && t.status !== 'stuck') await engines.toOrchestrator(st, id, t, pr);
@@ -1395,6 +1396,16 @@ async function advance(st, m, workers) {
     // A ticket sent to the orchestrator whose PR then needs a worker again (a conflict, a review thread, a draft) goes
     // back to building with its merge request withdrawn, so the stall rules give the fix to its worker or a new one.
     // Pending checks or a merge-queue run leave it merge-asked; once green again it is sent to the orchestrator afresh.
+    // greenReason stops at a BLOCKED merge state without reading the threads, so those are read here.
+    let blockedThreads = null;
+    if (notGreen === 'merge state BLOCKED' && t.status === 'merge-asked' && !engineDriven(t)) {
+      try {
+        blockedThreads = openThreads(pr);
+      } catch (e) {
+        log(`${id}: could not read PR #${pr.number}'s review threads (${errText(e)})`);
+      }
+      if (blockedThreads) notGreen = `${notGreen}, ${blockedThreads}`;
+    }
     if (notGreen && t.status === 'merge-asked' && !engineDriven(t) && (notGreen === 'draft' || /^merge state (DIRTY|CONFLICTING)$/.test(notGreen) || /unresolved review thread/.test(notGreen))) {
       log(`${id}: its PR needs work again (${notGreen}), so its merge request is withdrawn and it is building again`);
       t.status = 'building';
@@ -1576,10 +1587,13 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
       if (!mayWake(st, id, t, why)) return;
       try {
         if (await replaceWorker(st, id, t, { note: fixNote(id, t, pr, fix), say: `the previous worker ended with ${fix.what} on ${pr.url}`, charge: true })) return;
-        log(`${id}: ${why} and no account has room for a replacement`);
+        log(`${id}: ${why} and no account has room for a replacement, trying next tick`);
       } catch (e) {
-        log(`${id}: could not replace its ended worker (${errText(e)})`);
+        log(`${id}: could not replace its ended worker, trying next tick (${errText(e)})`);
       }
+      // The budget still holds a replacement, so a start that failed this tick is retried, never made stuck.
+      t.note = `${why}; waiting to start its replacement`;
+      return;
     }
   }
   if (t.goneTicks >= 2 && (deadEnd || idle > cfg.stallHours)) {
@@ -1656,7 +1670,7 @@ async function teardownFinished(st, workers) {
   }
   for (const [id, t] of due) {
     try {
-      await teardownTicket(wt, id, t, workers, dirs);
+      await teardownTicket(wt, id, t, workers, dirs, st);
     } catch (e) {
       log(`${id}: worktree teardown failed, trying next tick (${errText(e)})`);
     }
@@ -1664,7 +1678,7 @@ async function teardownFinished(st, workers) {
   }
 }
 
-async function teardownTicket(wt, id, t, workers, dirs) {
+async function teardownTicket(wt, id, t, workers, dirs, st) {
   const dry = wtDry();
   const rec = { at: iso(), ...(dry ? { dryRun: true } : {}) };
   // Codex and Grok build in a standalone clone that ext-worker.sh made and owns, with no fleet session.
@@ -1704,7 +1718,12 @@ async function teardownTicket(wt, id, t, workers, dirs) {
     }
   }
   const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json', 'number,state,headRefOid'])) : null;
-  const listed = wt.listWorktrees(conf.repoPath);
+  // A worktree on a live ticket's branch, or naming a live ticket, is never this ticket's to remove.
+  const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
+  const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
+  const liveRx = live.map(([x]) => new RegExp(`${x}(?!\\d)`, 'i'));
+  const listed = wt.listWorktrees(conf.repoPath).filter((x) => !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
+    && !liveRx.some((rx) => rx.test(`${path.basename(x.path)} ${x.branch ?? ''}`)));
   // A worker often names its local branch unlike the one it pushes, so the worktree is the one on the ticket's branch,
   // else the one at the PR's head, else the only one naming the ticket.
   const idRx = new RegExp(`${id}(?!\\d)`, 'i');
@@ -1756,8 +1775,9 @@ async function worktreeSweep(st) {
   try {
     mem = JSON.parse(fs.readFileSync(SWEEP_STATE, 'utf8'));
   } catch { /* first sweep on this machine */ }
-  if (mem.lastRun && hoursSince(mem.lastRun) < WT_CFG.sweepHours) return;
   const dry = wtDry();
+  // A dry sweep's time never delays the first live one.
+  if (mem.lastRun && hoursSince(mem.lastRun) < WT_CFG.sweepHours && !(mem.dryRun && !dry)) return;
   const atRisk = {};
   let failed = 0;
   let wt;

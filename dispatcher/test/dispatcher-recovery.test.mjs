@@ -119,3 +119,18 @@ test('the heartbeat counts the worktrees of the repos the sweep covers', () => {
   tick(box);
   assert.equal(JSON.parse(fs.readFileSync(path.join(box.shared, 'heartbeats/host-a.json'), 'utf8')).worktrees, 2);
 });
+
+test('a ticket sent to the orchestrator whose BLOCKED PR has unresolved threads goes back to building', () => {
+  const asked = live(9, { status: 'merge-asked', riskySha: 'abc123', mergeAskedAt: OLD, prNumber: 9 });
+  const box = capBox({ tickets: { 'ENG-9': asked }, prs: { 9: { branch: 'agent/eng-9', merge: 'BLOCKED', threads: 1 } }, ps: [busy(9)] });
+  assert.match(tick(box), /ENG-9: its PR needs work again \(merge state BLOCKED, 1 unresolved review thread\(s\)\)/);
+  assert.equal(state(box).tickets['ENG-9'].status, 'building');
+});
+
+test('an ended worker on a conflicting PR waits when its replacement cannot start, and is never made stuck for it', () => {
+  const box = capBox({ tickets: { 'ENG-9': live(9, { prNumber: 9, goneTicks: 1 }) }, prs: { 9: { branch: 'agent/eng-9', merge: 'DIRTY' } }, ps: [ended(9)], usage: [] });
+  tick(box);
+  tick(box);
+  assert.equal(state(box).tickets['ENG-9'].status, 'building');
+  assert.match(state(box).tickets['ENG-9'].note, /waiting to start its replacement/);
+});
