@@ -67,7 +67,7 @@ const MODE_ARGS = cfg.permissionMode ? ['--mode', cfg.permissionMode] : [];
 const branchFor = (id) => (conf.github.branchTemplate ?? 'agent/{id}').replaceAll('{id}', id.toLowerCase());
 // --- repos ---------------------------------------------------------------------------------------------------
 // The queue builds in repoPath (github.repo) unless dispatcher.repos maps a ticket's Linear project to another repo:
-// { "<project name>": { github, path, base, brief, mergeMode, mergeNote, reviewCheck, requiredChecks, ignoreChecks,
+// { "<project name>": { github, path, base, brief, mergeMode, mergeReason, reviewCheck, requiredChecks, ignoreChecks,
 // reviewGateBlocks } }. The repo is chosen once, at the claim, and kept on the ticket (t.repo, its github name), so
 // every later step reads the same one, by its config key (t.repoKey). mergeMode "queue" merges a green PR here, after the pre-merge check for repoPath;
 // "orchestrator" (the default for a mapped repo) sends every green PR to the orchestrator. An entry whose github is
@@ -78,7 +78,7 @@ const DEFAULT_REPO = { key: 'default', github: REPO, path: conf.repoPath, base: 
 function withRepo(key, e) {
   const dir = e.path ?? path.join(WORKSPACE ?? HOME, path.basename(e.github));
   return { key, github: e.github, path: dir, base: e.base ?? BASE, brief: e.brief ?? 'worker-brief.md', mergeMode: e.mergeMode ?? 'orchestrator',
-    mergeNote: e.mergeNote ?? null, reviewCheck: e.reviewCheck === undefined ? REVIEW_CHECK : e.reviewCheck, requiredChecks: e.requiredChecks ?? null,
+    mergeReason: e.mergeReason ?? null, reviewCheck: e.reviewCheck === undefined ? REVIEW_CHECK : e.reviewCheck, requiredChecks: e.requiredChecks ?? null,
     ignoreChecks: e.ignoreChecks ?? null, reviewGateBlocks: Boolean(e.reviewGateBlocks), worktrees: path.join(dir, conf.worktreesDir ?? '.claude/worktrees'), isDefault: false };
 }
 // The repo a Linear project builds in, or null when the config says it has none.
@@ -1603,7 +1603,7 @@ async function advance(st, m, workers) {
       } else if (risky.length || repoOf(t).mergeMode !== 'queue') {
         // A repo whose mergeMode is not "queue" sends every green PR to the orchestrator, and its request names the repo.
         const R = repoOf(t);
-        const review = R.mergeMode !== 'queue' ? `${R.github}: ${R.mergeNote ?? 'its PRs merge only through the orchestrator'}` : null;
+        const review = R.mergeMode !== 'queue' ? `${R.github}: ${R.mergeReason ?? 'its PRs merge only through the orchestrator'}` : null;
         t.note = `green, waiting on the orchestrator's review and merge${review ? ` (${review})` : ''}`;
         if (t.status !== 'merge-asked' || t.riskySha !== pr.headRefOid) {
           Object.assign(t, { status: 'merge-asked', mergeAskedAt: t.mergeAskedAt ?? iso(), riskySha: pr.headRefOid });

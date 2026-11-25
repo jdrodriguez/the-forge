@@ -11,7 +11,7 @@ const inProject = (n, name) => ({ ...ready(n), project: { id: `P-${name}`, name 
 // A checkout and a brief for the site repo; the brief names the repo, base and worktrees placeholders.
 function siteBox(entry = {}, more = {}) {
   const checkout = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'site-')));
-  const box = capBox({ dispatcher: { repos: { Site: { github: 'org/site', path: checkout, base: 'trunk', brief: 'site-brief.md', ...entry }, ...(more.repos ?? {}) } }, ...more });
+  const box = capBox({ dispatcher: { repos: { Site: { github: 'org/site', path: checkout, brief: 'site-brief.md', ...entry }, ...(more.repos ?? {}) } }, ...more });
   fs.writeFileSync(path.join(box.dir, 'site-brief.md'), 'Site brief for {{ID}} in {{REPO}} on {{BASE}}, worktrees in {{WORKTREES}}.\n');
   return { box, checkout };
 }
@@ -21,7 +21,7 @@ const mergeRequest = (box, id = 'ENG-9') => {
 };
 
 test("a mapped project's ticket is claimed in its repo, with that repo's brief, and its claim records the repo by key", () => {
-  const { box, checkout } = siteBox({}, { readyList: [inProject(11, 'Site'), ready(12)] });
+  const { box, checkout } = siteBox({ base: 'trunk' }, { readyList: [inProject(11, 'Site'), ready(12)] });
   tick(box);
   assert.equal(dispatches(box).length, 2);
   const site = briefs(box).find((b) => b.startsWith('Site brief'));
@@ -44,10 +44,8 @@ test('a project mapped to no repo is sent back', () => {
 });
 
 test("a green PR in an orchestrator-mode repo goes to the orchestrator with the repo named, and is never merged here", () => {
-  const { box } = siteBox({ mergeNote: 'a merge publishes the site' }, {
-    tickets: { 'ENG-9': live(9, { repo: 'org/site', repoKey: 'Site' }) }, prs: { 9: { branch: 'agent/eng-9', base: 'trunk' } } });
-  const gh = path.join(box.bin, 'gh');
-  fs.writeFileSync(gh, fs.readFileSync(gh, 'utf8').replace("baseRefName: 'main'", "baseRefName: p.base ?? 'main'").replace("baseRefName: 'main', isCrossRepository", "baseRefName: p.base ?? 'main', isCrossRepository"));
+  const { box } = siteBox({ mergeReason: 'a merge publishes the site' }, {
+    tickets: { 'ENG-9': live(9, { repo: 'org/site', repoKey: 'Site' }) }, prs: { 9: { branch: 'agent/eng-9' } } });
   tick(box);
   const req = mergeRequest(box);
   assert.equal(req.repo, 'org/site');
