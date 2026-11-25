@@ -163,3 +163,17 @@ test('a green PR waiting on the reviewer is parked, and its busy worker still ke
   box.put('ps.json', [{ ...busy(9), status: 'idle', state: 'done' }]);
   assert.match(tick(box), /ENG-20: dispatched to b\/w0 in the Sentry slot/);
 });
+
+test('a waiting ticket never jumps a ticket that started waiting before it, even by hand', () => {
+  const box = capBox({ tickets: { 'ENG-1': live(1), 'ENG-8': live(8, { goneTicks: 2 }), 'ENG-9': live(9, { goneTicks: 2 }) }, ps: [busy(1), ended(8, 'failed'), ended(9, 'failed')],
+    wakeQueue: [{ id: 'ENG-8', since: '2026-11-18T01:00:00Z', reason: 'x', pool: 'regular' }, { id: 'ENG-9', since: '2026-11-18T02:00:00Z', reason: 'x', pool: 'regular' }] });
+  assert.match(run(box, ['redispatch', 'ENG-9']), /ENG-9: nothing started/);
+  assert.equal(briefs(box).length, 0);
+});
+
+test('a redispatch by hand that starts nothing keeps its wake override for the next try', () => {
+  const box = capBox({ host: { maxWorkers: 1 }, tickets: { 'ENG-1': live(1), 'ENG-9': live(9, { status: 'stuck', stuckAt: OLD }) }, ps: [busy(1)], usage: [] });
+  run(box, ['wake', 'ENG-9']);
+  assert.match(run(box, ['redispatch', 'ENG-9']), /no account has a free worker slot/);
+  assert.ok(fs.existsSync(path.join(box.shared, 'wake-requests/ENG-9.json')));
+});

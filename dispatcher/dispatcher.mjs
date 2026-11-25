@@ -233,7 +233,7 @@ const fleetWorker = (name) => fleetWorkers().find((w) => w.name === name) ?? nul
 const WAKE_REQUESTS = path.join(SHARED, 'wake-requests');
 // This run's decisions: tickets granted a wake (each holds a slot for the rest of the run), the tickets that held a slot
 // when the run reached them, the session list the count reads, and the override requests for tickets held here.
-const wakeRun = { woken: new Set(), held: new Set(), workers: null, overrides: new Map() };
+const wakeRun = { woken: new Set(), held: new Set(), asked: new Set(), workers: null, overrides: new Map() };
 // A Sentry ticket counts in this machine's Sentry slots; on a machine with none it counts in the regular pool.
 const poolOf = (t) => (t?.sentry && (hostCfg.sentryWorkers ?? 0) > 0 ? 'sentry' : 'regular');
 const baseMax = (pool) => (pool === 'sentry' ? hostCfg.sentryWorkers ?? 0 : hostCfg.maxWorkers ?? Infinity);
@@ -312,13 +312,18 @@ async function sessionRows(st) {
 // A refused ticket joins the wake queue, or keeps its place there; `join: false` (a command run by hand) only refuses.
 // Once granted, it stays granted for the run.
 function mayWake(st, id, t, reason, { join = true } = {}) {
+  wakeRun.asked.add(id);
   if (wakeRun.woken.has(id)) return true;
   const pool = poolOf(t);
   const max = poolMax(pool);
   const entry = wakeEntry(st, id);
   const override = wakeRun.overrides.get(id);
   const used = wakeRun.workers ? poolUse(st, wakeRun.workers, pool, { except: id }) : null;
-  const behind = !entry && !wakeRun.held.has(id) && (st.wakeQueue ?? []).some((w) => w.id !== id && poolOf(st.tickets[w.id]) === pool);
+  // First come first served: a waiting ticket stays behind the ones that started waiting before it, and a ticket that
+  // held no slot and was not waiting goes behind all of them.
+  const queue = st.wakeQueue ?? [];
+  const ahead = entry ? queue.slice(0, queue.indexOf(entry)) : wakeRun.held.has(id) ? [] : queue;
+  const behind = ahead.some((w) => w.id !== id && !wakeRun.woken.has(w.id) && poolOf(st.tickets[w.id]) === pool);
   const waited = entry ? `${Math.round(hoursSince(entry.since) * 60)} minutes` : null;
   const burst = used !== null && used + 1 > baseMax(pool) ? `using a burst slot: ${burstState()?.reading}; ${used}/${baseMax(pool)} ${slotWord(pool)}s in use` : null;
   if (override || (used !== null && !behind && used + 1 <= max)) {
@@ -1204,6 +1209,7 @@ async function advance(st, m, workers) {
   // Tickets in the wake queue come last, in the order they started waiting: by then every other ticket has freed the
   // slot it frees this tick, and the first to wait is the first to take a free slot.
   const waitingIds = (st.wakeQueue ?? []).map((w) => w.id).filter((x) => st.tickets[x]);
+  const reached = new Set(); // tickets whose PR was read this tick, so whether they need a worker is known
   for (const id of [...Object.keys(st.tickets).filter((x) => !waitingIds.includes(x)), ...waitingIds]) {
     const t = st.tickets[id];
     if (!t || !LIVE.includes(t.status)) continue;
@@ -1305,6 +1311,7 @@ async function advance(st, m, workers) {
       }
     }
     t.note = notGreen ? `not green: ${notGreen}` : 'green';
+    reached.add(id);
     // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
     if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
@@ -1436,6 +1443,11 @@ async function advance(st, m, workers) {
     if (t.waiting) t.note = `waiting on your answer; ${t.note}`;
     log(`${id}: not green yet (${notGreen}), ${Math.round(hoursSince(t.dispatchedAt) * 10) / 10}h in, last progress ${Math.round(hoursSince(t.lastProgressAt) * 10) / 10}h ago, worker ${state}`);
     if (t.status === 'building') await checkStall(st, m, id, t, pr, notGreen, state);
+  }
+  // A waiting ticket whose PR was read and that asked for no worker this tick (an engine ticket waiting on the
+  // orchestrator whose next round is no longer due, say) no longer needs one, so it stops holding a place.
+  for (const w of [...(st.wakeQueue ?? [])]) {
+    if (reached.has(w.id) && !wakeRun.asked.has(w.id)) leaveWakeQueue(st, w.id, 'it no longer needs a worker');
   }
 }
 
@@ -1646,7 +1658,8 @@ const usedHere = (label) => fallbackAccounts.includes(label) || !hostCfg.account
 const isFableWindow = (w) => w.kind === 'weekly_scoped' && w.scope === 'Fable';
 function weeklyLeft(u) {
   const ws = (u?.windows ?? []).filter((w) => w.group === 'weekly' && !isFableWindow(w));
-  return ws.length ? Math.min(...ws.map((w) => w.remaining_percentage ?? -1)) : (u?.weekly?.remaining_percentage ?? -1);
+  if (ws.length) return Math.min(...ws.map((w) => w.remaining_percentage ?? -1));
+  return u?.weekly?.window === 'Fable' ? -1 : (u?.weekly?.remaining_percentage ?? -1);
 }
 const fableWindow = (u) => (u?.windows ?? []).find(isFableWindow) ?? null;
 
@@ -1682,7 +1695,10 @@ function workerModel(acct) {
 // finish is not handed to it again. A burn account or one in fableAccounts runs Fable while it may, Size S included.
 function modelFor(acct, { size = null } = {}) {
   if ((isBurn(acct?.label) || fableOn(acct?.label)) && fableAllowed(acct)) return 'fable';
-  return (size && cfg.modelBySize?.[size]) || workerModel(acct);
+  const sized = size && cfg.modelBySize?.[size];
+  // A size mapped to Fable keeps the Fable rules.
+  if (sized && (sized !== 'fable' || fableAllowed(acct))) return sized;
+  return workerModel(acct);
 }
 
 // workerReservePercent ({ <subscriptionType>: percent }): usage promised to running workers. Each working session
@@ -2119,6 +2135,12 @@ async function redispatch(id) {
     if (!(await roomByHand(st, id, t, 'a redispatch by hand'))) return;
     const out = await replaceWorker(st, id, t);
     console.log(out ? `${id}: redispatched to ${out.label}/${out.id}` : `no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom`);
+    // An override is spent only by a start: one that started nothing stands for the next try.
+    const o = wakeRun.overrides.get(id);
+    if (out && o?.used) {
+      fs.rmSync(o.file, { force: true });
+      console.log(`${id}: its wake override let it through over the limit, and is cleared`);
+    }
   } finally {
     fs.rmdirSync(LOCK);
   }
@@ -2136,14 +2158,7 @@ async function roomByHand(st, id, t, what) {
   for (const [x, other] of Object.entries(st.tickets)) if (holdsSlot(st, x, other)) wakeRun.held.add(x);
   const req = readWakeRequest(id);
   if (req) wakeRun.overrides.set(id, req);
-  if (mayWake(st, id, t, what, { join: false })) {
-    const o = wakeRun.overrides.get(id);
-    if (o?.used) {
-      fs.rmSync(o.file, { force: true });
-      console.log(`${id}: its wake override let it through over the limit, and is cleared`);
-    }
-    return true;
-  }
+  if (mayWake(st, id, t, what, { join: false })) return true;
   const pool = poolOf(t);
   console.log(`${id}: nothing started, since ${what} would put ${HOST} over its limit (${poolUse(st, wakeRun.workers, pool, { except: id })}/${poolMax(pool)} ${slotWord(pool)}s in use without it${pool === 'regular' && burstState() ? `; ${burstText()}` : ''}). Run \`node ${path.join(DIR, 'dispatcher.mjs')} wake ${id}\` first to let it through once.`);
   return false;

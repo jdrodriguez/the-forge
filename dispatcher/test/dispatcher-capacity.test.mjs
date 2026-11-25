@@ -208,3 +208,9 @@ test('a burn account is capped by the same reserve', () => {
   tick(box);
   assert.deepEqual(labels(box), ['b'], 'g: 30 - 4 x 8 is under the burn floor');
 });
+
+test('a size mapped to Fable keeps the Fable rules', () => {
+  const box = capBox({ dispatcher: { model: 'opus', modelBySize: { S: 'fable' }, noFableAccounts: ['b'] }, usage: [acct({ all: 90, fable: 100 })], readyList: [ready(11)] });
+  tick(box);
+  assert.deepEqual(models(box), ['opus']);
+});

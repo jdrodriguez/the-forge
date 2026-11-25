@@ -100,3 +100,13 @@ test('a start that fails after its run began is adopted from the registry: it ke
   assert.equal(claudeBriefs(box).length, 0, 'no Claude worker starts on it');
   assert.equal(ticket(box, 'ENG-12'), undefined, 'the adopted run holds the one slot');
 });
+
+test('a ticket waiting for a slot whose PR no longer needs a round leaves the wake queue', () => {
+  const asked = { ...ENGINE_T, status: 'merge-asked', prNumber: 7, riskySha: HEAD };
+  const box = engineBox({ tickets: { 'ENG-9': asked }, registry: { status: 'done' }, pr: { mergeStateStatus: 'BLOCKED' } });
+  const file = path.join(box.stateDir, 'state.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), wakeQueue: [{ id: 'ENG-9', since: OLD, reason: 'x', pool: 'regular' }] }));
+  assert.match(tick(box), /ENG-9: left the wake queue, it no longer needs a worker/);
+  assert.deepEqual(state(box).wakeQueue, []);
+  assert.equal(starts(box).length, 0);
+});
