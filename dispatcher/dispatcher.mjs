@@ -187,24 +187,76 @@ const errText = (e) => String(e?.stderr || e?.message || e).trim().slice(0, 400)
 // --- external systems -------------------------------------------------------------------------------
 
 let lkey;
+// An API answer that never came: a gateway error page ("upstream connect error ..."), a 5xx, a body that is not JSON
+// or no answer at all, after one retry. A tick step that gets one is skipped for this tick (apiStep); any other error
+// stops the tick as before.
+class ApiUnavailable extends Error {}
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const API_RETRY_MS = Number(process.env.DISPATCHER_API_RETRY_MS ?? 3000);
+const shortBody = (text) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
 async function gql(query, variables = {}) {
   // The environment first: over SSH a secrets manager may not reach the keychain, so a remote run passes the key in.
   lkey ??= linearKey(conf);
-  const res = await fetch('https://api.linear.app/graphql', {
-    method: 'POST',
-    headers: { Authorization: lkey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const body = await res.json();
-  if (body.errors) throw new Error(`Linear: ${body.errors[0].message}`);
-  return body.data;
+  // A mutation is sent again only after a gateway status, which means the request never reached Linear; a query after
+  // any failed answer.
+  const mutation = /^\s*mutation\b/.test(query);
+  for (let attempt = 1; ; attempt++) {
+    let res;
+    let text;
+    try {
+      res = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: { Authorization: lkey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      text = await res.text();
+    } catch (e) {
+      if (attempt < 2 && !mutation) {
+        await pause(API_RETRY_MS);
+        continue;
+      }
+      throw new ApiUnavailable(`Linear did not answer (${errText(e)})`);
+    }
+    let body = null;
+    if (!/text\/html/i.test(res.headers.get('content-type') ?? '')) {
+      try {
+        body = JSON.parse(text);
+      } catch { /* not JSON */ }
+    }
+    if (res.status >= 500 || !body || typeof body !== 'object') {
+      if (attempt < 2 && (!mutation || [502, 503, 504].includes(res.status))) {
+        await pause(API_RETRY_MS);
+        continue;
+      }
+      throw new ApiUnavailable(`Linear answered HTTP ${res.status}${body ? '' : ` with no JSON ("${shortBody(text)}")`}`);
+    }
+    if (body.errors) throw new Error(`Linear: ${body.errors[0].message}`);
+    return body.data;
+  }
 }
+
 
 let ghToken;
 function gh(args) {
   ghToken ??= run('gh', ['auth', 'token', '--hostname', 'github.com', '--user', conf.github.user]);
   return run('gh', args, { env: { ...process.env, GH_TOKEN: ghToken } });
+}
+// gh's JSON answer, parsed. A body that is not JSON (a gateway page passed through) is read once more after a short
+// wait, then fails as ApiUnavailable, naming the command.
+function ghJson(args) {
+  for (let attempt = 1; ; attempt++) {
+    const text = gh(args);
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (attempt < 2) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, API_RETRY_MS);
+        continue;
+      }
+      throw new ApiUnavailable(`gh ${args.slice(0, 2).join(' ')} answered with no JSON ("${shortBody(text)}")`);
+    }
+  }
 }
 
 const addLabel = (i, l) => gql('mutation($i:String!,$l:String!){ issueAddLabel(id:$i, labelId:$l){ success } }', { i, l });
@@ -626,8 +678,8 @@ function inboxSweep() {
 // check never hides a real break.
 function laterGreenRun(workflow, sha, repo = DEFAULT_REPO) {
   try {
-    const runs = JSON.parse(gh(['run', 'list', '--repo', repo.github, '--branch', repo.base, '--workflow', workflow, '--event', 'push',
-      '--json', 'headSha,status,conclusion', '--limit', '15']));
+    const runs = ghJson(['run', 'list', '--repo', repo.github, '--branch', repo.base, '--workflow', workflow, '--event', 'push',
+      '--json', 'headSha,status,conclusion', '--limit', '15']);
     return runs.some((r) => r.headSha !== sha && r.status === 'completed' && r.conclusion === 'success'
       && ['ahead', 'identical'].includes(gh(['api', `repos/${repo.github}/compare/${sha}...${r.headSha}`, '--jq', '.status']).trim()));
   } catch {
@@ -642,7 +694,7 @@ async function checkMerged(st) {
     try {
       // Only the runs the merge's push started. A nightly job that lands on this commit, or a manual run (a production
       // promote that refused a SHA, say), says nothing about the merge, and both had paused the queue.
-      runs = JSON.parse(gh(['run', 'list', '--repo', repoOf(t).github, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100']))
+      runs = ghJson(['run', 'list', '--repo', repoOf(t).github, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100'])
         .filter((r) => r.event === 'push');
     } catch (e) {
       log(`${id}: could not read main's runs (${errText(e)})`);
@@ -681,19 +733,19 @@ function findPr(t, id) {
   // would skip it. The shared record names it; it is taken while it is still open.
   const carried = !t.prNumber && R.isDefault && engines.marked(id)?.prNumber;
   if (carried) {
-    const p = JSON.parse(gh(['pr', 'view', String(carried), '--repo', R.github, '--json', 'state,headRefName']));
+    const p = ghJson(['pr', 'view', String(carried), '--repo', R.github, '--json', 'state,headRefName']);
     if (p.state === 'OPEN' && p.headRefName === t.branch) t.prNumber = carried;
   }
   if (!t.prNumber) {
-    const list = JSON.parse(gh(['pr', 'list', '--repo', R.github, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']));
+    const list = ghJson(['pr', 'list', '--repo', R.github, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']);
     const since = Date.parse(t.claimedAt ?? t.dispatchedAt ?? 0);
     const mine = list.filter((p) => p.baseRefName === R.base && !p.isCrossRepository && Date.parse(p.createdAt) >= since);
     if (mine.length > 1) throw new Error(`${mine.length} PRs on ${t.branch}; pin one by setting prNumber in state.json`);
     if (!mine.length) return null;
     t.prNumber = mine[0].number;
   }
-  const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json',
-    'number,url,title,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
+  const pr = ghJson(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json',
+    'number,url,title,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']);
   if (pr.headRefName !== t.branch || pr.baseRefName !== R.base) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${R.base} (${id})`);
   // The PR carries its repo, so every later read of it goes to the same one.
   if (!R.isDefault) {
@@ -720,8 +772,8 @@ function greenReason(pr) {
 const isBot = (login) => /\[bot\]$/.test(login ?? '') || login === conf.learning?.reviewBotLogin;
 function threadAuthors(pr) {
   const [owner, name] = ghRepo(pr).split('/');
-  const d = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
-    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']));
+  const d = ghJson(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']);
   return d.data.repository.pullRequest.reviewThreads.nodes.filter((n) => !n.isResolved).map((n) => n.comments?.nodes?.[0]?.author?.login ?? null);
 }
 // Green in a repo whose base branch has a review gate of its own (GitHub reads BLOCKED on every PR until a person
@@ -745,8 +797,8 @@ function greenByChecks(pr, R) {
 }
 function openThreads(pr) {
   const [owner, name] = ghRepo(pr).split('/');
-  const threads = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
-    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']));
+  const threads = ghJson(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']);
   const rt = threads.data.repository.pullRequest.reviewThreads;
   if (rt.totalCount > rt.nodes.length) return 'more than 100 review threads';
   const open = rt.nodes.filter((n) => !n.isResolved).length;
@@ -1325,7 +1377,7 @@ async function settleStuck(st) {
     if (t.status !== 'stuck' || !t.prNumber || (t.stuckCheckedAt && hoursSince(t.stuckCheckedAt) < 1)) continue;
     t.stuckCheckedAt = iso();
     try {
-      const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', repoOf(t).github, '--json', 'state,mergedAt,mergeCommit,url']));
+      const pr = ghJson(['pr', 'view', String(t.prNumber), '--repo', repoOf(t).github, '--json', 'state,mergedAt,mergeCommit,url']);
       if (pr.state === 'MERGED') {
         clearMergeRequest(id);
         Object.assign(t, { status: 'merged', mergedAt: pr.mergedAt, mergedSha: pr.mergeCommit?.oid ?? null, ciChecked: true,
@@ -1964,7 +2016,7 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
     t.teardown = { ...rec, skipped: problem };
     return;
   }
-  const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json', 'number,state,headRefOid'])) : null;
+  const pr = t.prNumber ? ghJson(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json', 'number,state,headRefOid']) : null;
   // A worktree on a live ticket's branch, or naming a live ticket, is never this ticket's to remove.
   const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
   const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
@@ -2055,7 +2107,7 @@ async function worktreeSweep(st) {
     const label = `worktree sweep (${path.basename(repo.path)})`;
     try {
       const prs = {};
-      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt,isCrossRepository']));
+      const list = ghJson(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt,isCrossRepository']);
       // A PR from a fork can carry any branch name, so it never stands for a checkout here.
       for (const p of list) if (!p.isCrossRepository && (!prs[p.headRefName] || p.number > prs[p.headRefName].number)) prs[p.headRefName] = p;
       // Each machine keeps its own state, so a ticket can be live here and finished on another machine. GitHub settles
@@ -3121,6 +3173,21 @@ async function orphanLabelCheck(st) {
 
 // --- commands ------------------------------------------------------------------------------------------
 
+// One tick step. An API answer that never came (ApiUnavailable) skips this step for this tick with a log line, and holds
+// new claims for the rest of the tick, since what was skipped may be what a claim relies on. Any other error stops the
+// tick as before.
+let apiDown = null;
+async function apiStep(name, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!(e instanceof ApiUnavailable)) throw e;
+    apiDown ??= name;
+    log(`${name} skipped this tick: ${e.message}`);
+    return undefined;
+  }
+}
+
 async function tick() {
   if (!cfg.enabledHosts.includes(HOST)) return log(`host ${HOST} is not in enabledHosts, nothing to do`);
   if (!DRY && !takeLock()) return log('the previous tick is still running');
@@ -3131,6 +3198,7 @@ async function tick() {
       st.stuckStreak = 0;
       fs.rmSync(STREAK_RESET);
     }
+    apiDown = null;
     const m = await teamMeta();
     if (st.fresh) {
       const orphans = await building();
@@ -3138,11 +3206,11 @@ async function tick() {
         await trip(st, `no state file on ${HOST}, but ${orphans.join(', ')} carry ${L.building}. Check which machine owns them before resuming`);
       }
     }
-    await sendPendingNotice(st);
+    await apiStep('sendPendingNotice', () => sendPendingNotice(st));
     inboxSweep();
-    await reconcileClaims(st, m);
-    await checkMerged(st);
-    await settleStuck(st);
+    await apiStep('reconcileClaims', () => reconcileClaims(st, m));
+    await apiStep('checkMerged', () => checkMerged(st));
+    await apiStep('settleStuck', () => settleStuck(st));
     let workers = null;
     try {
       workers = fleetWorkers();
@@ -3155,18 +3223,19 @@ async function tick() {
     wakeRun.workers = workers;
     loadWakeOverrides(st);
     pruneWakeQueue(st);
-    await advance(st, m, workers);
+    await apiStep('advance', () => advance(st, m, workers));
     pruneWakeQueue(st);
-    await teardownFinished(st, workers);
-    await watchWorkers(st, workers);
-    await watchSignIns(st);
-    await labelCheck();
-    await orphanLabelCheck(st);
-    await dispatch(st, m);
-    await sentryTriage();
-    await codexAutoReset(st);
-    await worktreeSweep(st);
-    await writeHeartbeat(st);
+    await apiStep('teardownFinished', () => teardownFinished(st, workers));
+    await apiStep('watchWorkers', () => watchWorkers(st, workers));
+    await apiStep('watchSignIns', () => watchSignIns(st));
+    await apiStep('labelCheck', () => labelCheck());
+    await apiStep('orphanLabelCheck', () => orphanLabelCheck(st));
+    if (apiDown) log(`no new claims this tick: ${apiDown} could not reach an API`);
+    else await apiStep('dispatch', () => dispatch(st, m));
+    await apiStep('sentryTriage', () => sentryTriage());
+    await apiStep('codexAutoReset', () => codexAutoReset(st));
+    await apiStep('worktreeSweep', () => worktreeSweep(st));
+    await apiStep('writeHeartbeat', () => writeHeartbeat(st));
     st.lastTick = iso();
     delete st.lastError;
   } catch (e) {
