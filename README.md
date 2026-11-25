@@ -48,7 +48,7 @@ flowchart LR
 | `queue-board/` | The Forge's board: a web page that shows every machine's worker slots, tickets, PRs, asks and worktrees, drawn as Middle-earth in two views, with a herald that plays alert cues and posts notifications, an installable app and its own icon. Also `hourly-check.mjs`, which wakes the orchestrator only when something new needs attention. Its README has every feature. |
 | `learning/` | The weekly failure sweep. |
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |
-| `docs/` | The ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene, and the decisions. |
+| `docs/` | The ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene, the decisions, and how to write docs and comments here (`writing.md`). |
 
 ## Set up
 
