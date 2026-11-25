@@ -614,6 +614,14 @@ function greenReason(pr) {
   }
   return openThreads(pr);
 }
+// The logins that opened the PR's unresolved review threads. A bot login ends in [bot] or is learning.reviewBotLogin.
+const isBot = (login) => /\[bot\]$/.test(login ?? '') || login === conf.learning?.reviewBotLogin;
+function threadAuthors(pr) {
+  const [owner, name] = REPO.split('/');
+  const d = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']));
+  return d.data.repository.pullRequest.reviewThreads.nodes.filter((n) => !n.isResolved).map((n) => n.comments?.nodes?.[0]?.author?.login ?? null);
+}
 function openThreads(pr) {
   const [owner, name] = REPO.split('/');
   const threads = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
@@ -1398,6 +1406,9 @@ async function advance(st, m, workers) {
             t.renumberSha = pr.headRefOid;
             log(`${id}: ${clash.stale.join(', ')} clashes with ${BASE}, sent worker ${t.account}/${t.workerId} back to rename it`);
             saveState(st);
+          } else if (t.status === 'building') {
+            // The note went out on an earlier tick; a worker that has since ended gets the usual stall rules.
+            await checkStall(st, m, id, t, pr, `its new migration clashes with ${BASE} and waits on its worker to rename it`, workerState(workers, t));
           }
           continue;
         }
@@ -1575,6 +1586,16 @@ function prNeedsWorker(id, pr, notGreen) {
     }
   }
   if (!dirty && !threads) return null;
+  // A worker that ended its turn on threads only people opened is waiting on them: it is asked about, never replaced.
+  if (!dirty && threads) {
+    let authors = null;
+    try {
+      authors = threadAuthors(pr);
+    } catch (e) {
+      log(`${id}: could not read who opened PR #${pr.number}'s review threads (${errText(e)})`);
+    }
+    if (!authors || (authors.length && authors.every((a) => !isBot(a)))) return { ask: true, threads, what: `${threads} opened by people` };
+  }
   return { dirty, threads, what: [dirty ? `PR #${pr.number} conflicting with ${BASE}` : null, threads].filter(Boolean).join(' and ') };
 }
 const fixNote = (id, t, pr, fix) => `Your previous worker on ${id} ended, but its PR ${pr.url} cannot merge yet: ${fix.what}. Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them.${fix.dirty ? ` Merge origin/${BASE} into the branch (no rebase, no force-push) and resolve every conflict keeping both sides: what ${BASE} changed and what this ticket adds. Run the checks the conflicted files touch before you push.` : ''}${fix.threads ? ' Read every unresolved review thread on the PR, fix the code where the finding is right, reply on each thread saying what changed or why it stays, and resolve it.' : ''} Push once through ${GATED_PUSH} and drive the PR to green. Then carry on with the brief below.\n\n`;
@@ -1610,6 +1631,19 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
   // threads. Engine tickets get rounds for this instead (engine-rounds.mjs).
   if (t.goneTicks >= 2 && state !== 'failed' && budget && !engineDriven(t)) {
     const fix = prNeedsWorker(id, pr, notGreen);
+    if (fix?.ask) {
+      if (t.humanThreadsAsked !== pr.headRefOid) {
+        t.humanThreadsAsked = pr.headRefOid;
+        saveState(st);
+        log(`${id}: its worker ended its turn with ${fix.what}, so ${HUMAN} is asked instead of a replacement`);
+        await effects(t, id, [[`ask ${HUMAN} about ${id}'s open review threads`, () => askHuman(id, 'blocked',
+          `${id}'s worker ${t.account}/${t.workerId} ended its turn with ${fix.what} on ${pr.url}.`,
+          `Answer the threads, then wake the worker: ${attachCmd(t)}`, 'the ticket waits; it is not replaced')]]);
+        saveState(st);
+      }
+      t.note = `waiting on ${fix.what}`;
+      return;
+    }
     if (fix) {
       const why = `its worker ${t.account}/${t.workerId} ended with ${fix.what}`;
       if (!mayWake(st, id, t, why)) return;
@@ -1663,7 +1697,9 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
 // Every worktreeCleanup.sweepHours the same module sweeps every worktree of the repos the queue builds. Kept work asks
 // the human: at teardown at once, in the sweep after atRiskAskDays. dryRun logs what it would do and changes nothing.
 // Neither runs while the dispatcher is paused, and both catch their own errors so a failure never stops the tick.
-const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], ...(cfg.worktreeCleanup ?? {}) };
+const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], protectedIgnored: null, ...(cfg.worktreeCleanup ?? {}) };
+// worktree-teardown.mjs's own list when worktreeCleanup.protectedIgnored is null.
+const protect = async () => WT_CFG.protectedIgnored ?? (await wtMod()).PROTECTED_IGNORED;
 const SWEEP_STATE = path.join(LOCAL, 'worktree-sweep.json');
 const TEARDOWN_TRIES = 3; // ticks a live process may hold the worktree after its worker stops, before the human is asked
 let wtModule = null;
@@ -1750,7 +1786,9 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
   const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
   const liveRx = live.map(([x]) => new RegExp(`${x}(?!\\d)`, 'i'));
-  const listed = wt.listWorktrees(conf.repoPath).filter((x) => !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
+  // Only worktrees in the worktrees folder: one a person made elsewhere is theirs.
+  const inFolder = (x) => path.resolve(x.path).startsWith(`${path.resolve(WORKTREES)}${path.sep}`);
+  const listed = wt.listWorktrees(conf.repoPath).filter((x) => inFolder(x) && !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
     && !liveRx.some((rx) => rx.test(`${path.basename(x.path)} ${x.branch ?? ''}`)));
   // A worker often names its local branch unlike the one it pushes, so the worktree is the one on the ticket's branch,
   // else the one at the PR's head, else the only one naming the ticket.
@@ -1758,8 +1796,12 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   const named = listed.filter((x) => idRx.test(`${path.basename(x.path)} ${x.branch ?? ''}`));
   const entry = (t.branch && listed.find((x) => x.branch === t.branch)) || (pr?.headRefOid && listed.find((x) => x.head === pr.headRefOid))
     || (named.length === 1 ? named[0] : null);
-  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: conf.repoPath, base: BASE, pr, dirs, listed, dryRun: dry, trashDir: await trashDir() })
-    : { action: 'gone', reason: `no worktree on ${t.branch ?? 'its branch'} on ${HOST}` };
+  // No worktree found is proven only when the ticket has a branch and nothing names the ticket at all; anything less
+  // (several worktrees naming it, no branch on record) is unknown, and its session is left alone.
+  const absent = !entry && Boolean(t.branch) && !named.length;
+  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: conf.repoPath, base: BASE, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(), protect: await protect() })
+    : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
+      : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
   const tries = (t.teardown?.tries ?? 0) + 1;
   log(`${id}: worktree teardown: ${res.would ? `would be ${res.would}` : res.action}${entry ? ` ${entry.path}` : ''} (${res.reason})`);
   if (res.action === 'kept' && res.transient && tries < TEARDOWN_TRIES) {
@@ -1781,8 +1823,9 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   }
   t.teardown = { ...rec, tries, worktree: entry?.path ?? null, action: res.action, ...(res.would ? { would: res.would } : {}), reason: res.reason, ...(session ? { session } : {}) };
   if (res.action !== 'kept' || res.would) return;
-  const ask = `${id}'s PR ${t.status}, but its worktree ${entry.path} on ${HOST} was kept: ${res.reason}.`;
-  const recommend = `Look at it (git -C ${entry.path} status; git -C ${entry.path} log --oneline origin/${BASE}..HEAD), save anything worth keeping, then git worktree remove it`;
+  const where = entry?.path ?? named.map((x) => x.path).join(', ');
+  const ask = `${id}'s PR ${t.status}, but its worktree ${where} on ${HOST} was kept, and its session too: ${res.reason}.`;
+  const recommend = `Look at it (git -C <path> status; git -C <path> log --oneline origin/${BASE}..HEAD), save anything worth keeping, then git worktree remove it and claude rm ${t.workerId}`;
   if (dry) return log(`${id}: would ask ${HUMAN}: ${ask}`);
   try {
     askHuman(id, 'blocked', ask, recommend, 'keep it');
@@ -1821,7 +1864,7 @@ async function worktreeSweep(st) {
       const prs = {};
       const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid']));
       for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
-      const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry,
+      const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry, protect: await protect(),
         trashDir: await trashDir(), liveBranches: new Set(live.map(([, t]) => t.branch).filter(Boolean)), liveIds: live.map(([id]) => id) });
       if (out.error) {
         failed += 1;
@@ -2472,6 +2515,23 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null, say = n
     return { dry: true };
   }
   // Every caller asks first; this holds the line for one that doesn't. A ticket with no room waits in the wake queue.
+  // A start an earlier run began and never recorded (it crashed between the dispatch and the save): adopt the worker
+  // it started, or wait for it a while, so a crash never brings a second worker.
+  if (t.replacing) {
+    const started = fleetWorkers().find((w) => w.name === workerName(id) && !(w.label === t.replacing.fromAccount && w.id === t.replacing.fromWorker)) ?? null;
+    if (started) {
+      Object.assign(t, { status: 'building', account: started.label, workerId: started.id, workerName: started.name, goneTicks: 0, lastProgressAt: iso(), lastOutputAt: iso() });
+      delete t.replacing;
+      saveState(st);
+      log(`${id}: adopted worker ${started.label}/${started.id}, which an earlier run started`);
+      return started;
+    }
+    if (hoursSince(t.replacing.at) * 60 < 15) {
+      log(`${id}: a replacement an earlier run began is not listed yet, waiting for it`);
+      return null;
+    }
+    delete t.replacing;
+  }
   if (!mayWake(st, id, t, why ?? say ?? 'a replacement worker')) return null;
   noteStart(id, false);
   const members = [];
@@ -2497,9 +2557,13 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null, say = n
   const note = fromEngine
     ? `${engines.guard(id, t)}Continue the work on ${id} from origin/${t.branch} instead of starting over. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`
     : `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
+  t.replacing = { at: iso(), fromAccount: t.account ?? null, fromWorker: t.workerId ?? null };
+  saveState(st);
+  // A dispatch that throws may still have started the session, so the marker stays for the next run to adopt.
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
     '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
     ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+  delete t.replacing;
   noteStart(id, true);
   if (fromEngine) {
     engines.leave(t);

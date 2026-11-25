@@ -37,6 +37,12 @@ function applyRound(c, id, t, out, { round, engine, summary, text }) {
 async function startRound(c, st, m, id, t, { note, summary, keepRound = false, exclude = [], retry = false, pr = null }) {
   const round = keepRound ? (t.round ?? 1) : (t.round ?? 1) + 1;
   // A paused queue starts no worker, a round included, and changes no labels: the ticket waits as a green PR does.
+  // While new work is held no round starts; a round already running finishes.
+  if (c.newWorkHeld?.()) {
+    t.note = `its next round is due (${summary}), held while new work is held`;
+    c.log(`${id}: a round is due (${summary}), held while new work is held`);
+    return 'held';
+  }
   if (c.isPaused()) {
     t.note = `its next round is due (${summary}), held while the queue is paused`;
     c.log(`${id}: a round is due (${summary}), held while the queue is paused`);
@@ -54,14 +60,6 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
   const engine = [t.engine, other(t.engine)].find((e) => e && on(e) && !exclude.includes(e) && available(c, st, e));
   if (!engine) {
     const why = `no engine can run its next round on ${c.HOST} (${!fb.enabled ? 'the engines are off' : exclude.length ? `${exclude.join(', ')} hit its limit` : 'ext-worker.sh available passed none'})`;
-    // While new work is held a ticket back in the queue would sit there until the hold ends, so it waits on this
-    // machine and the next tick tries again.
-    if (c.newWorkHeld?.()) {
-      t.note = `${why}; new work is held, so it waits here`;
-      c.log(`${id}: ${t.note}`);
-      c.saveState(st);
-      return 'held';
-    }
     return requeue(c, st, m, id, t, why);
   }
   const { issue } = await c.gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id });

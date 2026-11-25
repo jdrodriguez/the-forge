@@ -51,7 +51,7 @@ globalThis.fetch = async (url, init) => {
 };
 `;
 
-// gh: $HOME/prs.json maps a PR number to { branch, merge, state, reviews, threads }. pr edit and pr merge go to $HOME/gh-log.
+// gh: $HOME/prs.json maps a PR number to { branch, merge, state, reviews, threads, threadAuthor (default a bot) }. pr edit and pr merge go to $HOME/gh-log.
 const GH = `#!/usr/bin/env node
 const fs = require('node:fs');
 const H = process.env.HOME;
@@ -70,7 +70,7 @@ else if (a[0] === 'pr') fs.appendFileSync(H + '/gh-log', a.join(' ') + '\\n');
 else if (a[0] === 'api' && a[1] === 'graphql') {
   const q = a.find((x) => x.startsWith('query=')) ?? '';
   const open = prs[(a.find((x) => x.startsWith('n=')) ?? 'n=0').slice(2)]?.threads ?? 0;
-  console.log(q.includes('reviewThreads') ? JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { totalCount: open, nodes: Array.from({ length: open }, () => ({ isResolved: false })) } } } } }) : 'null');
+  console.log(q.includes('reviewThreads') ? JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { totalCount: open, nodes: Array.from({ length: open }, () => ({ isResolved: false, comments: { nodes: [{ author: { login: prs[(a.find((x) => x.startsWith('n=')) ?? 'n=0').slice(2)]?.threadAuthor ?? 'review-bot[bot]' } }] } })) } } } } }) : 'null');
 } else if (a[0] === 'api') {
   const p = a.find((x) => x.startsWith('repos/')) ?? '';
   const m = p.match(/pulls\\/(\\d+)\\/(files|reviews)(\\/\\d+\\/comments)?/);

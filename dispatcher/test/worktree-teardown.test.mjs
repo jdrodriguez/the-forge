@@ -162,6 +162,7 @@ test('an orphan folder git no longer tracks goes to the Trash; a standalone clon
   fs.mkdirSync(orphan, { recursive: true });
   fs.writeFileSync(path.join(orphan, 'notes.txt'), 'left behind');
   const old = new Date(Date.now() - 2 * 3.6e6);
+  fs.utimesSync(path.join(orphan, 'notes.txt'), old, old);
   fs.utimesSync(orphan, old, old);
   const clone = path.join(base, 'codex-clone');
   fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
@@ -236,7 +237,61 @@ test('a merged worktree holding an ignored .env is kept: git worktree remove wou
   fs.writeFileSync(path.join(wt, '.env'), 'SECRET=only-here');
   const r = teardownWorktree({ path: wt, repo, pr: merged(git(wt, 'rev-parse', 'HEAD')), dirs: [] });
   assert.equal(r.action, 'kept', r.reason);
-  assert.match(r.reason, /ignored local settings.*\.env/);
+  assert.match(r.reason, /ignored files git does not keep \(\.env\)/);
   assert.ok(fs.existsSync(path.join(wt, '.env')));
   void head;
+});
+
+test("the sweep never touches a worktree outside the worktrees folder, though its PR merged", () => {
+  const { repo, root, trash } = setup();
+  const outside = path.join(root, 'my-own-checkout');
+  git(repo, 'worktree', 'add', '-q', '-b', 'mine', outside, 'origin/main');
+  const head = commit(outside, 'mine.txt');
+  git(outside, 'push', '-q', 'origin', 'HEAD:refs/heads/mine');
+  const out = sweepRepo({ repo, prs: { mine: merged(head) }, trashDir: trash, dirs: [] });
+  assert.equal(out.results.find((r) => r.path === outside), undefined, 'not even looked at');
+  assert.ok(fs.existsSync(outside));
+  assert.equal(spawnSync('git', ['-C', repo, 'rev-parse', '--verify', '-q', 'refs/heads/mine']).status, 0, 'its branch stays');
+});
+
+test('a protected ignored file anywhere in a merged worktree keeps it: a nested .env, a key, local settings', () => {
+  for (const [file, ignore] of [['packages/api/.env.local', 'packages/\n'], ['certs/dev.pem', 'certs/\n'], ['.claude/settings.local.json', '.claude/\n']]) {
+    const { repo } = setup();
+    const name = `p-${file.replace(/\W/g, '')}`;
+    const { wt } = worktree(repo, name);
+    fs.writeFileSync(path.join(wt, '.gitignore'), ignore);
+    git(wt, 'add', '.gitignore');
+    git(wt, 'commit', '-q', '-m', 'ignore');
+    git(wt, 'push', '-q', 'origin', `HEAD:refs/heads/${name}`);
+    fs.mkdirSync(path.dirname(path.join(wt, file)), { recursive: true });
+    fs.writeFileSync(path.join(wt, file), 'only here');
+    const r = teardownWorktree({ path: wt, repo, pr: merged(git(wt, 'rev-parse', 'HEAD')), dirs: [] });
+    assert.equal(r.action, 'kept', `${file}: ${r.reason}`);
+    assert.ok(r.reason.includes(file), r.reason);
+  }
+});
+
+test('an orphan whose top folder is old but whose files changed within the hour is kept', () => {
+  const { repo, trash } = setup();
+  const orphan = path.join(repo, '.claude/worktrees', 'busy');
+  fs.mkdirSync(path.join(orphan, 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(orphan, 'deep', 'fresh.txt'), 'just written');
+  const old = new Date(Date.now() - 2 * 3.6e6);
+  fs.utimesSync(path.join(orphan, 'deep'), old, old);
+  fs.utimesSync(orphan, old, old);
+  const r = teardownWorktree({ path: orphan, repo, dirs: [], trashDir: trash });
+  assert.equal(r.action, 'kept');
+  assert.match(r.reason, /changed within the hour/);
+});
+
+test('an orphan on another volume is copied to the trash, then removed', async () => {
+  const { root } = setup();
+  const { moveToTrash } = await import(pathToFileURL(SRC).href);
+  const orphan = path.join(root, 'stray');
+  fs.mkdirSync(orphan);
+  fs.writeFileSync(path.join(orphan, 'a.txt'), 'a');
+  const exdev = () => { throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' }); };
+  const to = moveToTrash(orphan, path.join(root, 'Trash', 'dated'), exdev);
+  assert.ok(!fs.existsSync(orphan));
+  assert.equal(fs.readFileSync(path.join(to, 'a.txt'), 'utf8'), 'a');
 });

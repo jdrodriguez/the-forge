@@ -144,3 +144,31 @@ test('orchestrator events go to orchestrator.eventsDir when it is set', () => {
   assert.equal(files.length, 1);
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'))).sort(), ['at', 'host', 'id', 'link', 'subtitle', 'text']);
 });
+
+test('a ticket whose rename note went out still goes stuck when its worker ends and nothing moves', () => {
+  const sent = live(9, { prNumber: 9, renumberSha: 'abc123', lastSha: 'abc123', lastPrUpdatedAt: '2026-11-01T00:00:00Z' });
+  const box = capBox({ config: MIG('prefix'), tickets: { 'ENG-9': sent }, prs: { 9: { branch: 'agent/eng-9', files: ['migrations/20261101000000_mine.sql'] } }, ps: [ended(9)] });
+  box.put('base-migrations', '20261101000000_theirs.sql\n');
+  tick(box);
+  tick(box);
+  assert.equal(state(box).tickets['ENG-9'].status, 'stuck');
+  assert.equal(told(box).length, 0, 'the note is not sent again');
+});
+
+test('an ended worker whose PR waits only on threads people opened is asked about once, never replaced', () => {
+  const box = capBox({ tickets: { 'ENG-9': live(9, { prNumber: 9, goneTicks: 1 }) }, prs: { 9: { branch: 'agent/eng-9', merge: 'BLOCKED', threads: 1, threadAuthor: 'a-person' } }, ps: [ended(9)] });
+  tick(box);
+  tick(box);
+  assert.equal(briefs(box).length, 0);
+  assert.equal(lines(box, 'asks').filter((l) => /ended its turn with 1 unresolved review thread\(s\) opened by people/.test(l)).length, 1);
+  assert.equal(state(box).tickets['ENG-9'].status, 'building');
+});
+
+test('a replacement an earlier run started but never recorded is adopted, not started again', () => {
+  const pending = live(9, { status: 'stuck', stuckAt: OLD, replacing: { at: new Date().toISOString(), fromAccount: 'b', fromWorker: 'w-9' } });
+  const box = capBox({ tickets: { 'ENG-9': pending }, ps: [{ label: 'b', id: 'w-new', name: 'queue-eng-9', status: 'busy', state: 'working', kind: 'background', pid: 77 }] });
+  assert.match(run(box, ['redispatch', 'ENG-9']), /ENG-9: redispatched to b\/w-new/);
+  assert.equal(briefs(box).length, 0);
+  assert.equal(state(box).tickets['ENG-9'].replacing, undefined);
+  assert.equal(state(box).tickets['ENG-9'].workerId, 'w-new');
+});

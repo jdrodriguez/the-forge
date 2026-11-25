@@ -78,9 +78,9 @@ test('a worktree holding uncommitted work is kept and the human is asked once', 
   tick(box, GIT_ENV);
   assert.ok(fs.existsSync(wt));
   assert.equal(ticket(box).teardown.action, 'kept');
-  assert.equal(lines(box, 'asks').filter((l) => /was kept: 1 uncommitted or untracked path/.test(l)).length, 1);
+  assert.equal(lines(box, 'asks').filter((l) => /was kept, and its session too: 1 uncommitted or untracked path/.test(l)).length, 1);
   tick(box, GIT_ENV);
-  assert.equal(lines(box, 'asks').filter((l) => /was kept/.test(l)).length, 1);
+  assert.equal(lines(box, 'asks').filter((l) => /was kept, and its session too/.test(l)).length, 1);
 });
 
 test('a worker still busy after its PR merged is left alone until it stops', () => {
@@ -89,4 +89,16 @@ test('a worker still busy after its PR merged is left alone until it stops', () 
   assert.ok(fs.existsSync(wt));
   assert.deepEqual(lines(box, 'stopped'), []);
   assert.equal(ticket(box).teardown.retry, true);
+});
+
+test('a session whose worktree cannot be told apart is kept and asked about, never removed', () => {
+  const { box, wt } = teardownBox();
+  const repo = path.dirname(path.dirname(path.dirname(wt)));
+  git(repo, 'worktree', 'add', '-q', '-b', 'other/eng-5-a', path.join(repo, '.claude/worktrees/eng-5-a'), 'origin/main');
+  git(repo, 'worktree', 'add', '-q', '-b', 'other/eng-5-b', path.join(repo, '.claude/worktrees/eng-5-b'), 'origin/main');
+  git(repo, 'worktree', 'remove', wt);
+  tick(box, GIT_ENV);
+  assert.equal(lines(box, 'claude-calls').length, 0, 'no claude rm');
+  assert.equal(ticket(box).teardown.action, 'kept');
+  assert.equal(lines(box, 'asks').filter((l) => /and its session too: its worktree could not be told apart/.test(l)).length, 1);
 });

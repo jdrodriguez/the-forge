@@ -5,7 +5,9 @@
 //   - its PR is MERGED or CLOSED;
 //   - HEAD is that PR's head commit or an ancestor of it (a squash merge leaves the branch's commits off the base
 //     branch, but the PR head on GitHub keeps them), or HEAD has no commits beyond origin/<base>;
-//   - no live process holds it: a lock whose pid is alive, or a process whose working folder is inside.
+//   - no live process holds it: a lock whose pid is alive, or a process whose working folder is inside;
+//   - it holds no ignored file matching a protected pattern (local settings and keys git does not keep).
+// Only worktrees inside the repo's worktrees folder are touched; one a person made elsewhere is never removed.
 // Removal is `git worktree remove` without --force; a lock is lifted first only when its pid is dead. A lock with no
 // pid in its reason (git's own "initializing" while `worktree add` runs) keeps the worktree. A folder in the worktrees
 // folder that git no longer tracks (an orphan) is moved to the trash folder, never deleted. A folder there with its own
@@ -18,10 +20,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const TEMP = ['/tmp/', '/private/tmp/', '/var/folders/', '/private/var/folders/', `${os.tmpdir()}/`];
 // Tool caches a run inside a worktree leaves one level up (node_modules/.vite), not worktrees: never counted or trashed.
 const NOT_WORKTREES = (name) => name === 'node_modules' || name.startsWith('.');
 const ORPHAN_QUIET_MS = 60 * 60_000; // a folder touched within the hour may be a worktree being made right now
+const MTIME_CAP = 2000; // entries read when looking for the newest change inside a folder
+// Ignored files that may be the only copy of something: local settings and keys. worktreeCleanup.protectedIgnored
+// replaces this list.
+export const PROTECTED_IGNORED = ['.env*', '.envrc', '.dev.vars', '*.pem', '*.key', '.claude/settings.local.json'];
 // Read-only git runs take no optional locks, so a worker in the worktree never finds its index locked by us.
 const git = (cwd, args, timeout = 120_000) => execFileSync('git', ['--no-optional-locks', '-c', 'core.preloadIndex=false', '-C', cwd, ...args],
   { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 << 20 }).trim();
@@ -131,10 +136,42 @@ export function trashDirFor(trashRoot = null, date = new Date().toLocaleDateStri
   return process.platform === 'darwin' ? path.join(os.homedir(), '.Trash', name) : path.join(os.homedir(), '.local/share/Trash/files', name);
 }
 
+// The newest modification time in a folder, reading at most MTIME_CAP entries, so a folder whose top is old but whose
+// files changed recently reads as recent.
+function newestMtime(dir) {
+  let newest = fs.statSync(dir).mtimeMs;
+  let seen = 0;
+  const stack = [dir];
+  while (stack.length && seen < MTIME_CAP) {
+    let ents;
+    try {
+      ents = fs.readdirSync(stack.pop(), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of ents) {
+      if (++seen > MTIME_CAP) break;
+      const p = path.join(e.parentPath ?? e.path, e.name);
+      try {
+        newest = Math.max(newest, fs.lstatSync(p).mtimeMs);
+      } catch { /* gone meanwhile */ }
+      if (e.isDirectory() && !e.isSymbolicLink()) stack.push(p);
+    }
+  }
+  return newest;
+}
+
+// The ignored files in a worktree that match a protected pattern, every folder walked, so a nested .env is found too.
+function protectedIgnored(wtPath, patterns) {
+  const specs = patterns.map((p) => `:(glob)${p.includes('/') ? p : `**/${p}`}`);
+  if (!specs.length) return [];
+  return git(wtPath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--', ...specs]).split('\n').filter(Boolean);
+}
+
 // One verdict for the worktree at wtPath: remove, keep, orphan (trash it) or gone.
 // pr is the newest PR for its branch ({ number, state, headRefOid }) or null; dirs is processDirs(); listed is
 // listWorktrees(repo), passed in when the caller already has it.
-export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs, listed = null, fetch = true } = {}) {
+export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs, listed = null, fetch = true, protect = PROTECTED_IGNORED } = {}) {
   if (!fs.existsSync(wtPath)) return { verdict: 'gone', reason: 'the folder is already gone' };
   const here = real(wtPath);
   const entries = listed ?? listWorktrees(repo);
@@ -147,7 +184,7 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
     }
     if (entries.some((w) => within(real(w.path), here) && real(w.path) !== here)) return { verdict: 'keep', reason: 'a tracked worktree sits inside it' };
     if (used) return { verdict: 'keep', transient: true, reason: 'not a tracked worktree, but a process has its working folder inside' };
-    if (Date.now() - fs.statSync(wtPath).mtimeMs < ORPHAN_QUIET_MS) return { verdict: 'keep', transient: true, reason: 'not a tracked worktree, but changed within the hour' };
+    if (Date.now() - newestMtime(wtPath) < ORPHAN_QUIET_MS) return { verdict: 'keep', transient: true, reason: 'not a tracked worktree, but changed within the hour' };
     return { verdict: 'orphan', reason: 'git no longer tracks it as a worktree' };
   }
   const meta = { branch: entry.branch, head: entry.head };
@@ -163,11 +200,10 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
   const head = git(wtPath, ['rev-parse', 'HEAD']);
   const onlyHere = Number(git(wtPath, ['rev-list', '--count', 'HEAD', '--not', '--remotes']));
   const openPr = pr?.state === 'OPEN';
-  // git worktree remove deletes ignored files too, and an ignored local settings file (.env and the like) may be the
-  // only copy, so one keeps the worktree. Rebuildable ignored folders (node_modules, dist) show as one entry each.
-  const envFiles = git(wtPath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory']).split('\n')
-    .filter((f) => /(^|\/)\.env(\.|$)/.test(f.replace(/\/$/, '')));
-  if (!status && envFiles.length) return { ...meta, verdict: 'keep', atRisk: !openPr, reason: `ignored local settings that git does not keep: ${envFiles.slice(0, 3).join(', ')}` };
+  // git worktree remove deletes ignored files too, and an ignored settings or key file may be the only copy, so one keeps
+  // the worktree.
+  const kept = protectedIgnored(wtPath, protect);
+  if (!status && kept.length) return { ...meta, verdict: 'keep', atRisk: !openPr, reason: `ignored files git does not keep (${kept.slice(0, 3).join(', ')}${kept.length > 3 ? ', ...' : ''}); save them, then remove it` };
   if (status) {
     const n = status.split('\n').length;
     return { ...meta, verdict: 'keep', atRisk: !openPr, reason: `${n} uncommitted or untracked path(s), first: ${status.split('\n')[0].trim().slice(0, 80)}` };
@@ -193,27 +229,36 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
   return { ...meta, verdict: 'remove', unlock, reason: `PR #${pr.number} ${pr.state.toLowerCase()}, ${inPrHead ? 'HEAD is in its head' : `HEAD has nothing beyond origin/${base}`}` };
 }
 
-function moveToTrash(wtPath, trashDir) {
+// Moves a folder into the dated trash folder. Across volumes a rename fails (EXDEV), so it copies, then removes.
+export function moveToTrash(wtPath, trashDir, rename = fs.renameSync) {
   fs.mkdirSync(trashDir, { recursive: true });
-  // A freedesktop trash lists an item only with its .trashinfo; one for the dated folder is enough to restore from.
+  // A freedesktop trash lists an item only with its .trashinfo. The dated folder's Path is where it restores to: beside
+  // the orphans it holds.
   if (process.platform === 'linux' && trashDir.includes('/Trash/files/')) {
     const info = path.join(path.dirname(path.dirname(trashDir)), 'info', `${path.basename(trashDir)}.trashinfo`);
     if (!fs.existsSync(info)) {
       fs.mkdirSync(path.dirname(info), { recursive: true });
-      fs.writeFileSync(info, `[Trash Info]\nPath=${path.dirname(wtPath)}\nDeletionDate=${new Date().toISOString().slice(0, 19)}\n`);
+      fs.writeFileSync(info, `[Trash Info]\nPath=${encodeURI(path.join(path.dirname(wtPath), path.basename(trashDir)))}\nDeletionDate=${new Date().toISOString().slice(0, 19)}\n`);
     }
   }
   let to = path.join(trashDir, path.basename(wtPath));
   for (let i = 2; fs.existsSync(to); i++) to = path.join(trashDir, `${path.basename(wtPath)}-${i}`);
-  fs.renameSync(wtPath, to);
+  try {
+    rename(wtPath, to);
+  } catch (e) {
+    if (e.code !== 'EXDEV') throw e;
+    fs.cpSync(wtPath, to, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+    fs.rmSync(wtPath, { recursive: true });
+  }
   return to;
 }
 
 // Classifies, then acts: removes, trashes an orphan, or keeps. dryRun acts on nothing and says what it would do.
-export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null, dirs, listed = null, dryRun = false, trashDir = trashDirFor(), deleteBranch = true }) {
+export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null, dirs, listed = null, dryRun = false, trashDir = trashDirFor(), deleteBranch = true,
+  protect = PROTECTED_IGNORED }) {
   let c;
   try {
-    c = classifyWorktree(wtPath, { repo, base, pr, dirs, listed, fetch: !dryRun });
+    c = classifyWorktree(wtPath, { repo, base, pr, dirs, listed, fetch: !dryRun, protect });
   } catch (e) {
     return { action: 'kept', reason: `could not inspect it (${errText(e)})` };
   }
@@ -254,7 +299,7 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
 // newest PR (matched by local branch name, else by head commit); a branch in liveBranches, or one naming a ticket in
 // liveIds, is never touched.
 export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktrees', prs = {}, liveBranches = new Set(), liveIds = [], dryRun = false,
-  trashDir = trashDirFor(), fetch = true, dirs = null }) {
+  trashDir = trashDirFor(), fetch = true, dirs = null, protect = PROTECTED_IGNORED }) {
   try {
     dirs ??= processDirs();
   } catch (e) {
@@ -265,14 +310,16 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
       execFileSync('git', ['-C', repo, 'fetch', '-q', 'origin', base], { timeout: 180_000, stdio: 'ignore' });
     } catch { /* judged against the origin/<base> already here */ }
   }
-  const repoReal = real(repo);
+  const folder = path.join(repo, worktreesDir);
+  const folderReal = real(folder);
   const listed = listWorktrees(repo);
   const results = [];
   const ids = liveIds.map((id) => id.toUpperCase());
   // A worker often pushes HEAD to a branch named unlike its local one, so a PR whose head is this HEAD counts as its PR.
   const byHead = new Map(Object.values(prs).filter((p) => p.headRefOid).map((p) => [p.headRefOid, p]));
   for (const w of listed) {
-    if (!within(real(w.path), repoReal) && TEMP.some((t) => `${w.path}/`.startsWith(t))) continue;
+    // Only worktrees in the worktrees folder: one a person made elsewhere is theirs.
+    if (!within(real(w.path), folderReal) || real(w.path) === folderReal) continue;
     const row = { path: w.path, name: path.basename(w.path), branch: w.branch };
     const liveId = w.branch && ids.find((id) => w.branch.toUpperCase().includes(id));
     if (w.branch && (liveBranches.has(w.branch) || liveId)) {
@@ -280,17 +327,16 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
       continue;
     }
     const pr = (w.branch && prs[w.branch]) || (w.head && byHead.get(w.head)) || null;
-    results.push({ ...row, ...teardownWorktree({ path: w.path, repo, base, pr, dirs, listed, dryRun, trashDir }) });
+    results.push({ ...row, ...teardownWorktree({ path: w.path, repo, base, pr, dirs, listed, dryRun, trashDir, protect }) });
   }
   const tracked = new Set(listed.map((w) => real(w.path)));
-  const folder = path.join(repo, worktreesDir);
   let folders = [];
   try {
     folders = fs.readdirSync(folder, { withFileTypes: true }).filter((d) => d.isDirectory() && !NOT_WORKTREES(d.name)).map((d) => path.join(folder, d.name));
   } catch { /* no worktrees folder */ }
   for (const f of folders) {
     if (tracked.has(real(f))) continue;
-    results.push({ path: f, name: path.basename(f), branch: null, ...teardownWorktree({ path: f, repo, base, dirs, listed, dryRun, trashDir }) });
+    results.push({ path: f, name: path.basename(f), branch: null, ...teardownWorktree({ path: f, repo, base, dirs, listed, dryRun, trashDir, protect }) });
   }
   return { results };
 }

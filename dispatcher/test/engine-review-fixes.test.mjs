@@ -123,13 +123,20 @@ test('an earlier waiter that no longer needs a worker blocks nobody behind it in
   assert.equal(claudeBriefs(box).length, 1);
 });
 
-test('a round never starts while the engines are off; the ticket goes back to the queue, or waits here while new work is held', () => {
+test('a round never starts while the engines are off, and none starts while new work is held; the ticket stays here', () => {
   const off = engineBox({ fallback: { enabled: false }, tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
   assert.match(tick(off), /ENG-9: .*no engine can run its next round on host-a \(the engines are off\)/);
   assert.equal(starts(off).length, 0);
   const held = engineBox({ fallback: { enabled: false }, tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
   editConfig(held, (cfg) => ({ ...cfg, dispatcher: { ...cfg.dispatcher, holdNewWork: true } }));
-  assert.match(tick(held), /ENG-9: no engine can run its next round on host-a \(the engines are off\); new work is held, so it waits here/);
+  assert.match(tick(held), /ENG-9: a round is due \(resolve its conflict with main\), held while new work is held/);
   assert.equal(starts(held).length, 0);
   assert.equal(ticket(held).status, 'building', 'it stays on this machine');
+});
+
+test('while new work is held no round starts, even with an engine free', () => {
+  const box = engineBox({ tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
+  editConfig(box, (cfg) => ({ ...cfg, dispatcher: { ...cfg.dispatcher, holdNewWork: true } }));
+  assert.match(tick(box), /ENG-9: a round is due \(resolve its conflict with main\), held while new work is held/);
+  assert.equal(starts(box).length, 0);
 });
