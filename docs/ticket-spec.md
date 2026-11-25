@@ -1,21 +1,17 @@
-# Ticket Spec Floor
+# Ticket spec floor
 
-Every buildable ticket carries three sections: `## Acceptance scenarios`, `## Adverse data`, and `## Out of scope / decisions`. This is the floor a ticket has to meet before it is queued for a worker. The Specdesk session writes tickets to it (`specdesk/SPECDESK.md`), and `node dispatcher/dispatcher.mjs check <ID>` grades the mechanical part of it before the dispatcher claims a ticket (see "Where the floor is enforced").
+Every buildable ticket carries three sections: `## Acceptance scenarios`, `## Adverse data`, and `## Out of scope / decisions`. A ticket has to meet this floor before it is queued. The Specdesk session writes tickets to it (`specdesk/SPECDESK.md`). `node dispatcher/dispatcher.mjs check <ID>` grades the mechanical part before the dispatcher claims a ticket.
 
-## Why this floor exists
-
-An audit of shipped tickets found two dominant defect classes. Behavior on empty, failed, zero, or unconfigured input was never specified, so an agent guessed and usually guessed wrong. And a feature was built and tested but no persona could actually reach it from the entry point they would use in practice. Both classes pass type-check, lint, and a happy-path test. Neither is caught by reading the diff. The three sections below make the ticket answer both questions before an agent starts building.
-
-A worker builds from the ticket alone and nobody is watching. Anything the ticket leaves open is a guess the worker makes for you.
+A worker builds from the ticket alone, so anything the ticket leaves open is a guess the worker makes for you. The sections make the ticket settle the two guesses that go wrong most: behavior on empty or failed input, and whether a user can reach the feature at all.
 
 ## Fill in for your project
 
-The floor leaves four things for you to name once, in your own docs or in the worker brief, so every scenario and every evidence comment uses the same words:
+Name these once, in your own docs or the worker brief, so every scenario and evidence comment uses the same words:
 
-- **Personas.** The roles a scenario can name, and how a verifier signs in as each one on the environment it walks. A persona nobody can sign in as makes every scenario that names it unverifiable.
-- **Environments.** The names of the environments a ticket is verified on (for example `staging` and `production`). The evidence footer uses these names and no others.
-- **Health URL.** For each environment, the URL that reports the commit SHA the environment is serving. The footer's SHA comes from it.
-- **Entry points.** The route, nav item, or command a persona uses to reach the feature, written the way users meet it.
+- **Personas.** The roles a scenario can name, and how a verifier signs in as each one on each environment. A persona nobody can sign in as makes its scenarios unverifiable.
+- **Environments.** The names of the environments a ticket is verified on, for example `staging` and `production`. The evidence footer uses these names and no others.
+- **Health URL.** For each environment, the URL that reports the commit SHA it serves. The footer's SHA comes from it.
+- **Entry points.** The route, nav item or command a persona uses to reach the feature, written the way users meet it.
 
 ## `## Acceptance scenarios`
 
@@ -23,9 +19,7 @@ Numbered, persona-anchored, one scenario per line:
 
 `Given [persona] at [route/entry point], when [action], then [user-observable outcome]`
 
-The ticket title's own headline verb has to appear in at least one scenario. If the title is "Show project health score on the project dashboard," one scenario uses "show," or the literal outcome it names. A synonym standing in for it does not satisfy this.
-
-**Worked example.** Ticket: "Show project health score on the project dashboard."
+The headline verb of the ticket title must appear in at least one scenario, or the literal outcome it names. A synonym does not count. For the title "Show project health score on the project dashboard", one scenario uses "show".
 
 ```
 ## Acceptance scenarios
@@ -43,9 +37,7 @@ The ticket title's own headline verb has to appear in at least one scenario. If 
 
 ## `## Adverse data`
 
-A table covering behavior on empty, failed, zero, and unconfigured input, for every rendered number, grade, or judgment the ticket introduces. The mandated default is rendering "Not measured." Fabricating a value, including using zero as a stand-in for missing data, is banned.
-
-**Worked example**, same ticket:
+A table of behavior on empty, failed, zero and unconfigured input, for every number, grade or judgment the ticket renders. The default is to render "Not measured". Fabricating a value is banned, and that includes zero standing in for missing data.
 
 ```
 ## Adverse data
@@ -60,11 +52,9 @@ A table covering behavior on empty, failed, zero, and unconfigured input, for ev
 
 ## `## Out of scope / decisions`
 
-Explicit deferrals, plus any open product call the ticket surfaces. Every deferral names a real ticket number, and every open call names an owner. An untracked deferral disappears silently, and an unowned question never gets answered.
+Explicit deferrals, plus any open product call the ticket raises. Every deferral names a real ticket number. Every open call names an owner.
 
-A ticket that was sliced thin on purpose also carries a line here, `Ships alone: <reason>`, so the dispatcher never bundles it with its neighbors (see `specdesk/SPECDESK.md`, "Flow for each idea").
-
-**Worked example**, same ticket:
+A ticket sliced thin on purpose also carries a `Ships alone: <reason>` line here, so the dispatcher never bundles it (`specdesk/SPECDESK.md`, "Flow for each idea").
 
 ```
 ## Out of scope / decisions
@@ -79,24 +69,24 @@ A ticket that was sliced thin on purpose also carries a line here, `Ships alone:
 
 ## Where the floor is enforced
 
-- **Specdesk** checks all three sections, the title-verb rule, the placement of a UI ticket, and the absence of an open product question before it adds `agent-ready` (the queue bar in `specdesk/SPECDESK.md`).
-- **`dispatcher.mjs check <ID>`** runs the mechanical part on one ticket: an `## Acceptance scenarios` heading, a Size label, and a priority. The dispatcher runs the same check on every `agent-ready` ticket before it claims one. A ticket that fails loses `agent-ready`, gets a comment saying why, and becomes an item in the human's inbox.
-- **The worker** builds to the scenarios, and every scenario is exercised by a test (`docs/no-tracer-bullets.md`, Definition of Done).
-- **The verifier** walks the scenarios against a deployed environment after merge and posts the evidence comment below (`docs/build-process.md`).
+- **Specdesk** checks all three sections, the title-verb rule, the placement of a UI ticket, and that no product question is open, before it adds `agent-ready` (the queue bar in `specdesk/SPECDESK.md`).
+- **`dispatcher.mjs check <ID>`** checks one ticket for an `## Acceptance scenarios` heading, a Size label and a priority. The dispatcher runs the same check on every `agent-ready` ticket before claiming it. A ticket that fails loses `agent-ready`, gets a comment saying why, and becomes an item in the human's inbox.
+- **The worker** builds to the scenarios and exercises every one with a test (`docs/no-tracer-bullets.md`, Definition of Done).
+- **The verifier** walks the scenarios on a deployed environment after merge and posts the evidence comment below (`docs/build-process.md`).
 
-The check is mechanical on purpose. It cannot tell a good scenario from a bad one, so reading the scenarios stays the job of whoever writes and reviews the ticket.
+The check cannot tell a good scenario from a bad one. Reading the scenarios stays the job of whoever writes and reviews the ticket.
 
-## The evidence comment contract
+## The evidence comment
 
-The verifier posts this comment on the ticket when it finishes walking the scenarios against a deployed environment. A walk on production posts the same comment and counts the same way:
+The verifier posts this comment on the ticket after walking the scenarios on a deployed environment. A walk on production posts the same comment and counts the same way.
 
-- Header, literal: `## Verify evidence`, on its own line. The character after the heading is end-of-string or a newline; leading whitespace or blank lines before it are tolerated. A heading with trailing text on the same line (`## Verify evidence-gathering plan`) or the phrase merely mentioned mid-sentence does not count. The queue reads the heading from `linear.verifyEvidenceHeading` in the config, so keep one owner for the string and read it from there rather than re-typing it where something needs to match on it.
-- A table with one row per scenario, columns in the order scenario, result, evidence. Header-cell wording and casing carry no meaning: anything that parses the table reads header cells case-insensitively and trims whitespace. Only the `## Verify evidence` header line and the footer line are literal. The scenario cell carries enough of the scenario's own text to stay readable on its own, since the comment outlives the ticket description it was written against, and a bare row number goes unreadable the moment the scenarios get edited or renumbered.
-- Footer, literal format: `_Verified <ISO> on <env> as <persona> against <sha>_`, where `<env>` is one of your environment names (the environment the scenarios were walked on, and no other word) and `<sha>` is the full 40-character commit SHA that environment serves, as its health URL reports it. An abbreviated SHA is ambiguous and gets more so as the repo grows, and the full SHA costs nothing to obtain.
-- The result cell is strict: exactly `PASS` or `FAIL`, uppercase, alone in the cell. `pass`, `PASSED`, and `PASS (with caveats)` all count as unreadable evidence rather than a silent PASS.
-- The evidence cell carries a link to an artifact (a screenshot or recording) hosted by the tracker. A cell holding prose counts as a malformed row, the same as a decorated result cell does. The reason is that a sentence in the evidence column is free to type and points at nothing. With Linear, an asset URL is minted by Linear's own `fileUpload` mutation, so the row is backed by bytes somebody actually put in the workspace. The cell can carry a link plus commentary; only the link has to be there.
+- **Header:** `## Verify evidence`, literal, on its own line. It must be followed by a newline or the end of the comment. Leading whitespace or blank lines before it are fine. A heading with more text on the same line (`## Verify evidence-gathering plan`), or the phrase mentioned mid-sentence, does not count. The queue reads the heading from `linear.verifyEvidenceHeading`, so anything that matches on it should read it from there too.
+- **Table:** one row per scenario, columns in the order scenario, result, evidence. Header cell wording and casing carry no meaning: parsers read them case-insensitively and trimmed. The scenario cell carries enough of the scenario's text to read on its own, never a bare row number.
+- **Result cell:** exactly `PASS` or `FAIL`, uppercase, alone in the cell. `pass`, `PASSED` and `PASS (with caveats)` count as unreadable evidence.
+- **Evidence cell:** a link to a screenshot or recording hosted by the tracker. With Linear, upload it with Linear's `fileUpload` mutation. A cell with only prose is a malformed row. The cell may add commentary after the link.
+- **Footer:** `_Verified <ISO> on <env> as <persona> against <sha>_`, literal format. `<env>` is one of your environment names, the one the scenarios were walked on. `<sha>` is the full 40-character commit SHA that environment's health URL reports. Never abbreviate it.
 
-**Worked example:**
+Only the header line and the footer line are literal.
 
 ```
 ## Verify evidence
@@ -110,28 +100,26 @@ The verifier posts this comment on the ticket when it finishes walking the scena
 _Verified 2026-08-31T14:32:00Z on staging as project manager against a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f80912_
 ```
 
-A single FAIL keeps the ticket in Verifying. The fix targets the failing scenario and re-verifies every scenario in the set, since a fix can regress one that passed before it.
+A single FAIL keeps the ticket in Verifying. The fix targets the failing scenario, then re-verifies every scenario in the set, since a fix can break one that passed.
 
-A ticket can carry more than one `## Verify evidence` comment over its life, and the newest one by creation time is the one that counts. A stale FAIL from an earlier run does not outlive the fresh PASS that supersedes it, and a fresh FAIL correctly supersedes an older PASS if a regression shows up on re-verify.
+A ticket can carry several `## Verify evidence` comments. The newest by creation time counts. A fresh PASS supersedes an older FAIL, and a fresh FAIL supersedes an older PASS.
 
-## Who should author an evidence comment
+## Who may author evidence
 
-Recommendation: only the tracker identity that the queue's API key authenticates as. Treat comments written by anyone else as non-evidence, however well formed, and let "newest wins" apply within that set so a forged comment posted after a real one cannot supersede it.
+Accept evidence only from the tracker identity the queue's API key authenticates as, since anyone in the workspace can type a well-formed table. Treat comments by anyone else as non-evidence, and apply "newest wins" only within that set, so a forged comment posted after a real one cannot supersede it.
 
-The reason is that every rule above governs the shape of a comment, and shape is something any workspace member can type. Without the author binding, a hand-written table is indistinguishable from a real verification run, which leaves the contract a formatting convention instead of a control. The verifier posts with the same key the reader checks against, so binding the author costs a real run nothing.
-
-Two consequences to plan for. Binding to the key holder means that person can still author evidence for their own release; a dedicated automation account that nobody signs in as closes that. And rotating the key onto a different account invalidates every evidence comment the old account posted, which shows up as a refusal rather than a silent pass. Re-verify the affected tickets, or rotate within the same account.
+The key holder can still author evidence for their own release. A dedicated automation account nobody signs in as closes that. Moving the key to a different account invalidates every evidence comment the old account posted, which shows up as a refusal. Re-verify the affected tickets, or rotate the key within the same account.
 
 ## Reopen rule
 
-Reopen a ticket when a defect breaks one of its own acceptance scenarios. Its Done was false, and the fix re-verifies the same scenario set it broke. File a new ticket only for genuinely new scope, work none of the original scenarios claimed to cover. The new ticket carries its own `## Acceptance scenarios` and updates the spec from there.
+A defect that breaks one of a ticket's own acceptance scenarios reopens that ticket. The fix re-verifies the same scenario set. A new ticket is only for new scope, and carries its own `## Acceptance scenarios` (`docs/build-process.md`).
 
 ## Exempting a ticket from evidence
 
-Some tickets have nothing a verifier can walk (a pure documentation change, say). If you let a label skip the evidence check, treat it as a real bypass and give it three rules:
+Some tickets have nothing to walk, such as a documentation change. If a label lets a ticket skip the evidence check, treat it as a real bypass with three rules:
 
 - Only the person accountable for the product applies it.
-- The label never goes on without a comment on the ticket stating why it is exempt from carrying `## Verify evidence`.
-- Whatever sweeps for Done tickets without evidence reports the exempt count on every run, so an exemption stays visible instead of disappearing into a quiet label.
+- It never goes on without a comment on the ticket saying why the ticket is exempt from `## Verify evidence`.
+- Whatever sweeps for Done tickets without evidence reports the exempt count on every run.
 
-Unless something checks who applied the label, all three rules are enforced by discipline alone.
+Unless something checks who applied the label, these rules rest on discipline alone.
