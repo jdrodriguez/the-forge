@@ -1,8 +1,16 @@
 {
   "name": "the-forge",
   "version": "0.1.0",
-  "private": true,
   "description": "The Forge: a spec desk and an agent queue. Linear tickets are built into pull requests by Claude Code workers across several accounts and machines, and a Middle-earth board shows it all.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jdrodriguez/the-forge.git"
+  },
+  "homepage": "https://github.com/jdrodriguez/the-forge#readme",
+  "bugs": {
+    "url": "https://github.com/jdrodriguez/the-forge/issues"
+  },
   "type": "module",
   "bin": {
     "the-forge": "bin/the-forge.mjs"
@@ -20,7 +28,8 @@
     "specdesk/",
     "docs/",
     "agent-queue.config.example.json",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22"
