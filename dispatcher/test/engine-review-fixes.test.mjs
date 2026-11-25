@@ -110,3 +110,15 @@ test('a ticket waiting for a slot whose PR no longer needs a round leaves the wa
   assert.deepEqual(state(box).wakeQueue, []);
   assert.equal(starts(box).length, 0);
 });
+
+test('an earlier waiter that no longer needs a worker blocks nobody behind it in the same tick', () => {
+  const asked = { ...ENGINE_T, status: 'merge-asked', prNumber: 7, riskySha: HEAD };
+  const box = engineBox({ host: { maxWorkers: 1 }, tickets: { 'ENG-9': asked, 'ENG-8': { ...CLAUDE_T, goneTicks: 2 } }, registry: { status: 'done' },
+    pr: { mergeStateStatus: 'BLOCKED' }, ps: [{ label: 'b', id: 'w-live', status: 'failed', state: 'failed', kind: 'background' }], usage: ROOM });
+  const file = path.join(box.stateDir, 'state.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')),
+    wakeQueue: [{ id: 'ENG-9', since: OLD, reason: 'x', pool: 'regular' }, { id: 'ENG-8', since: OLD, reason: 'x', pool: 'regular' }] }));
+  const out = tick(box);
+  assert.match(out, /ENG-8: a slot is free \(0\/1 in use\), so it wakes/);
+  assert.equal(claudeBriefs(box).length, 1);
+});

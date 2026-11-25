@@ -177,3 +177,38 @@ test('a redispatch by hand that starts nothing keeps its wake override for the n
   assert.match(run(box, ['redispatch', 'ENG-9']), /no account has a free worker slot/);
   assert.ok(fs.existsSync(path.join(box.shared, 'wake-requests/ENG-9.json')));
 });
+
+test('a wake override is not spent when the ticket had room anyway', () => {
+  const box = capBox({ tickets: { 'ENG-9': failing(9) }, prs: { 9: BLOCKED(9) }, ps: [ended(9, 'failed')] });
+  run(box, ['wake', 'ENG-9']);
+  const out = tick(box);
+  assert.doesNotMatch(out, /pushes it through/);
+  assert.equal(briefs(box).length, 1);
+  assert.match(out, /ENG-9: cleared the wake override unused/);
+});
+
+test('a wake override whose start fails stands, and is spent by the start that succeeds', () => {
+  const box = capBox({ host: { maxWorkers: 1 }, tickets: { 'ENG-1': live(1), 'ENG-9': failing(9) }, prs: { 1: BLOCKED(1), 9: BLOCKED(9) },
+    ps: [busy(1), ended(9, 'failed')], usage: [] });
+  run(box, ['wake', 'ENG-9']);
+  const file = path.join(box.shared, 'wake-requests/ENG-9.json');
+  assert.match(tick(box), /ENG-9: a wake override pushes it through/);
+  assert.equal(briefs(box).length, 0, 'no account had room, so nothing started');
+  assert.ok(fs.existsSync(file), 'the override stands for the next try');
+  box.put('usage.json', [{ label: 'b', signed_in: true, working: 0, usage: { available: true, five_hour: null, weekly: { remaining_percentage: 90 } } }]);
+  tick(box);
+  assert.equal(briefs(box).length, 1);
+  assert.ok(!fs.existsSync(file), 'spent by the start');
+  tick(box);
+  assert.equal(briefs(box).length, 1, 'never a second start over the limit');
+});
+
+test('a waiter whose PR cannot be read leaves the queue after wakeQueueMaxReadFailures ticks, and the human hears once', () => {
+  const box = capBox({ dispatcher: { wakeQueueMaxReadFailures: 2 }, tickets: { 'ENG-9': live(9, { prNumber: 99 }) }, ps: [ended(9, 'failed')],
+    wakeQueue: [{ id: 'ENG-9', since: OLD, reason: 'x', pool: 'regular' }] });
+  tick(box);
+  assert.deepEqual(queueIds(box), ['ENG-9']);
+  assert.match(tick(box), /ENG-9: left the wake queue, its PR could not be read on 2 ticks in a row/);
+  assert.deepEqual(queueIds(box), []);
+  assert.equal(lines(box, 'asks').filter((l) => /left host-a's wake queue/.test(l)).length, 1);
+});

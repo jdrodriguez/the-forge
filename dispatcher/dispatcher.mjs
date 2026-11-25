@@ -13,7 +13,7 @@
 // needs a merge review, blocked, stuck, paused) shows a macOS notification, and `summary` prints the session-start line.
 //
 // Usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ENG-123 | redispatch ENG-123 | wake ENG-123 | test-notify |
-//        pause [reason] | resume
+//        hold [reason] | release | pause [reason] | resume
 // Config: agent-queue.config.json at the repo root (lib/config.mjs). State, log and the PAUSED flag (per machine):
 // paths.stateDir. Files every machine reads (heartbeats, bundles, merge requests, main's state): paths.sharedDir.
 // Linear is the shared truth: ready -> building -> Verifying or stuck.
@@ -233,7 +233,14 @@ const fleetWorker = (name) => fleetWorkers().find((w) => w.name === name) ?? nul
 const WAKE_REQUESTS = path.join(SHARED, 'wake-requests');
 // This run's decisions: tickets granted a wake (each holds a slot for the rest of the run), the tickets that held a slot
 // when the run reached them, the session list the count reads, and the override requests for tickets held here.
-const wakeRun = { woken: new Set(), held: new Set(), asked: new Set(), workers: null, overrides: new Map() };
+// attempted and started record the sessions this run tried to start and did start, so an override is spent only on a
+// start it let through. reached holds the tickets whose PR was read this run.
+const wakeRun = { woken: new Set(), held: new Set(), asked: new Set(), reached: new Set(), attempted: new Set(), started: new Set(),
+  workers: null, overrides: new Map() };
+const noteStart = (id, ok) => {
+  wakeRun.attempted.add(id);
+  if (ok) wakeRun.started.add(id);
+};
 // A Sentry ticket counts in this machine's Sentry slots; on a machine with none it counts in the regular pool.
 const poolOf = (t) => (t?.sentry && (hostCfg.sentryWorkers ?? 0) > 0 ? 'sentry' : 'regular');
 const baseMax = (pool) => (pool === 'sentry' ? hostCfg.sentryWorkers ?? 0 : hostCfg.maxWorkers ?? Infinity);
@@ -307,7 +314,7 @@ async function sessionRows(st) {
 }
 
 // Whether a ticket may start, respawn or wake a worker session now. Granted when its pool has a slot free counting the
-// ticket as one (its own slot and worker left out), or when an override for it is pending. A ticket that held no slot
+// ticket as one (its own slot and worker left out), or, only when it has none, when an override for it is pending. A ticket that held no slot
 // and was not waiting goes behind every ticket already waiting in its pool, so the queue stays first come first served.
 // A refused ticket joins the wake queue, or keeps its place there; `join: false` (a command run by hand) only refuses.
 // Once granted, it stays granted for the run.
@@ -323,10 +330,13 @@ function mayWake(st, id, t, reason, { join = true } = {}) {
   // held no slot and was not waiting goes behind all of them.
   const queue = st.wakeQueue ?? [];
   const ahead = entry ? queue.slice(0, queue.indexOf(entry)) : wakeRun.held.has(id) ? [] : queue;
-  const behind = ahead.some((w) => w.id !== id && !wakeRun.woken.has(w.id) && poolOf(st.tickets[w.id]) === pool);
+  // A waiter whose PR was read this run and that asked for nothing no longer needs a worker, so it blocks nobody.
+  const finished = (w) => wakeRun.reached.has(w.id) && !wakeRun.asked.has(w.id);
+  const behind = ahead.some((w) => w.id !== id && !wakeRun.woken.has(w.id) && !finished(w) && poolOf(st.tickets[w.id]) === pool);
   const waited = entry ? `${Math.round(hoursSince(entry.since) * 60)} minutes` : null;
   const burst = used !== null && used + 1 > baseMax(pool) ? `using a burst slot: ${burstState()?.reading}; ${used}/${baseMax(pool)} ${slotWord(pool)}s in use` : null;
-  if (override || (used !== null && !behind && used + 1 <= max)) {
+  const fits = used !== null && !behind && used + 1 <= max;
+  if (fits || override) {
     wakeRun.woken.add(id);
     if (entry) {
       st.wakeQueue = st.wakeQueue.filter((w) => w !== entry);
@@ -335,8 +345,10 @@ function mayWake(st, id, t, reason, { join = true } = {}) {
       if ((wakeRun.workers ?? []).some((w) => w.label === t.account && w.id === t.workerId && w.pid)) t.lastProgressAt = iso();
       delete t.stalledSince;
     }
-    if (override) {
-      override.used = true;
+    if (!fits) {
+      // Spent only once a start it let through succeeds, or once the ticket takes its slot back without one
+      // (settleWakeOverrides).
+      override.needed = true;
       log(`${id}: a wake override pushes it through over the limit (${used ?? 'unknown'}/${max} ${slotWord(pool)}s in use without it)${entry ? ` after ${waited} in the wake queue` : ''}: ${reason}`);
     } else if (entry && burst) log(`${id}: ${burst}, so it wakes after ${waited} in the wake queue: ${reason}`);
     else if (entry) log(`${id}: a ${slotWord(pool)} is free (${used}/${max} in use), so it wakes after ${waited} in the wake queue: ${reason}`);
@@ -377,7 +389,7 @@ function leaveWakeQueue(st, id, why) {
 function readWakeRequest(id) {
   const file = path.join(WAKE_REQUESTS, `${id}.json`);
   try {
-    return { ...JSON.parse(fs.readFileSync(file, 'utf8')), file, used: false };
+    return { ...JSON.parse(fs.readFileSync(file, 'utf8')), file, needed: false };
   } catch {
     return null;
   }
@@ -396,20 +408,23 @@ function loadWakeOverrides(st) {
     const req = readWakeRequest(id);
     if (!req) continue;
     if (LIVE.includes(st.tickets[id]?.status)) wakeRun.overrides.set(id, req);
-    else if (hoursSince(req.at) > 24) {
+    else if (hoursSince(req.at) > (cfg.wakeRequestHours ?? 24)) {
       if (!DRY) fs.rmSync(req.file, { force: true });
-      log(`${id}: dropped the wake override from ${req.at}, since no machine has held the ticket for a day`);
+      log(`${id}: dropped the wake override from ${req.at}, since no machine has held the ticket for ${cfg.wakeRequestHours ?? 24}h`);
     }
   }
 }
-// An override is honoured once: used, it is cleared. One for a ticket that does not wait for a slot is cleared too; one
-// whose ticket still waits (its wake was not reached this run) stands for the next run.
+// Runs once a run ends, whatever happened in it. An override is spent, and cleared, once it let a ticket past the limit
+// and the session that needed it started, or the ticket took its slot back with no start. One whose start failed, or
+// whose ticket still waits, stands for the next run. One for a ticket that does not wait for a slot is cleared unused.
 function settleWakeOverrides(st) {
   for (const [id, o] of wakeRun.overrides) {
-    if (!o.used && wakeEntry(st, id)) continue;
+    const spent = o.needed && (wakeRun.started.has(id) || !wakeRun.attempted.has(id));
+    if (!spent && (wakeEntry(st, id) || (o.needed && wakeRun.attempted.has(id)))) continue;
     if (!DRY) fs.rmSync(o.file, { force: true });
-    if (!o.used) log(`${id}: cleared the wake override unused, since it does not wait for a slot (${st.tickets[id]?.status ?? 'gone'})`);
+    if (!spent) log(`${id}: cleared the wake override unused, since it does not wait for a slot (${st.tickets[id]?.status ?? 'gone'})`);
   }
+  wakeRun.overrides.clear();
 }
 
 // --- state, lock, pause ------------------------------------------------------------------------------
@@ -435,9 +450,13 @@ function saveState(st) {
 
 const isPaused = () => fs.existsSync(PAUSED);
 const pauseReason = () => (isPaused() ? fs.readFileSync(PAUSED, 'utf8').trim() : null);
-// dispatcher.holdNewWork: while true, no machine claims a new ready ticket. Unlike a pause, which also stops merges,
-// everything already claimed carries on: PRs merge, workers are replaced and woken, and the wake queue drains.
-const newWorkHeld = () => cfg.holdNewWork === true;
+// The hold: while <sharedDir>/HOLD exists (`dispatcher.mjs hold`, on any machine), no machine claims a new ready ticket
+// and Sentry triage queues nothing new. dispatcher.holdNewWork true holds the one machine whose config says so. Unlike
+// a pause, which also stops merges, everything already claimed carries on: PRs merge, workers are replaced and woken,
+// and the wake queue drains.
+const HOLD = path.join(SHARED, 'HOLD');
+const newWorkHeld = () => cfg.holdNewWork === true || fs.existsSync(HOLD);
+const holdWhere = () => (fs.existsSync(HOLD) ? 'on every machine (dispatcher.mjs hold)' : `on ${HOST} (dispatcher.holdNewWork)`);
 
 function takeLock() {
   try {
@@ -640,7 +659,7 @@ function accountsWorkingHere() {
   }
 }
 // The other enabled machines' heartbeats under maxMinutes old.
-function otherHeartbeats(maxMinutes = 60) {
+function otherHeartbeats(maxMinutes = cfg.heartbeatFreshMinutes ?? 60) {
   return cfg.enabledHosts.filter((h) => h !== HOST).flatMap((host) => {
     try {
       const beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
@@ -1209,7 +1228,6 @@ async function advance(st, m, workers) {
   // Tickets in the wake queue come last, in the order they started waiting: by then every other ticket has freed the
   // slot it frees this tick, and the first to wait is the first to take a free slot.
   const waitingIds = (st.wakeQueue ?? []).map((w) => w.id).filter((x) => st.tickets[x]);
-  const reached = new Set(); // tickets whose PR was read this tick, so whether they need a worker is known
   for (const id of [...Object.keys(st.tickets).filter((x) => !waitingIds.includes(x)), ...waitingIds]) {
     const t = st.tickets[id];
     if (!t || !LIVE.includes(t.status)) continue;
@@ -1230,6 +1248,16 @@ async function advance(st, m, workers) {
     } catch (e) {
       log(`${id}: could not read its PR, trying next tick (${errText(e)})`);
       keepParked();
+      // A waiter holds a slot against new claims, so one whose PR stays unreadable leaves the queue after
+      // wakeQueueMaxReadFailures ticks in a row, and the human hears once.
+      const entry = wakeEntry(st, id);
+      if (entry && (entry.readFailures = (entry.readFailures ?? 0) + 1) >= (cfg.wakeQueueMaxReadFailures ?? 6)) {
+        leaveWakeQueue(st, id, `its PR could not be read on ${entry.readFailures} ticks in a row`);
+        await effects(t, id, [[`tell ${HUMAN} ${id} left the wake queue`, () => askHuman(id, 'blocked',
+          `${id} left ${HOST}'s wake queue: its PR could not be read on ${entry.readFailures} ticks in a row (${errText(e).slice(0, 200)}).`,
+          `Check the PR and the GitHub access on ${HOST}; the ticket rejoins the queue when it next needs a worker`, 'it stays out of the wake queue')]]);
+      }
+      saveState(st);
       continue;
     }
     if (pr) t.pr = pr.url;
@@ -1311,7 +1339,7 @@ async function advance(st, m, workers) {
       }
     }
     t.note = notGreen ? `not green: ${notGreen}` : 'green';
-    reached.add(id);
+    wakeRun.reached.add(id);
     // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
     if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
@@ -1447,7 +1475,7 @@ async function advance(st, m, workers) {
   // A waiting ticket whose PR was read and that asked for no worker this tick (an engine ticket waiting on the
   // orchestrator whose next round is no longer due, say) no longer needs one, so it stops holding a place.
   for (const w of [...(st.wakeQueue ?? [])]) {
-    if (reached.has(w.id) && !wakeRun.asked.has(w.id)) leaveWakeQueue(st, w.id, 'it no longer needs a worker');
+    if (wakeRun.reached.has(w.id) && !wakeRun.asked.has(w.id)) leaveWakeQueue(st, w.id, 'it no longer needs a worker');
   }
 }
 
@@ -1659,7 +1687,8 @@ const isFableWindow = (w) => w.kind === 'weekly_scoped' && w.scope === 'Fable';
 function weeklyLeft(u) {
   const ws = (u?.windows ?? []).filter((w) => w.group === 'weekly' && !isFableWindow(w));
   if (ws.length) return Math.min(...ws.map((w) => w.remaining_percentage ?? -1));
-  return u?.weekly?.window === 'Fable' ? -1 : (u?.weekly?.remaining_percentage ?? -1);
+  // A reading whose only weekly window is Fable's says nothing about the week: unknown, so no worker goes there on it.
+  return u?.weekly?.window === 'Fable' ? null : (u?.weekly?.remaining_percentage ?? -1);
 }
 const fableWindow = (u) => (u?.windows ?? []).find(isFableWindow) ?? null;
 
@@ -1729,7 +1758,8 @@ function pickAccount(accounts, engines = []) {
   const elsewhere = workingElsewhere();
   const fleetWorking = (a) => (a.working ?? 0) + (elsewhere.get(accountKey(a)) ?? 0);
   // Weekly usage left once the running workers and `extra` more have taken their reserve.
-  const projected = (a, extra = 0) => weeklyLeft(a.usage) - reserveFor(a) * (fleetWorking(a) + extra);
+  // An unknown week (weeklyLeft null) reads as no room, the same as an account whose usage could not be read.
+  const projected = (a, extra = 0) => (weeklyLeft(a.usage) ?? -1) - reserveFor(a) * (fleetWorking(a) + extra);
   // A plan with no 5-hour window reports five_hour as null once its usage is known; that is no limit, not an empty
   // one. The weekly window is still required.
   const fiveHourOk = (u, min = floor) => u.five_hour == null || (u.five_hour.remaining_percentage ?? -1) >= min;
@@ -1887,6 +1917,8 @@ async function dispatch(st, m) {
       inverseRelations(first:100){ nodes{ type issue{ identifier state{ name type } } } } } } }`, { team: TEAM, ready: L.ready });
   const rank = (p) => (p === 0 ? 5 : p);
   const ready = [];
+  // Held: nothing is claimed, and no ticket is sent back either, since the hold says nothing about the ticket.
+  if (newWorkHeld()) return log(`${q.issues.nodes.length} ready, none claimed: new work is held ${holdWhere()}; work already claimed carries on`);
   for (const i of q.issues.nodes) {
     if (i.labels.nodes.some((l) => [L.building, L.stuck].includes(l.name)) || st.tickets[i.identifier]) continue;
     const problems = readyProblems(i);
@@ -1895,7 +1927,6 @@ async function dispatch(st, m) {
   }
   ready.sort((a, b) => rank(a.priority) - rank(b.priority) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
   if (!ready.length) return log('queue empty');
-  if (newWorkHeld()) return log(`${ready.length} ready, none claimed: new work is held on every machine (dispatcher.holdNewWork); work already claimed carries on`);
 
   const busy = machineBusy();
   if (busy) return log(`${ready.length} ready, none claimed: this machine is busy, ${busy}`);
@@ -2067,6 +2098,7 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   }
   // Every caller asks first; this holds the line for one that doesn't. A ticket with no room waits in the wake queue.
   if (!mayWake(st, id, t, why ?? 'a replacement worker')) return null;
+  noteStart(id, false);
   const members = [];
   for (const x of [id, ...(t.bundle ?? [])]) members.push((await gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id: x })).issue);
   const [issue] = members;
@@ -2082,6 +2114,7 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
     '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
     ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+  noteStart(id, true);
   if (fromEngine) {
     engines.leave(t);
     if (t.status === 'merge-asked') clearMergeRequest(id);
@@ -2137,7 +2170,7 @@ async function redispatch(id) {
     console.log(out ? `${id}: redispatched to ${out.label}/${out.id}` : `no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom`);
     // An override is spent only by a start: one that started nothing stands for the next try.
     const o = wakeRun.overrides.get(id);
-    if (out && o?.used) {
+    if (out && o?.needed) {
       fs.rmSync(o.file, { force: true });
       console.log(`${id}: its wake override let it through over the limit, and is cleared`);
     }
@@ -2203,6 +2236,7 @@ function wakeCmd(id) {
 const triageModule = () => pathToFileURL(path.resolve(DIR, cfg.sentryTriage?.module ?? 'sentry-triage.mjs')).href;
 async function sentryTriage() {
   if (HOST !== cfg.sentryTriage?.host || !cfg.sentryTriage?.enabled) return;
+  if (newWorkHeld()) return log(`sentry triage skipped: new work is held ${holdWhere()}`);
   try {
     (await import(triageModule())).kickFromTick({ cfg: conf, dry: DRY, log });
   } catch (e) {
@@ -2220,7 +2254,7 @@ const engines = makeEngineHooks(() => ({
   cfg, log, errText, iso, saveState, effects, notify, run, askHuman, attachCmd, riskyPaths, requestMerge, EXT_WORKER, HUMAN, WORKTREES, SHARED,
   ctx: () => ({ cfg, conf, DIR, ROOT, LOCAL, SHARED, HOST, DRY, REPO, BASE, HUMAN, L, EXT_WORKER, EXT_USAGE, ASK, WORKTREES,
     log, run, gh, gql, iso, hoursSince, errText, saveState, isPaused, notify, effects, comment, issueId, addLabel, removeLabel, setState,
-    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig, mayWake, newWorkHeld }),
+    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig, mayWake, newWorkHeld, noteStart }),
 }));
 
 // --- commands ------------------------------------------------------------------------------------------
@@ -2266,7 +2300,6 @@ async function tick() {
     await dispatch(st, m);
     await sentryTriage();
     writeHeartbeat(st);
-    settleWakeOverrides(st);
     st.lastTick = iso();
     delete st.lastError;
   } catch (e) {
@@ -2275,7 +2308,10 @@ async function tick() {
     if (st) st.lastError = `${iso()} ${e.message}`;
     else if (!DRY && !isPaused()) fs.writeFileSync(PAUSED, `${iso()} state could not be loaded: ${e.message}\n`);
   } finally {
-    if (st) saveState(st);
+    if (st) {
+      settleWakeOverrides(st);
+      saveState(st);
+    }
     if (!DRY) fs.rmdirSync(LOCK);
   }
 }
@@ -2283,7 +2319,7 @@ async function tick() {
 async function status() {
   const st = loadState();
   const day = (st.dispatches ?? []).filter((d) => hoursSince(d) < 24).length;
-  console.log(`host ${HOST} (${cfg.enabledHosts.includes(HOST) ? 'enabled' : 'not enabled'}), ${isPaused() ? `PAUSED: ${pauseReason()}` : 'running'}${newWorkHeld() ? '; new work HELD on every machine (holdNewWork), claimed work carries on' : ''}`);
+  console.log(`host ${HOST} (${cfg.enabledHosts.includes(HOST) ? 'enabled' : 'not enabled'}), ${isPaused() ? `PAUSED: ${pauseReason()}` : 'running'}${newWorkHeld() ? `; new work HELD ${holdWhere()}, claimed work carries on` : ''}`);
   console.log(`last tick ${st.lastTick ?? 'never'}${st.lastError ? `, last error ${st.lastError}` : ''}; dispatched ${day}${cfg.maxDispatchesPerDay ? `/${cfg.maxDispatchesPerDay}` : ''} in 24h; stuck streak ${st.stuckStreak ?? 0}${st.pendingNotice ? '; pause notice not yet delivered' : ''}`);
   if (cfg.sentryTriage?.enabled) {
     try {
@@ -2381,7 +2417,14 @@ else if (cmd === 'wake') {
     process.exitCode = 2;
   }
 }
-else if (cmd === 'pause') {
+else if (cmd === 'hold') {
+  fs.mkdirSync(SHARED, { recursive: true });
+  fs.writeFileSync(HOLD, `${iso()} ${HOST} ${rest.join(' ') || 'held by hand'}\n`);
+  log(`new work held on every machine: ${rest.join(' ') || 'held by hand'}`);
+} else if (cmd === 'release') {
+  fs.rmSync(HOLD, { force: true });
+  log('new work released on every machine');
+} else if (cmd === 'pause') {
   fs.writeFileSync(PAUSED, `${iso()} ${rest.join(' ') || 'paused by hand'}\n`);
   log(`paused: ${rest.join(' ') || 'paused by hand'}`);
 } else if (cmd === 'resume') {
@@ -2389,6 +2432,6 @@ else if (cmd === 'pause') {
   fs.writeFileSync(STREAK_RESET, `${iso()}\n`);
   log('resumed; the stuck streak resets on the next tick');
 } else {
-  console.log(`usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ${TEAM}-123 | redispatch ${TEAM}-123 | wake ${TEAM}-123 | test-notify | pause [reason] | resume`);
+  console.log(`usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ${TEAM}-123 | redispatch ${TEAM}-123 | wake ${TEAM}-123 | test-notify | hold [reason] | release | pause [reason] | resume`);
   process.exitCode = 2;
 }

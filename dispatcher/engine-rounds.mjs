@@ -57,6 +57,7 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
   // A round is a new session on this machine. On a full machine the ticket waits in the dispatcher's wake queue and
   // holds no slot until one is free; a ticket waiting on the orchestrator holds none to begin with.
   if (!c.mayWake(st, id, t, summary)) return 'held';
+  c.noteStart?.(id, false);
   if (c.DRY) return c.log(`${id}: would start ${engine} round ${round} (${summary})`);
   const file = writeBrief(c, issue, t, { engine, round, note: text });
   // Journaled first: a run that ends mid-start adopts the spawn on the next tick instead of starting a second one.
@@ -77,6 +78,7 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
     return 'failed';
   }
   applyRound(c, id, t, out, { round, engine, summary, text });
+  c.noteStart?.(id, true);
   if (retry) t.engineRetries = (t.engineRetries ?? 0) + 1;
   c.saveState(st);
   c.log(`${id}: started ${engine} round ${round} as ${out.id}: ${summary}`);
