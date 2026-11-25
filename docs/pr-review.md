@@ -64,7 +64,7 @@ Create the branch from a freshly fetched base: `git fetch origin && git worktree
 1. Self-review the diff as a hostile reviewer would. Look for every class of issue the CI review finds: comments, type safety, dead scaffolding, siblings the change missed, forward-looking comments.
 2. For a PR over 300 lines or one that adds a new abstraction, also get an independent review of the full diff: `scripts/cross-review.sh <worktree> [base-ref]` sends it to Codex and Grok. A Claude code-review subagent is the fallback.
 3. Run every CI-only gate script your repo has (duplicate-code, unused-export, dependency-boundary and test-quality gates, for example). A green pre-push hook does not mean a green CI job. Run each against the same base CI uses: if CI diffs against the base branch tip, a merge-base run can pass locally and fail in CI.
-4. Run the production build locally. Type-check, lint and tests do not catch deploy-time bugs. For a changed Dockerfile, `docker build` it, then `docker run --rm <image> id <user>` for every `USER` directive you added. A Dockerfile that builds can still fail to start, and the build log will not show it.
+4. Run the production build locally, before this push and every later one. Type-check, lint and tests do not catch deploy-time bugs. For a changed Dockerfile, `docker build` it, then `docker run --rm <image> id <user>` for every `USER` directive you added. A Dockerfile that builds can still fail to start, and the build log will not show it.
 
 ## Review rounds
 
@@ -110,9 +110,9 @@ Rebase only when `gh pr view <pr> --json mergeable` says `CONFLICTING`, or the P
 When several workers each build one PR, these rules apply on top of the ones above.
 
 1. **Workers never merge.** A worker pushes, opens the PR, runs the review rounds to settlement, and stops. The dispatcher merges a green PR. A green PR that touches a risky path (`dispatcher.riskyPathPatterns`) goes to the orchestrator session, which reads it and merges.
-2. **"Review completed" means the review check's status is `COMPLETED`.** Green CI is not enough, because the review runs as a separate workflow and finishes later. Poll `gh pr view <pr> --json statusCheckRollup` for the review check itself. `gh pr checks --watch` exits when CI is green, whatever the review's state.
+2. **"Review completed" means the review check's status is `COMPLETED`.** Green CI is not enough, because the review runs as a separate workflow and finishes later. Worker prompts must poll `gh pr view <pr> --json statusCheckRollup` for the review check itself. `gh pr checks --watch` exits when CI is green, whatever the review's state.
 3. **Workers triage at the cap and stop.** At its third round a worker fixes correctness and spec findings, files only nits and out-of-scope items as a follow-up linked in a PR comment, resolves the threads, stops and reports. Expect a fourth round to land after the cap, from the review of the third round's commit. The orchestrator triages those the same way at merge time.
-4. **Workers do not write to the tracker unless the brief allows it.** By default a worker has no tracker access. The orchestrator and dispatcher post ticket comments and file follow-ups after merge. If a tracker write rate-limits, retry after about 30 seconds.
+4. **Workers do not write to the tracker unless the brief allows it.** By default a worker has no tracker access, and worker prompts forbid tracker comments and issue filing. The orchestrator and dispatcher post ticket comments and file follow-ups after merge. If a tracker write rate-limits, retry after about 30 seconds.
 
 **Waves.** Define disjoint file zones before dispatching a wave. Give tickets that touch the same files to one worker. As each worker finishes, poll its PR, gate and merge it (review completed, threads resolved, production build green), and watch the post-merge deploy on the new base commit. Report a wave summary before dispatching the next. After each dispatch and each triage report, schedule the next check and keep advancing every open PR until each reaches a terminal state.
 
@@ -122,7 +122,7 @@ When several workers each build one PR, these rules apply on top of the ones abo
 
 **Worktree teardown.** After each PR merges, from the main checkout run `git worktree unlock <p> 2>/dev/null; git worktree remove -f <p>; git branch -D <branch>`. The commits are on the base, so nothing is lost. Also run a sweep at session start and after every wave. Never force-remove a worktree whose lock PID is still alive (`ps -p <pid>`), and never remove a dirty worktree without saving its uncommitted changes first.
 
-Workers make teardown safe: they name their branch from the ticket at creation (`github.branchTemplate`) instead of pushing a second branch beside an auto-named one, anchor every git command and file write to their own worktree root, and stop only with a clean tree.
+Workers make teardown safe: they name their branch from the ticket at creation (`github.branchTemplate`) instead of pushing a second branch beside an auto-named one, anchor every git mutation and file write to their own worktree root, and stop only with a clean tree.
 
 ## Learn from the review
 

@@ -12,7 +12,7 @@ node learning/sweep.mjs --no-ssh --dry-run # print the report without writing hi
 node --test learning/test/*.test.mjs       # the extractor tests
 ```
 
-Paths come from the config, so it runs from anywhere. A warm run takes about a minute, a cold cache about three. It needs Node 22 and:
+Run it from the repo root. Its paths come from the config. A warm run takes about a minute, a cold cache about three. It needs Node 22 and:
 
 - `gh` logged in with read access to `github.repo`;
 - a Linear key (`LINEAR_API_KEY`, `linear.apiKeyCommand` or `linear.apiKeyFile`, see `lib/config.mjs`) for the /verify source;

@@ -79,7 +79,7 @@ Once it runs, open a Claude Code session, pin it, name it after `orchestrator.se
 
 ## Configuration
 
-Everything specific to your team lives in `agent-queue.config.json`, and `docs/configuration.md` lists every key. `AGENT_QUEUE_CONFIG=/path/to/config.json` points every component at another file. Shell scripts read the config with `node lib/config.mjs env`, which prints `AQ_<PATH>=value` lines (for example `AQ_LINEAR_TEAM`), or `node lib/config.mjs get <dot.path>` for one value.
+Everything specific to your team lives in `agent-queue.config.json`, and `docs/configuration.md`, generated from the example config's inline notes, explains every key. `AGENT_QUEUE_CONFIG=/path/to/config.json` points every component at another file. Shell scripts read the config with `node lib/config.mjs env`, which prints `AQ_<PATH>=value` lines (for example `AQ_LINEAR_TEAM`), or `node lib/config.mjs get <dot.path>` for one value.
 
 ## Tests
 

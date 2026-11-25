@@ -42,7 +42,7 @@ The standing decisions behind the workflow: each rule, then why. When you settle
 
 **Tests gate in CI. The pre-push hook keeps the fast checks.** Running the suite in the hook took 40 to 60 minutes a push under load and failed on timeouts in tests the push never touched. The hook keeps format and type checks, workers run the tests their change touches, and CI runs everything. Workers never run the full suite locally, since every worker shares the machine.
 
-**CI cost may grow with the amount of work, never per unit of work.** Extra CI runs on the same PR are cost to cut. This is why the queue bundles, folds work in, and cancels a run as soon as one job fails.
+**CI cost may grow with the amount of work, never per unit of work.** Extra CI runs on the same PR are cost to cut. This is the reason for bundling, folding work in, and cancelling a CI run as soon as one job fails.
 
 ## Merging
 

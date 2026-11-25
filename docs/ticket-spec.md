@@ -37,7 +37,7 @@ The headline verb of the ticket title must appear in at least one scenario, or t
 
 ## `## Adverse data`
 
-A table of behavior on empty, failed, zero and unconfigured input, for every number, grade or judgment the ticket renders. The default is to render "Not measured". Fabricating a value is banned, and that includes zero standing in for missing data.
+A table of behavior on empty, failed, zero and unconfigured input, for every number, grade or judgment the ticket renders. The mandated default is to render "Not measured". Fabricating a value is banned, and that includes zero standing in for missing data.
 
 ```
 ## Adverse data
@@ -83,7 +83,7 @@ The verifier posts this comment on the ticket after walking the scenarios on a d
 - **Header:** `## Verify evidence`, literal, on its own line. It must be followed by a newline or the end of the comment. Leading whitespace or blank lines before it are fine. A heading with more text on the same line (`## Verify evidence-gathering plan`), or the phrase mentioned mid-sentence, does not count. The queue reads the heading from `linear.verifyEvidenceHeading`. Keep that the one owner of the string: anything that matches on it reads it from there instead of re-typing it.
 - **Table:** one row per scenario, columns in the order scenario, result, evidence. Header cell wording and casing carry no meaning: parsers read them case-insensitively and trimmed. The scenario cell carries enough of the scenario's text to read on its own, never a bare row number.
 - **Result cell:** exactly `PASS` or `FAIL`, uppercase, alone in the cell. `pass`, `PASSED` and `PASS (with caveats)` count as unreadable evidence.
-- **Evidence cell:** a link to a screenshot or recording hosted by the tracker. With Linear, upload it with Linear's `fileUpload` mutation. A cell with only prose is a malformed row. Commentary is allowed; only the link has to be there.
+- **Evidence cell:** a link to a screenshot or recording hosted by the tracker. With Linear, `fileUpload` returns the URL and an upload target, and the file bytes must be PUT there before the link is posted. A cell with only prose is a malformed row. Commentary is allowed; only the link has to be there.
 - **Footer:** `_Verified <ISO> on <env> as <persona> against <sha>_`, literal format. `<env>` is one of your environment names, the one the scenarios were walked on. `<sha>` is the full 40-character commit SHA that environment's health URL reports. Never abbreviate it.
 
 Only the header line and the footer line are literal.
