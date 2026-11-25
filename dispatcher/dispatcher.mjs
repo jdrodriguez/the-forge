@@ -678,7 +678,7 @@ async function writeHeartbeat(st) {
   if (DRY) return;
   fs.mkdirSync(HEARTBEATS, { recursive: true });
   const wakeQueue = (st.wakeQueue ?? []).map(({ id, since, reason, pool }) => ({ id, since, reason, pool }));
-  const beat = { host: HOST, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue, worktrees: await worktreeCount(),
+  const beat = { host: HOST, platform: process.platform, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue, worktrees: await worktreeCount(),
     ...(reserving() ? { accountsWorking: accountsWorkingHere() } : {}) };
   fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify(beat)}\n`);
 }
@@ -703,9 +703,28 @@ function otherHeartbeats(maxMinutes = cfg.heartbeatFreshMinutes ?? 60) {
     }
   });
 }
-function liveSentryHost() {
+// Platform labels (dispatcher.platformLabels, e.g. {"needs-mac": "darwin"}): a ticket with one builds only on a machine
+// of that platform (Node's process.platform) and never on an engine. This machine's platform is its own; another's is
+// hosts.<name>.platform, else the platform its heartbeat reports. A machine whose platform is unknown never matches, so
+// such a ticket waits in the queue rather than landing where it can't build.
+const requiredPlatform = (issue) => {
+  const hit = (issue.labels?.nodes ?? []).find((l) => Object.hasOwn(cfg.platformLabels ?? {}, l.name));
+  return hit ? { label: hit.name, platform: cfg.platformLabels[hit.name] } : null;
+};
+function platformOf(host) {
+  if (host === HOST) return process.platform;
+  if (cfg.hosts?.[host]?.platform) return cfg.hosts[host].platform;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8')).platform ?? null;
+  } catch {
+    return null; // no heartbeat yet
+  }
+}
+// The first other live machine with Sentry slots, or null. platform (a platform-labeled ticket) passes over every
+// machine of another platform, so the ticket is never left to one that can't build it.
+function liveSentryHost({ platform = null } = {}) {
   for (const host of cfg.enabledHosts) {
-    if (host === HOST || !(cfg.hosts?.[host]?.sentryWorkers > 0)) continue;
+    if (host === HOST || !(cfg.hosts?.[host]?.sentryWorkers > 0) || (platform && platformOf(host) !== platform)) continue;
     try {
       const beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
       if (!beat.paused && hoursSince(beat.at) * 60 < (cfg.sentryHeartbeatMinutes ?? 45)) return host;
@@ -770,6 +789,8 @@ function pickCompanions(lead, ready, taken) {
     if (picked.length >= (b.maxTickets ?? 3) - 1) break;
     if (c === lead || taken.has(c.identifier) || c.project?.id !== lead.project.id || !sizes.includes(sizeOf(c)) || shipsAlone(c)) continue;
     if (![lead, ...picked].some((x) => linked(c, x)) || isSentry(c) !== isSentry(lead)) continue;
+    // A bundle builds on one machine, so every ticket in it needs the same platform, or none.
+    if (requiredPlatform(c)?.platform !== requiredPlatform(lead)?.platform) continue;
     const inBundle = new Set([lead.identifier, ...picked.map((p) => p.identifier)]);
     if (openBlockers(c).some((r) => !inBundle.has(r.issue.identifier))) continue;
     picked.push(c);
@@ -2412,8 +2433,15 @@ async function dispatch(st, m) {
       log(`${issue.identifier}: waiting on ${blockers.map((b) => b.issue.identifier).join(', ')}`);
       continue;
     }
-    if (isSentry(issue) && sentryHost) {
-      log(`${issue.identifier}: left for ${sentryHost}'s Sentry slot`);
+    const needs = requiredPlatform(issue);
+    if (needs && needs.platform !== process.platform) {
+      log(`${issue.identifier}: needs a ${needs.platform} machine (labeled ${needs.label}), left for one`);
+      continue;
+    }
+    // A platform-labeled Sentry ticket is left only to a Sentry machine of its platform.
+    const sentryAhead = needs && sentrySlots === 0 ? liveSentryHost({ platform: needs.platform }) : sentryHost;
+    if (isSentry(issue) && sentryAhead) {
+      log(`${issue.identifier}: left for ${sentryAhead}'s Sentry slot`);
       continue;
     }
     const useSentrySlot = isSentry(issue) && sentrySlots > 0;
@@ -2424,6 +2452,7 @@ async function dispatch(st, m) {
     // Every account with room is a candidate, Claude, Codex or Grok, ranked by weekly usage left. Codex and Grok take
     // part only while the engines are on and the ticket is one an engine may take (engine-workers.mjs skipReason).
     const notForEngine = !engines.on() ? 'the engines are off'
+      : needs ? `it is labeled ${needs.label}: it builds only on a ${needs.platform} machine, which an engine sandbox is not`
       : await engines.call(`checking ${issue.identifier} for an engine`, 'the engine module could not be read', (e, c) => e.skipReason(c, issue));
     if (!notForEngine) engineRows ??= await engines.call('reading the engine accounts', [], (e, c) => e.accounts(c, st));
     let acct = pickAccount(accounts, notForEngine ? [] : engineRows);
