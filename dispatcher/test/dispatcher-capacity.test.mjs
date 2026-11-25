@@ -41,8 +41,9 @@ test('burstWorkers 0 changes nothing, and a drained machine (maxWorkers 0) opens
   assert.doesNotMatch(out, /burst/);
   assert.equal(dispatches(none).length, 0);
   const drained = capBox({ host: { ...BURST, maxWorkers: 0 }, readyList: [ready(11)] });
-  tick(drained, { FAKE_LOAD: '0' });
+  const out2 = tick(drained, { FAKE_LOAD: '0' });
   assert.equal(dispatches(drained).length, 0);
+  assert.doesNotMatch(out2, /burst/, 'a drained machine reports no burst');
 });
 
 test('the Sentry pool takes no burst slot', () => {
@@ -64,11 +65,12 @@ test('with holdNewWork, a machine with room claims nothing, its heartbeat says s
   const box = capBox({ dispatcher: { holdNewWork: true }, tickets: { 'ENG-9': live(9, { goneTicks: 1 }) },
     prs: { 9: { branch: 'agent/eng-9', merge: 'BLOCKED' } }, ps: [ended(9, 'failed')], readyList: [ready(11)] });
   const out = tick(box);
-  assert.match(out, /1 ready, none claimed: new work is held on every machine \(dispatcher\.holdNewWork\); work already claimed carries on/);
+  assert.match(out, /1 ready, none claimed: new work is held on host-a \(dispatcher\.holdNewWork\); work already claimed carries on/);
   assert.equal(state(box).tickets['ENG-11'], undefined);
   assert.equal(heartbeat(box).held, true);
   assert.equal(briefs(box).length, 1, 'claimed work carries on');
-  assert.match(run(box, ['status']), /new work HELD on every machine/);
+  assert.match(briefs(box)[0], /^Your previous worker on ENG-9 ended before finishing/, "the one brief is the replacement's");
+  assert.match(run(box, ['status']), /new work HELD on host-a/);
 });
 
 // --- per-account cap and reserve -----------------------------------------------------------------------------------
@@ -213,4 +215,27 @@ test('a size mapped to Fable keeps the Fable rules', () => {
   const box = capBox({ dispatcher: { model: 'opus', modelBySize: { S: 'fable' }, noFableAccounts: ['b'] }, usage: [acct({ all: 90, fable: 100 })], readyList: [ready(11)] });
   tick(box);
   assert.deepEqual(models(box), ['opus']);
+});
+
+test('hold on any machine holds every machine: nothing is claimed or sent back until release', () => {
+  const box = capBox({ readyList: [ready(11), { ...ready(12), description: 'no scenarios here' }] });
+  run(box, ['hold', 'a release freeze']);
+  assert.ok(fs.existsSync(path.join(box.shared, 'HOLD')));
+  const out = tick(box);
+  assert.match(out, /2 ready, none claimed: new work is held on every machine \(dispatcher\.mjs hold\)/);
+  assert.equal(dispatches(box).length, 0);
+  assert.ok(!fs.existsSync(path.join(box.home, 'mutations')), 'no ticket was sent back during the hold');
+  run(box, ['release']);
+  tick(box);
+  assert.equal(dispatches(box).length, 1);
+});
+
+test('maxWorkers 0 drains the regular slots only; with sentryWorkers 0 too the machine claims nothing', () => {
+  const sentry = (sentryWorkers) => capBox({ host: { maxWorkers: 0, sentryWorkers }, readyList: [ready(11, { labels: ['sentry-triaged'] }), ready(12)] });
+  const half = sentry(1);
+  assert.match(tick(half), /ENG-11: dispatched to b\/w0 in the Sentry slot/);
+  assert.equal(dispatches(half).length, 1, 'the regular ticket waits');
+  const off = sentry(0);
+  tick(off);
+  assert.equal(dispatches(off).length, 0);
 });
