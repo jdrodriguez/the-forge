@@ -62,7 +62,8 @@ export function settings(cfg) {
 const iso = (t) => new Date(t).toISOString();
 const sha8 = (s) => String(s ?? '').slice(0, 8);
 const hrs = (h) => (h === Infinity ? 'never' : `${h.toFixed(1)}h`);
-const ms = (s) => (s ? Date.parse(s) || 0 : 0);
+// gh reports a check that has not finished with a zero time (0001-01-01), which must read as no time.
+const ms = (s) => { const t = s ? Date.parse(s) : 0; return t > 0 ? t : 0; };
 
 export function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -214,7 +215,7 @@ export async function collect(s, { gh = ghJson, board = fetchBoard(s.board) } = 
 // ---- classification ----------------------------------------------------------------------------------------------
 function boardEntries(snapshot, n, repo) {
   const tickets = Array.isArray(snapshot?.tickets) ? snapshot.tickets : Object.values(snapshot?.tickets ?? {});
-  return tickets.filter((t) => t.prNumber === n && t.status !== 'merged' && (!t.prUrl || t.prUrl.includes(`/${repo}/`)));
+  return tickets.filter((t) => (t.prNumber ?? t.pr?.number) === n && t.status !== 'merged' && (!t.prUrl || t.prUrl.includes(`/${repo}/`)));
 }
 
 function workerName(t) {
@@ -300,7 +301,9 @@ export function actionsFor(r, mergeRequest, now, s) {
   if (r.checks.verdict === 'missing' && ciDone) a.push(`no ${review} on this head: re-request the review`);
   if (!r.checks.failing.length && r.checks.failingOther.length) a.push(`non-required check failing: ${r.checks.failingOther.slice(0, 3).join(', ')}`);
   const clean = r.state !== 'DIRTY' && !r.checks.failing.length && r.checks.verdict === 'success' && !r.threads;
-  if (clean && ciDone) {
+  const mergeable = ['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(r.state);
+  if (clean && ciDone && !mergeable) a.push(`merge state ${r.state}: see what blocks it before queueing`);
+  else if (clean && ciDone) {
     if (r.approvedCurrent) a.push(`re-queue: merge-approved.sh ${r.number}`);
     else if (r.lastApproved) a.push(`review the delta since approved head ${sha8(r.lastApproved.head)}, approve the current head, queue it`);
     else if (mergeRequest) a.push(`needs first orchestrator review (the dispatcher handed it over at ${sha8(mergeRequest.head)})`);
@@ -360,8 +363,8 @@ export async function sweep(s, deps = {}, now = Date.now()) {
 // ---- due time and the watch loop ---------------------------------------------------------------------------------
 export function dueAt(state, everyHours, now) {
   const last = ms(state?.lastRun);
-  if (!last) return now;
-  return Math.min(last + everyHours * H, now + everyHours * H); // a lastRun in the future never pushes past one interval
+  if (!last || last > now) return now; // a lastRun in the future (clock skew) counts as none
+  return last + everyHours * H;
 }
 
 // watch(...): { code, out }. sleep and now are injectable so tests run on a fake clock.
@@ -436,6 +439,7 @@ async function main(argv) {
   return 1;
 }
 
+// exitCode, not exit(): a large report piped to another process is written in full before node exits.
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.exit(await main(process.argv.slice(2)));
+  process.exitCode = await main(process.argv.slice(2));
 }

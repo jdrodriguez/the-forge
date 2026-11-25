@@ -264,12 +264,12 @@ test('a board that does not answer is reported, and the sweep still runs', async
   assert.equal(byPr[80].bucket, 'NO OWNER');
 });
 
-test('dueAt: due now with no state, 6h after the last run, never more than one interval out', () => {
+test('dueAt: due now with no state or a future one, else 6h after the last run', () => {
   assert.equal(dueAt({}, 6, NOW), NOW);
   assert.equal(dueAt({ lastRun: 'garbage' }, 6, NOW), NOW);
   assert.equal(dueAt({ lastRun: ago(1) }, 6, NOW), NOW + 5 * H);
   assert.equal(dueAt({ lastRun: ago(7) }, 6, NOW), NOW - 1 * H);
-  assert.equal(dueAt({ lastRun: new Date(NOW + 48 * H).toISOString() }, 6, NOW), NOW + 6 * H);
+  assert.equal(dueAt({ lastRun: new Date(NOW + 48 * H).toISOString() }, 6, NOW), NOW, 'a future lastRun counts as none');
 });
 
 // A fake clock: sleep advances it instantly. Every now() also counts toward a cap, so a watch loop that never sleeps
@@ -345,6 +345,25 @@ test('own and release keep pr-owners.json one entry per PR', () => {
   assert.deepEqual(loadOwners(file).map((e) => e.pr), [4705]);
 });
 
+
+test('a clean, approved PR that GitHub reads as BLOCKED is not told to re-queue', async () => {
+  const { byPr } = await run({ prs: [pr(64, { idle: 3 })], details: { 64: detail(64, { idle: 3, state: 'BLOCKED' }) }, approvals: [{ pr: 64, head: A }] });
+  const act = byPr[64].actions.join(';');
+  assert.match(act, /merge state BLOCKED: see what blocks it/);
+  assert.doesNotMatch(act, /re-queue/);
+});
+
+test('a board ticket found by branch (pr.number, no prNumber) owns its PR, and a rerun with a zero end time reads as running', async () => {
+  const { byPr } = await run({ prs: [pr(65)], tickets: [ticket('ENG-65', null, { pr: { number: 65 }, workerState: 'working' })] });
+  assert.equal(byPr[65].bucket, 'OK');
+  const rerun = [
+    { __typename: 'CheckRun', name: 'quality', status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: ago(30), completedAt: ago(29) },
+    { __typename: 'CheckRun', name: 'quality', status: 'IN_PROGRESS', conclusion: '', startedAt: ago(0.1), completedAt: '0001-01-01T00:00:00Z' },
+    { __typename: 'StatusContext', context: VERDICT, state: 'SUCCESS', startedAt: ago(1) },
+  ];
+  const r = await run({ prs: [pr(66, { checks: rerun })] });
+  assert.deepEqual(r.byPr[66].checks.pending, ['quality']);
+});
 
 // ---- the CLI, with a fake gh on PATH and the board on a local port ----------------------------------------------
 const execFileP = promisify(execFile);

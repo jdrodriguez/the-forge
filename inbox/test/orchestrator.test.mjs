@@ -175,3 +175,12 @@ test('orch.sh opens Claude Code on the signed-in account with the most weekly us
   assert.equal(missing.status, 1);
   assert.match(missing.stdout, /no config folder/);
 });
+
+test('orchestrator-watch.mjs stops and says so when the lock moves to another session', () => {
+  const box = sandbox();
+  take(box.p, 'S1');
+  const mover = { name: 'mover', cmd: process.execPath, args: ['-e', `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(box.p.lock)}, 'S2\\n'), 300); setTimeout(() => {}, 30000)`] };
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify([mover]), CLAUDE_CODE_SESSION_ID: 'S1', FORGE_LOCK_POLL_MS: '100' }), encoding: 'utf8', timeout: 20000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /== takeover\nthis session lost the orchestrator lock to S2; the watcher stopped/);
+});

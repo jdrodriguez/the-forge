@@ -3,7 +3,7 @@
 // hook, the watcher and the supervisor.
 //
 // The driver lock (orchestrator.lockFile) names the one session that acts as orchestrator. The lease
-// (<stateDir>/orchestrator-lease.json) is that session's heartbeat: renewed when it takes over, ends a turn, runs a
+// (<sharedDir>/orchestrator-lease.json) is that session's heartbeat: renewed when it takes over, ends a turn, runs a
 // merge or its watcher wakes. It never gates anything the driver does. The supervisor reads it to tell a working driver
 // from an idle one.
 //
@@ -22,9 +22,10 @@ import { ROOT, loadConfig } from '../lib/config.mjs';
 
 export function orchestratorPaths(cfg = loadConfig()) {
   const state = cfg.paths.stateDir;
+  const shared = cfg.paths.sharedDir;
   return {
-    lock: cfg.orchestrator?.lockFile || path.join(state, 'orchestrator-session'),
-    lease: path.join(state, 'orchestrator-lease.json'),
+    lock: cfg.orchestrator?.lockFile || path.join(shared, 'orchestrator-session'),
+    lease: path.join(shared, 'orchestrator-lease.json'),
     watchPid: path.join(state, 'orchestrator-watch.pid'),
     leaseMinutes: Number(cfg.orchestrator?.leaseMinutes ?? 30),
   };

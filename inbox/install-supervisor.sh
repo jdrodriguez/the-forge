@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install-supervisor.sh [--remove]: installs or removes the orchestrator supervisor (orchestrator-supervisor.mjs) on
 # this machine, every orchestrator.supervisor.everyMinutes (default 5): a launchd job on macOS, a systemd user timer on
-# Linux. Install it on the machine the orchestrator session runs on, since it reads that machine's lease.
+# Linux. Install it on one machine; the lock and lease it reads are in the shared folder.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -20,6 +20,7 @@ STATE_DIR="$("$NODE" "$ROOT/lib/config.mjs" get paths.stateDir)" || { echo "coul
 MIN="$("$NODE" "$ROOT/lib/config.mjs" get orchestrator.supervisor.everyMinutes 2>/dev/null || echo 5)"
 case $MIN in '' | *[!0-9]* | 0) MIN=5 ;; esac
 CONFIG="${AGENT_QUEUE_CONFIG:-$ROOT/agent-queue.config.json}"
+case $CONFIG in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 PATHS="$(dirname "$NODE"):$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 if [ "$(uname)" = Linux ]; then

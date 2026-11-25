@@ -13,6 +13,7 @@
 //   4. Paged within cooldownMinutes: log "cooldown" and stop.
 //   5. Post one page to slack.channel with the bot token in slack.botTokenFile, naming what waits and who holds the lock.
 // One line per run goes to <stateDir>/orchestrator-supervisor.log; the last page is in orchestrator-supervisor.json.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,8 +23,14 @@ import { boardUrl, expired, holder, orchestratorPaths, status } from './orchestr
 
 const ts = (s) => { const t = Date.parse(s); return Number.isNaN(t) ? null : t; };
 
-// waiting(cfg, board, now): [{ minutes, text }] for work waiting waitMinutes or more, oldest first.
-export function waiting(cfg, board, now, waitMin) {
+// An approved PR is open unless gh says otherwise; a failed read keeps it counted.
+const ghOpen = (repo, pr) => {
+  try { return execFileSync('gh', ['pr', 'view', String(pr), '--repo', repo, '--json', 'state', '-q', '.state'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30_000 }).trim() === 'OPEN'; } catch { return true; }
+};
+
+// waiting(cfg, board, now, waitMin, isOpen): [{ minutes, text }] for work waiting waitMinutes or more, oldest first.
+// isOpen(repo, pr) drops an approval whose PR has merged or closed.
+export function waiting(cfg, board, now, waitMin, isOpen = ghOpen) {
   const shared = cfg.paths.sharedDir;
   const mr = new Map();
   let files = [];
@@ -64,7 +71,7 @@ export function waiting(cfg, board, now, waitMin) {
     const sameRepo = (r.repo ?? cfg.github.repo) === cfg.github.repo;
     if (r.merged === true || r.event === 'merged' || (sameRepo && closed.has(pr))) continue;
     const since = ts(r.approvedAt ?? r.at);
-    if (!since) continue;
+    if (!since || now - since < waitMin * 60000 || !isOpen(r.repo ?? cfg.github.repo, pr)) continue;
     const id = sameRepo ? pr : key;
     const prev = items.get(id);
     if (!prev || since < prev.since) items.set(id, { since, text: `PR ${sameRepo ? `#${pr}` : key} approved at ${String(r.head ?? '').slice(0, 10) || 'unknown head'}, not merged` });
@@ -74,7 +81,7 @@ export function waiting(cfg, board, now, waitMin) {
 }
 
 // supervise({ cfg, now, fetchImpl }): one run. Returns the line it logged.
-export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImpl = fetch } = {}) {
+export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImpl = fetch, isOpen = ghOpen } = {}) {
   const p = orchestratorPaths(cfg);
   const sup = cfg.orchestrator?.supervisor ?? {};
   const waitMin = Number(sup.waitMinutes ?? 30);
@@ -92,7 +99,7 @@ export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImp
     const r = await fetchImpl(boardUrl(cfg), { headers: { 'x-board': 'read' }, signal: AbortSignal.timeout(10_000) });
     if (r.ok) board = await r.json();
   } catch { /* unreachable: merge requests stand in */ }
-  const items = waiting(cfg, board, now, waitMin);
+  const items = waiting(cfg, board, now, waitMin, isOpen);
   if (!items.length) return log(`nothing waiting ${waitMin}m+ (board ${board ? 'ok' : 'unreachable'}), no action. ${lease}`);
   const summary = items.map((i) => `${i.text} for ${i.minutes}m`).join('; ');
   if (fs.existsSync(path.join(state, 'supervisor.off'))) return log(`kill switch supervisor.off set: would page. ${items.length} waiting: ${summary}. ${lease}`);
@@ -107,6 +114,7 @@ export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImp
     `No session was started and the lock was not moved (host ${os.hostname().split('.')[0]}). To keep it, wake the lock holder; to change it, run /forge-takeover in the session you choose.`,
     `Next page no sooner than ${cooldownMin} minutes. To stop the supervisor: touch ${path.join(state, 'supervisor.off')}`].join('\n');
   let paged;
+  let sent = false;
   let token = '';
   try { token = fs.readFileSync(cfg.slack?.botTokenFile || path.join(state, 'slack-bot-token'), 'utf8').trim(); } catch { /* none */ }
   if (!token) paged = 'no Slack bot token, page not sent';
@@ -119,12 +127,14 @@ export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImp
         signal: AbortSignal.timeout(20_000),
       });
       const d = await r.json();
+      sent = Boolean(d.ok);
       paged = d.ok ? `paged ${cfg.slack.channelName ?? cfg.slack.channel}` : `Slack refused the page: ${d.error}`;
     } catch {
       paged = 'Slack unreachable';
     }
   }
-  fs.writeFileSync(stateFile, JSON.stringify({ lastActionAt: new Date(now).toISOString(), paged, waiting: summary }));
+  // Only a delivered page starts the cooldown, so a refused one is tried again next run.
+  if (sent) fs.writeFileSync(stateFile, JSON.stringify({ lastActionAt: new Date(now).toISOString(), paged, waiting: summary }));
   return log(`ACTED: ${paged}. ${items.length} waiting: ${summary}. ${lease}`);
 }
 

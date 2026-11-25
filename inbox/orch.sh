@@ -21,6 +21,6 @@ fi
 cwd=$(node "$ROOT/lib/config.mjs" get workspaceCwd 2>/dev/null) || cwd=$HOME
 cd "$cwd" || exit 1
 if [ "$label" = a ]; then exec env -u CLAUDE_CONFIG_DIR claude "/forge-takeover"; fi
-dir="$HOME/.claude-$label"
+dir="${CLAUDE_FLEET_HOME:-$HOME}/.claude-$label"
 [ -d "$dir" ] || { echo "orch: no config folder $dir"; exit 1; }
 exec env CLAUDE_CONFIG_DIR="$dir" claude "/forge-takeover"

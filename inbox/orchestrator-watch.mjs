@@ -12,12 +12,13 @@
 // that fired within a few seconds of the first, then exits 0. A watcher that exits 2 (24 quiet hours) is restarted; one
 // that fails ends the watch with "WATCHER <name> failed". While it runs, <stateDir>/orchestrator-watch.pid names its PID
 // and the session that started it, which the Stop hook (orchestrator-watch-guard.sh) reads. It renews the lease when
-// it starts and when it fires. It stops only the processes it started.
+// it starts and when it fires. It stops only the processes it started. When it started in the lock holder's session
+// and the lock moves to another session, it stops and says so.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, loadConfig } from '../lib/config.mjs';
-import { orchestratorPaths, renew } from './orchestrator.mjs';
+import { holder, orchestratorPaths, renew } from './orchestrator.mjs';
 
 const p = orchestratorPaths(loadConfig());
 const SESSION = process.env.CLAUDE_CODE_SESSION_ID || '';
@@ -75,3 +76,15 @@ function start(w) {
 for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => { stopAll(); process.exit(1); });
 renew(p, SESSION);
 for (const w of WATCHERS) start(w);
+
+// A session that loses the lock stops watching, so its watchers never mark an event seen that the new driver needs.
+const startedAsDriver = SESSION && holder(p) === SESSION;
+if (startedAsDriver) {
+  setInterval(() => {
+    const now = holder(p);
+    if (now && now !== SESSION && !settling) {
+      fired.push({ name: 'takeover', text: `this session lost the orchestrator lock to ${now}; the watcher stopped. Do not re-arm it.` });
+      finish();
+    }
+  }, Number(process.env.FORGE_LOCK_POLL_MS ?? 30000)).unref();
+}

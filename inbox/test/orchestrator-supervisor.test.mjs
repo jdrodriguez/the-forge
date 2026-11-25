@@ -29,13 +29,15 @@ function box({ token = true } = {}) {
   const posts = [];
   let board = { tickets: [] };
   const fetchImpl = async (url, opts = {}) => {
-    if (url.includes('slack.com')) { posts.push({ headers: opts.headers, body: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true }) }; }
+    if (url.includes('slack.com')) { posts.push({ headers: opts.headers, body: JSON.parse(opts.body) }); return { ok: true, json: async () => (slackOk ? { ok: true } : { ok: false, error: 'ratelimited' }) }; }
     if (url.includes('/api/snapshot')) { if (!board) throw new Error('ECONNREFUSED'); return { ok: true, json: async () => board }; }
     throw new Error(`unexpected fetch ${url}`);
   };
-  const run = (now = NOW) => supervise({ cfg, now, fetchImpl });
+  const closedPrs = new Set();
+  let slackOk = true;
+  const run = (now = NOW) => supervise({ cfg, now, fetchImpl, isOpen: (_repo, pr) => !closedPrs.has(String(pr)) });
   const log = () => fs.readFileSync(path.join(stateDir, 'orchestrator-supervisor.log'), 'utf8');
-  return { cfg, p, posts, run, log, stateDir, sharedDir, setBoard: (b) => { board = b; } };
+  return { cfg, p, posts, run, log, stateDir, sharedDir, closedPrs, setBoard: (b) => { board = b; }, setSlack: (ok) => { slackOk = ok; } };
 }
 const askedTicket = (id, pr, minutes, extra = {}) => ({ id, prNumber: pr, status: 'merge-asked', lastProgressAt: ago(minutes), pr: { ci: { overall: 'SUCCESS' } }, ...extra });
 
@@ -116,4 +118,17 @@ test('with no bot token it logs that no page went out', async () => {
   b.setBoard({ tickets: [askedTicket('ENG-6', 106, 55)] });
   assert.match(await b.run(), /ACTED: no Slack bot token, page not sent/);
   assert.equal(b.posts.length, 0);
+});
+
+test('a page Slack refuses starts no cooldown, and an approval of a closed PR does not count', async () => {
+  const b = box();
+  b.setBoard({ tickets: [] });
+  fs.writeFileSync(path.join(b.sharedDir, 'approvals.jsonl'), `${JSON.stringify({ pr: 120, head: 'e'.repeat(40), approvedAt: ago(40) })}\n${JSON.stringify({ pr: 121, head: 'f'.repeat(40), approvedAt: ago(40) })}\n`);
+  b.closedPrs.add('121');
+  b.setSlack(false);
+  assert.match(await b.run(), /ACTED: Slack refused the page: ratelimited\. 1 waiting: PR #120/);
+  b.setSlack(true);
+  assert.match(await b.run(NOW + 5 * 60000), /ACTED: paged/);
+  assert.equal(b.posts.length, 2);
+  assert.doesNotMatch(b.posts[1].body.text, /#121/);
 });
