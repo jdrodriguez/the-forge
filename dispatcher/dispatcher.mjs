@@ -187,24 +187,76 @@ const errText = (e) => String(e?.stderr || e?.message || e).trim().slice(0, 400)
 // --- external systems -------------------------------------------------------------------------------
 
 let lkey;
+// An API answer that never came: a gateway error page ("upstream connect error ..."), a 5xx, a body that is not JSON
+// or no answer at all, after one retry. A tick step that gets one is skipped for this tick (apiStep); any other error
+// stops the tick as before.
+class ApiUnavailable extends Error {}
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const API_RETRY_MS = Number(process.env.DISPATCHER_API_RETRY_MS ?? 3000);
+const shortBody = (text) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
 async function gql(query, variables = {}) {
   // The environment first: over SSH a secrets manager may not reach the keychain, so a remote run passes the key in.
   lkey ??= linearKey(conf);
-  const res = await fetch('https://api.linear.app/graphql', {
-    method: 'POST',
-    headers: { Authorization: lkey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const body = await res.json();
-  if (body.errors) throw new Error(`Linear: ${body.errors[0].message}`);
-  return body.data;
+  // A mutation is sent again only after a gateway status, which means the request never reached Linear; a query after
+  // any failed answer.
+  const mutation = /^\s*mutation\b/.test(query);
+  for (let attempt = 1; ; attempt++) {
+    let res;
+    let text;
+    try {
+      res = await fetch('https://api.linear.app/graphql', {
+        method: 'POST',
+        headers: { Authorization: lkey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      text = await res.text();
+    } catch (e) {
+      if (attempt < 2 && !mutation) {
+        await pause(API_RETRY_MS);
+        continue;
+      }
+      throw new ApiUnavailable(`Linear did not answer (${errText(e)})`);
+    }
+    let body = null;
+    if (!/text\/html/i.test(res.headers.get('content-type') ?? '')) {
+      try {
+        body = JSON.parse(text);
+      } catch { /* not JSON */ }
+    }
+    if (res.status >= 500 || !body || typeof body !== 'object') {
+      if (attempt < 2 && (!mutation || [502, 503, 504].includes(res.status))) {
+        await pause(API_RETRY_MS);
+        continue;
+      }
+      throw new ApiUnavailable(`Linear answered HTTP ${res.status}${body ? '' : ` with no JSON ("${shortBody(text)}")`}`);
+    }
+    if (body.errors) throw new Error(`Linear: ${body.errors[0].message}`);
+    return body.data;
+  }
 }
+
 
 let ghToken;
 function gh(args) {
   ghToken ??= run('gh', ['auth', 'token', '--hostname', 'github.com', '--user', conf.github.user]);
   return run('gh', args, { env: { ...process.env, GH_TOKEN: ghToken } });
+}
+// gh's JSON answer, parsed. A body that is not JSON (a gateway page passed through) is read once more after a short
+// wait, then fails as ApiUnavailable, naming the command.
+function ghJson(args) {
+  for (let attempt = 1; ; attempt++) {
+    const text = gh(args);
+    try {
+      return JSON.parse(text);
+    } catch {
+      if (attempt < 2) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, API_RETRY_MS);
+        continue;
+      }
+      throw new ApiUnavailable(`gh ${args.slice(0, 2).join(' ')} answered with no JSON ("${shortBody(text)}")`);
+    }
+  }
 }
 
 const addLabel = (i, l) => gql('mutation($i:String!,$l:String!){ issueAddLabel(id:$i, labelId:$l){ success } }', { i, l });
@@ -626,8 +678,8 @@ function inboxSweep() {
 // check never hides a real break.
 function laterGreenRun(workflow, sha, repo = DEFAULT_REPO) {
   try {
-    const runs = JSON.parse(gh(['run', 'list', '--repo', repo.github, '--branch', repo.base, '--workflow', workflow, '--event', 'push',
-      '--json', 'headSha,status,conclusion', '--limit', '15']));
+    const runs = ghJson(['run', 'list', '--repo', repo.github, '--branch', repo.base, '--workflow', workflow, '--event', 'push',
+      '--json', 'headSha,status,conclusion', '--limit', '15']);
     return runs.some((r) => r.headSha !== sha && r.status === 'completed' && r.conclusion === 'success'
       && ['ahead', 'identical'].includes(gh(['api', `repos/${repo.github}/compare/${sha}...${r.headSha}`, '--jq', '.status']).trim()));
   } catch {
@@ -642,7 +694,7 @@ async function checkMerged(st) {
     try {
       // Only the runs the merge's push started. A nightly job that lands on this commit, or a manual run (a production
       // promote that refused a SHA, say), says nothing about the merge, and both had paused the queue.
-      runs = JSON.parse(gh(['run', 'list', '--repo', repoOf(t).github, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100']))
+      runs = ghJson(['run', 'list', '--repo', repoOf(t).github, '--commit', t.mergedSha, '--json', 'name,status,conclusion,event', '--limit', '100'])
         .filter((r) => r.event === 'push');
     } catch (e) {
       log(`${id}: could not read main's runs (${errText(e)})`);
@@ -681,19 +733,19 @@ function findPr(t, id) {
   // would skip it. The shared record names it; it is taken while it is still open.
   const carried = !t.prNumber && R.isDefault && engines.marked(id)?.prNumber;
   if (carried) {
-    const p = JSON.parse(gh(['pr', 'view', String(carried), '--repo', R.github, '--json', 'state,headRefName']));
+    const p = ghJson(['pr', 'view', String(carried), '--repo', R.github, '--json', 'state,headRefName']);
     if (p.state === 'OPEN' && p.headRefName === t.branch) t.prNumber = carried;
   }
   if (!t.prNumber) {
-    const list = JSON.parse(gh(['pr', 'list', '--repo', R.github, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']));
+    const list = ghJson(['pr', 'list', '--repo', R.github, '--head', t.branch, '--state', 'all', '--json', 'number,baseRefName,isCrossRepository,createdAt']);
     const since = Date.parse(t.claimedAt ?? t.dispatchedAt ?? 0);
     const mine = list.filter((p) => p.baseRefName === R.base && !p.isCrossRepository && Date.parse(p.createdAt) >= since);
     if (mine.length > 1) throw new Error(`${mine.length} PRs on ${t.branch}; pin one by setting prNumber in state.json`);
     if (!mine.length) return null;
     t.prNumber = mine[0].number;
   }
-  const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json',
-    'number,url,title,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
+  const pr = ghJson(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json',
+    'number,url,title,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']);
   if (pr.headRefName !== t.branch || pr.baseRefName !== R.base) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${R.base} (${id})`);
   // The PR carries its repo, so every later read of it goes to the same one.
   if (!R.isDefault) {
@@ -720,8 +772,8 @@ function greenReason(pr) {
 const isBot = (login) => /\[bot\]$/.test(login ?? '') || login === conf.learning?.reviewBotLogin;
 function threadAuthors(pr) {
   const [owner, name] = ghRepo(pr).split('/');
-  const d = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
-    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']));
+  const d = ghJson(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']);
   return d.data.repository.pullRequest.reviewThreads.nodes.filter((n) => !n.isResolved).map((n) => n.comments?.nodes?.[0]?.author?.login ?? null);
 }
 // Green in a repo whose base branch has a review gate of its own (GitHub reads BLOCKED on every PR until a person
@@ -745,8 +797,8 @@ function greenByChecks(pr, R) {
 }
 function openThreads(pr) {
   const [owner, name] = ghRepo(pr).split('/');
-  const threads = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
-    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']));
+  const threads = ghJson(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']);
   const rt = threads.data.repository.pullRequest.reviewThreads;
   if (rt.totalCount > rt.nodes.length) return 'more than 100 review threads';
   const open = rt.nodes.filter((n) => !n.isResolved).length;
@@ -794,13 +846,15 @@ const clearMergeRequest = (id) => fs.rmSync(path.join(MERGE_REQUESTS, `${id}.jso
 const HEARTBEATS = path.join(SHARED, 'heartbeats');
 const isSentry = (issue) => issue.labels.nodes.some((l) => l.name === L.sentry);
 // The heartbeat also carries this machine's wake queue, so `wake` on any machine can say where a ticket waits, its
-// worktree count (the folders in the worktrees folder of every repo the sweep covers), and, while workerReservePercent
-// is set, its working sessions per Claude account, for the other machines' reserve.
+// worktree count (the folders in the worktrees folder of every repo the sweep covers), every ticket in its state with
+// its status (for the other machines' orphan label check), and, while workerReservePercent is set, its working sessions
+// per Claude account, for the other machines' reserve.
 async function writeHeartbeat(st) {
   if (DRY) return;
   fs.mkdirSync(HEARTBEATS, { recursive: true });
   const wakeQueue = (st.wakeQueue ?? []).map(({ id, since, reason, pool }) => ({ id, since, reason, pool }));
   const beat = { host: HOST, platform: process.platform, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue, worktrees: await worktreeCount(),
+    tickets: Object.fromEntries(Object.entries(st.tickets ?? {}).map(([id, t]) => [id, t.status ?? null])),
     ...(reserving() ? { accountsWorking: accountsWorkingHere() } : {}) };
   fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify(beat)}\n`);
 }
@@ -1323,7 +1377,7 @@ async function settleStuck(st) {
     if (t.status !== 'stuck' || !t.prNumber || (t.stuckCheckedAt && hoursSince(t.stuckCheckedAt) < 1)) continue;
     t.stuckCheckedAt = iso();
     try {
-      const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', repoOf(t).github, '--json', 'state,mergedAt,mergeCommit,url']));
+      const pr = ghJson(['pr', 'view', String(t.prNumber), '--repo', repoOf(t).github, '--json', 'state,mergedAt,mergeCommit,url']);
       if (pr.state === 'MERGED') {
         clearMergeRequest(id);
         Object.assign(t, { status: 'merged', mergedAt: pr.mergedAt, mergedSha: pr.mergeCommit?.oid ?? null, ciChecked: true,
@@ -1869,8 +1923,12 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
 // the human: at teardown at once, in the sweep after atRiskAskDays. dryRun logs what it would do and changes nothing.
 // Neither runs while the dispatcher is paused, and both catch their own errors so a failure never stops the tick.
 const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], rebuildableIgnored: null, clones: 'dry-run',
-  ...(cfg.worktreeCleanup ?? {}) };
-// worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one.
+  keepFolders: null, keptFoldersDir: null, agentWorktrees: null, scanners: null, ...(cfg.worktreeCleanup ?? {}) };
+// worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one. These are the module
+// options the keys set, with the module's defaults for null.
+const wtOpts = (wt) => ({ rebuildable: WT_CFG.rebuildableIgnored, keep: WT_CFG.keepFolders ?? wt.KEEP_FOLDERS,
+  keptDir: WT_CFG.keptFoldersDir ?? wt.KEPT_FOLDERS_DIR, agent: WT_CFG.agentWorktrees ?? wt.AGENT_WORKTREES });
+const wtScanners = (wt) => (Array.isArray(WT_CFG.scanners) ? WT_CFG.scanners : wt.SCANNERS);
 const SWEEP_STATE = path.join(LOCAL, 'worktree-sweep.json');
 const TEARDOWN_TRIES = 3; // ticks a live process may hold the worktree after its worker stops, before the human is asked
 let wtModule = null;
@@ -1899,7 +1957,7 @@ async function teardownFinished(st, workers) {
   let dirs;
   try {
     wt = await wtMod();
-    dirs = wt.processDirs();
+    dirs = wt.processDirs({ scanners: wtScanners(wt) });
   } catch (e) {
     return log(`worktree teardown skipped this tick (${errText(e)})`);
   }
@@ -1958,7 +2016,7 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
     t.teardown = { ...rec, skipped: problem };
     return;
   }
-  const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json', 'number,state,headRefOid'])) : null;
+  const pr = t.prNumber ? ghJson(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json', 'number,state,headRefOid']) : null;
   // A worktree on a live ticket's branch, or naming a live ticket, is never this ticket's to remove.
   const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
   const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
@@ -1984,7 +2042,7 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   const absent = !entry && Boolean(t.branch) && !named.length && !outside.length;
   if (!entry) named.push(...outside);
   const res = entry ? wt.teardownWorktree({ path: entry.path, repo: R.path, base: R.base, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
-    rebuildable: WT_CFG.rebuildableIgnored })
+    ...wtOpts(wt), recheck: () => wt.processDirs({ scanners: wtScanners(wt) }) })
     : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
       : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
   const tries = (t.teardown?.tries ?? 0) + 1;
@@ -2036,6 +2094,7 @@ async function worktreeSweep(st) {
   if (mem.lastRun && hoursSince(mem.lastRun) < WT_CFG.sweepHours && !(mem.dryRun && !dry)) return;
   const atRisk = {};
   const foreign = [];
+  const notices = [];
   let failed = 0;
   let wt;
   try {
@@ -2048,11 +2107,38 @@ async function worktreeSweep(st) {
     const label = `worktree sweep (${path.basename(repo.path)})`;
     try {
       const prs = {};
-      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid']));
-      for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
+      const list = ghJson(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt,isCrossRepository']);
+      // A PR from a fork can carry any branch name, so it never stands for a checkout here.
+      for (const p of list) if (!p.isCrossRepository && (!prs[p.headRefName] || p.number > prs[p.headRefName].number)) prs[p.headRefName] = p;
+      // Each machine keeps its own state, so a ticket can be live here and finished on another machine. GitHub settles
+      // it: a live ticket whose own PR, or a PR from its branch opened since its claim, is merged or closed is not live,
+      // and the mismatch is logged. A merged PR naming it in the title only logs. A branch with no PR of its own is judged
+      // against its ticket's PR. A ticket being claimed is left live.
+      const mine = Object.entries(st.tickets).filter(([, t]) => repoOf(t).github === repo.github && t.status !== 'claiming');
+      const isLive = (id) => live.some(([x]) => x === id);
+      const done = new Map(wt.finishedOnGitHub(mine.map(([id, t]) => ({ id, branch: t.branch ?? null, prNumber: t.prNumber ?? null,
+        since: isLive(id) ? (t.claimedAt ?? null) : null })), list).map((x) => [x.id, x]));
+      for (const [id, t] of mine) {
+        const d = done.get(id);
+        if (!d) continue;
+        // A title is free text, so a live ticket matched only by title stays live; the match is still logged.
+        if (isLive(id) && d.by === 'title') {
+          log(`${label}: ${id} is ${t.status} in this machine's state, and merged PR #${d.pr.number} names it in its title; it stays live here, check it by hand`);
+          done.delete(id);
+          continue;
+        }
+        if (isLive(id)) log(`${label}: ${id} is ${t.status} in this machine's state, but its PR #${d.pr.number} is ${d.pr.state.toLowerCase()} on GitHub; its worktree is judged as finished`);
+        if (t.branch && !prs[t.branch]) prs[t.branch] = d.pr;
+      }
+      const liveHere = live.filter(([id]) => !done.has(id));
       const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry,
-        rebuildable: WT_CFG.rebuildableIgnored, clones: WT_CFG.clones,
-        trashDir: await trashDir(), liveBranches: new Set(live.map(([, t]) => t.branch).filter(Boolean)), liveIds: live.map(([id]) => id) });
+        clones: WT_CFG.clones, ...wtOpts(wt), scanners: wtScanners(wt), trashDir: await trashDir(),
+        liveBranches: new Set(liveHere.map(([, t]) => t.branch).filter(Boolean)), liveIds: liveHere.map(([id]) => id) });
+      // A notice (a rule the repo's setup turns off) is logged once, the first sweep it appears in.
+      for (const n of out.notices ?? []) {
+        if (!(mem.notices ?? []).includes(n)) log(`${label}: ${n}`);
+        notices.push(n);
+      }
       if (out.error) {
         failed += 1;
         log(`${label}: ${out.error}`);
@@ -2062,7 +2148,7 @@ async function worktreeSweep(st) {
       const atRiskNow = out.results.filter((r) => r.atRisk);
       log(`${label}${dry ? ' (dry run, nothing changed)' : ''}: ${n('removed')} ${dry ? 'would be ' : ''}removed, ${n('trashed')} orphan(s) ${dry ? 'would be ' : ''}trashed, ${atRiskNow.length} at risk, ${n('kept') - atRiskNow.length} kept, of ${out.results.length}`);
       for (const r of out.results) if (r.would || r.action !== 'kept' || r.atRisk) log(`  ${r.would ? `would be ${r.would}` : r.action}${r.atRisk ? ' AT RISK' : ''}: ${r.name} [${r.branch ?? '-'}] ${r.reason}`);
-      for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason };
+      for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason, rule: r.rule };
       // A folder in the worktrees folder that is not this repo's (a scratch folder, another repo's worktree) is reported
       // once and left alone. Clones are counted by rule, for the dry run.
       for (const r of out.results.filter((x) => x.foreign)) {
@@ -2083,7 +2169,9 @@ async function worktreeSweep(st) {
     }
   }
   if (failed === repos.length) return;
-  const overdue = Object.entries(atRisk).filter(([, a]) => !a.asked && hoursSince(a.since) > WT_CFG.atRiskAskDays * 24);
+  // An Agent tool worktree with commits on no remote is asked about at once; its reason names the branch. The dispatcher
+  // never pushes it.
+  const overdue = Object.entries(atRisk).filter(([, a]) => !a.asked && (a.rule === 'agent-unpushed' || hoursSince(a.since) > WT_CFG.atRiskAskDays * 24));
   if (overdue.length) {
     const ask = `${overdue.length} worktree(s) on ${HOST} have held work GitHub lacks for over ${WT_CFG.atRiskAskDays} days, with no live ticket or process: ${overdue.map(([p, a]) => `${p} (${a.reason})`).join('; ')}`.slice(0, 1500);
     if (dry) log(`would ask ${HUMAN}: ${ask}`);
@@ -2098,7 +2186,7 @@ async function worktreeSweep(st) {
   }
   if (!DRY) {
     try {
-      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk, foreign }, null, 2)}\n`);
+      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk, foreign, notices }, null, 2)}\n`);
     } catch (e) {
       log(`worktree sweep: could not save its state (${errText(e)})`);
     }
@@ -2998,7 +3086,107 @@ async function labelCheck() {
   }
 }
 
+// A ticket labeled agent-building or agent-stuck that no enabled machine's state holds: nothing will wake it or move it on.
+// This machine's state is read directly, every other one only from its synced heartbeat's tickets. A machine whose
+// heartbeat is missing, carries no tickets (an older dispatcher) or is over ORPHAN_BEAT_MINUTES old is unreadable: it is
+// named once a day, and no ticket is reported that tick, since any of them could be its. Report only: a ticket is logged
+// once a day, and the human is asked once when it has read as held by nobody for over an hour. No queue label is changed.
+const ORPHAN_LABELS = path.join(LOCAL, 'orphan-labels.json');
+// orphanLabels.heartbeatMinutes: how old another machine's heartbeat may be and still count. orphanLabels.askAfterMinutes:
+// how long a ticket reads as held by nobody before the ask, never less than the heartbeat window plus 30 minutes, so a
+// sync stall right after another machine's claim never asks.
+const ORPHAN_CFG = { heartbeatMinutes: 90, askAfterMinutes: 120, ...(cfg.orphanLabels ?? {}) };
+const ORPHAN_BEAT_MINUTES = Number.isFinite(ORPHAN_CFG.heartbeatMinutes) && ORPHAN_CFG.heartbeatMinutes > 0 ? ORPHAN_CFG.heartbeatMinutes : 90;
+const ORPHAN_ASK_MINUTES = Math.max(Number.isFinite(ORPHAN_CFG.askAfterMinutes) ? ORPHAN_CFG.askAfterMinutes : 120, ORPHAN_BEAT_MINUTES + 30);
+async function orphanLabelCheck(st) {
+  let mem = {};
+  try {
+    mem = JSON.parse(fs.readFileSync(ORPHAN_LABELS, 'utf8'));
+  } catch { /* first run */ }
+  const today = iso().slice(0, 10);
+  const save = (data) => {
+    if (DRY) return;
+    try {
+      fs.writeFileSync(ORPHAN_LABELS, `${JSON.stringify(data, null, 2)}\n`);
+    } catch (e) {
+      log(`orphan label check: could not save its state (${errText(e)})`);
+    }
+  };
+  const held = new Set(Object.keys(st.tickets ?? {}));
+  const unreadable = [];
+  const readable = [HOST];
+  for (const host of cfg.enabledHosts.filter((h) => h !== HOST)) {
+    let beat = null;
+    try {
+      beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
+    } catch { /* no heartbeat */ }
+    if (!beat) unreadable.push(`${host} (no heartbeat)`);
+    else if (!beat.tickets || typeof beat.tickets !== 'object') unreadable.push(`${host} (its heartbeat lists no tickets)`);
+    else if (!(hoursSince(beat.at) * 60 <= ORPHAN_BEAT_MINUTES)) unreadable.push(`${host} (heartbeat ${beat.at ?? 'undated'})`);
+    else {
+      readable.push(host);
+      for (const id of Object.keys(beat.tickets)) held.add(id);
+    }
+  }
+  // Every machine sees the same orphans, so only the first machine by name asks.
+  const asker = [...readable].sort()[0] === HOST;
+  if (unreadable.length) {
+    if (mem._unreadableDay !== today) {
+      log(`orphan label check: skipped, unreadable: ${unreadable.join(', ')}`);
+      save({ ...mem, _unreadableDay: today });
+    }
+    return;
+  }
+  let d;
+  try {
+    d = await gql(`query orphanLabels($team:String!,$names:[String!]){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{in:$names}},
+      state:{type:{nin:["completed","canceled"]}}}){ nodes{ identifier state{ name } labels{ nodes{ name } } } } }`, { team: TEAM, names: [L.building, L.stuck] });
+  } catch (e) {
+    return log(`orphan label check could not run (${errText(e)})`);
+  }
+  const next = mem._unreadableDay ? { _unreadableDay: mem._unreadableDay } : {};
+  for (const n of d?.issues?.nodes ?? []) {
+    const id = n.identifier;
+    if (held.has(id)) continue;
+    const labels = (n.labels?.nodes ?? []).map((l) => l.name).filter((l) => l === L.building || l === L.stuck);
+    const rec = { since: mem[id]?.since ?? iso(), loggedDay: mem[id]?.loggedDay ?? null, asked: mem[id]?.asked ?? null };
+    if (rec.loggedDay !== today) {
+      log(`orphan label check: ${id} (${n.state?.name ?? '?'}) is labeled ${labels.join(' and ')}, but no enabled machine's state holds it`);
+      rec.loggedDay = today;
+    }
+    if (asker && !rec.asked && hoursSince(rec.since) * 60 > ORPHAN_ASK_MINUTES) {
+      const ask = `${id} is labeled ${labels.join(' and ')}, but no machine's dispatcher state (${cfg.enabledHosts.join(', ')}) has held it for over an hour, so nothing will wake it or move it on.`;
+      if (DRY) log(`would ask ${HUMAN}: ${ask}`);
+      else {
+        try {
+          askHuman(id, 'blocked', ask, `Check its worker and branch, then re-queue it (${L.ready} on, ${labels.join(' and ')} off) or close it out`, 'it stays as it is');
+          rec.asked = iso();
+        } catch (e) {
+          log(`orphan label check: could not ask about ${id} (${errText(e)})`);
+        }
+      }
+    }
+    next[id] = rec;
+  }
+  save(next);
+}
+
 // --- commands ------------------------------------------------------------------------------------------
+
+// One tick step. An API answer that never came (ApiUnavailable) skips this step for this tick with a log line, and holds
+// new claims for the rest of the tick, since what was skipped may be what a claim relies on. Any other error stops the
+// tick as before.
+let apiDown = null;
+async function apiStep(name, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (!(e instanceof ApiUnavailable)) throw e;
+    apiDown ??= name;
+    log(`${name} skipped this tick: ${e.message}`);
+    return undefined;
+  }
+}
 
 async function tick() {
   if (!cfg.enabledHosts.includes(HOST)) return log(`host ${HOST} is not in enabledHosts, nothing to do`);
@@ -3010,6 +3198,7 @@ async function tick() {
       st.stuckStreak = 0;
       fs.rmSync(STREAK_RESET);
     }
+    apiDown = null;
     const m = await teamMeta();
     if (st.fresh) {
       const orphans = await building();
@@ -3017,11 +3206,11 @@ async function tick() {
         await trip(st, `no state file on ${HOST}, but ${orphans.join(', ')} carry ${L.building}. Check which machine owns them before resuming`);
       }
     }
-    await sendPendingNotice(st);
+    await apiStep('sendPendingNotice', () => sendPendingNotice(st));
     inboxSweep();
-    await reconcileClaims(st, m);
-    await checkMerged(st);
-    await settleStuck(st);
+    await apiStep('reconcileClaims', () => reconcileClaims(st, m));
+    await apiStep('checkMerged', () => checkMerged(st));
+    await apiStep('settleStuck', () => settleStuck(st));
     let workers = null;
     try {
       workers = fleetWorkers();
@@ -3034,17 +3223,19 @@ async function tick() {
     wakeRun.workers = workers;
     loadWakeOverrides(st);
     pruneWakeQueue(st);
-    await advance(st, m, workers);
+    await apiStep('advance', () => advance(st, m, workers));
     pruneWakeQueue(st);
-    await teardownFinished(st, workers);
-    await watchWorkers(st, workers);
-    await watchSignIns(st);
-    await labelCheck();
-    await dispatch(st, m);
-    await sentryTriage();
-    await codexAutoReset(st);
-    await worktreeSweep(st);
-    await writeHeartbeat(st);
+    await apiStep('teardownFinished', () => teardownFinished(st, workers));
+    await apiStep('watchWorkers', () => watchWorkers(st, workers));
+    await apiStep('watchSignIns', () => watchSignIns(st));
+    await apiStep('labelCheck', () => labelCheck());
+    await apiStep('orphanLabelCheck', () => orphanLabelCheck(st));
+    if (apiDown) log(`no new claims this tick: ${apiDown} could not reach an API`);
+    else await apiStep('dispatch', () => dispatch(st, m));
+    await apiStep('sentryTriage', () => sentryTriage());
+    await apiStep('codexAutoReset', () => codexAutoReset(st));
+    await apiStep('worktreeSweep', () => worktreeSweep(st));
+    await apiStep('writeHeartbeat', () => writeHeartbeat(st));
     st.lastTick = iso();
     delete st.lastError;
   } catch (e) {
@@ -3073,9 +3264,15 @@ async function status() {
       console.log(`sentry triage: status unavailable (${errText(e)})`);
     }
   }
-  const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{eq:$ready}},
-    state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
-  console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
+  // Linear is the one read here that needs a secret. Without it (an SSH session that can't reach the secrets manager),
+  // status still lists this machine's tickets.
+  try {
+    const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{eq:$ready}},
+      state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
+    console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
+  } catch (e) {
+    console.log(`queue: unknown, Linear could not be read (${errText(e).split('\n')[0].slice(0, 160)}). This machine's tickets follow.`);
+  }
   // The slots counted the way the tick counts them, and the tickets waiting for one here and on the other machines.
   try {
     const rows = await sessionRows(st);
