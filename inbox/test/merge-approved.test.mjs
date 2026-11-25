@@ -41,7 +41,7 @@ exit 0
 const pr = process.argv[2];
 fs.appendFileSync(process.env.FAKE + '/calls.log', 'premerge ' + pr + '\\n');
 const fail = fs.existsSync(process.env.FAKE + '/premerge-fail-' + pr);
-if (fs.existsSync(process.env.FAKE + '/premerge-takes-lock')) fs.writeFileSync('${state}/orchestrator-session', 'other-session\\n');
+if (fs.existsSync(process.env.FAKE + '/premerge-takes-lock')) fs.writeFileSync('${shared}/orchestrator-session', 'other-session\\n');
 console.log(fail ? 'premerge-check: FAIL (fake)' : 'premerge-check: pass (fake)');
 process.exit(fail ? 1 : 0);
 `);
@@ -49,7 +49,7 @@ process.exit(fail ? 1 : 0);
 fs.appendFileSync(process.env.FAKE + '/calls.log', 'to-verifying ' + process.argv.slice(2).join(' ') + '\\n');
 `);
   fs.writeFileSync(path.join(root, 'inbox/lease.sh'), 'echo "lease $*" >> "$FAKE/calls.log"\n');
-  fs.writeFileSync(path.join(state, 'orchestrator-session'), 'test-driver\n');
+  fs.writeFileSync(path.join(shared, 'orchestrator-session'), 'test-driver\n');
   fs.writeFileSync(path.join(shared, 'main-state.json'), '{"status":"green"}');
   const cfg = { ...EXAMPLE, repoPath: path.join(t, 'repo'), paths: { stateDir: state, sharedDir: shared }, merge: { ...EXAMPLE.merge, ...merge } };
   const configFile = path.join(t, 'config.json');
@@ -450,7 +450,7 @@ test('--repo: a gate that cannot be evaluated stops the merge', () => {
 test('--repo: the driver lock is read again right before the merge', () => {
   const box = site();
   box.site(709, A);
-  box.write('hook.cjs', `module.exports = (a) => { if (a[0] === 'api' && a[1] === 'graphql') require('fs').writeFileSync('${box.state}/orchestrator-session', 'other-session\\n'); };`);
+  box.write('hook.cjs', `module.exports = (a) => { if (a[0] === 'api' && a[1] === 'graphql') require('fs').writeFileSync('${box.shared}/orchestrator-session', 'other-session\\n'); };`);
   box.run(['--repo', SITE, '709']);
   assert.equal(box.rc, 1);
   has(box, 'lost the orchestrator lock');
@@ -506,12 +506,12 @@ test('over 100 review threads holds the PR', () => {
 
 test('a lock that exists but cannot be read refuses every Claude Code session', () => {
   const box = sandbox().pr(150, A);
-  fs.rmSync(path.join(box.state, 'orchestrator-session'));
-  fs.mkdirSync(path.join(box.state, 'orchestrator-session'));
+  fs.rmSync(path.join(box.shared, 'orchestrator-session'));
+  fs.mkdirSync(path.join(box.shared, 'orchestrator-session'));
   box.run(['150']);
   assert.equal(box.rc, 1);
   has(box, 'not the orchestrator');
-  fs.rmdirSync(path.join(box.state, 'orchestrator-session'));
+  fs.rmdirSync(path.join(box.shared, 'orchestrator-session'));
   box.run(['150']);
   assert.equal(box.rc, 0, 'no lock at all means no takeover yet');
 });

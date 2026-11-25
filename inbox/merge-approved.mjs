@@ -23,7 +23,7 @@ const SCALE = Number(process.env.FORGE_SLEEP_SCALE ?? 1);
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms * SCALE);
 const SID = process.env.CLAUDE_CODE_SESSION_ID || '';
 const BY = SID || 'shell';
-const LOCK = cfg.orchestrator?.lockFile || path.join(cfg.paths.stateDir, 'orchestrator-session');
+const LOCK = cfg.orchestrator?.lockFile || path.join(cfg.paths.sharedDir, 'orchestrator-session');
 const LEASE = path.join(ROOT, 'inbox', 'lease.sh');
 const USAGE = 'usage: merge-approved.sh [--repo <owner/name>] <pr>... | --approve <pr> <head> "<note>" | --approved | --all-approved';
 

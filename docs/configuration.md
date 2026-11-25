@@ -23,7 +23,7 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | Key | Example | What it does |
 |---|---|---|
 | `orchestrator.sessionName` | `"Specdesk"` | The pinned Claude Code session that writes specs and watches the queue. Emergency responders message it by this name. |
-| `orchestrator.lockFile` | `null` | The driver lock: the session ID of the one session allowed to approve and merge. merge-approved.sh refuses any other Claude Code session, and reads the lock again right before each merge. A shell outside Claude Code counts as the human and passes. null means <paths.stateDir>/orchestrator-session. |
+| `orchestrator.lockFile` | `null` | The driver lock: the session ID of the one session allowed to approve and merge. merge-approved.sh refuses any other Claude Code session, and reads the lock again right before each merge. A shell outside Claude Code counts as the human and passes. null means <paths.sharedDir>/orchestrator-session, so a takeover on one machine stops the driver on every other. |
 | `orchestrator.approvalsFile` | `null` | The approvals ledger merge-approved.sh writes: one JSON line per approved PR head, closed by a merged line. An approval covers only the exact head it names. null means <paths.sharedDir>/approvals.jsonl, so a session on another machine sees the same approvals. |
 
 ## `paths`
