@@ -1,0 +1,36 @@
+# Publishes the package to npm when a GitHub release is published. It signs in to npm through trusted publishing
+# (GitHub's OIDC token), so no npm token is stored anywhere, and npm records which workflow run built each version.
+# The release's tag must be the package version with a leading v (v0.2.0 for 0.2.0), so a release can't publish a
+# version it doesn't name. The first version was published by hand; npm only lets a package that exists name a
+# trusted publisher.
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@11
+      - name: Check the tag names this version
+        run: |
+          want="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "The release tag is $GITHUB_REF_NAME but package.json says $want." >&2
+            exit 1
+          fi
+      - run: npm test
+      - run: npm publish --provenance --access public

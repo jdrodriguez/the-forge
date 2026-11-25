@@ -7,8 +7,8 @@ command and an interview with Claude:
 npx the-forge setup
 ```
 
-Until the package is published, run it from the repository instead (you need read access to it, and gh signed in):
-`npx github:<owner>/the-forge setup`, or clone it and run `node bin/the-forge.mjs setup --here` in the clone.
+To run the newest code on GitHub instead of the newest release:
+`npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone.
 
 `npm install -g the-forge` and then `the-forge setup` works the same way. Either way, `setup` copies The Forge to
 `~/the-forge` and runs everything from there: npm may clean its cache and replaces a global package on every upgrade,
