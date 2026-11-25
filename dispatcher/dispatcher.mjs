@@ -657,7 +657,7 @@ function findPr(t, id) {
     t.prNumber = mine[0].number;
   }
   const pr = JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', R.github, '--json',
-    'number,url,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
+    'number,url,title,state,isDraft,mergeStateStatus,headRefOid,headRefName,baseRefName,changedFiles,mergeCommit,statusCheckRollup,updatedAt,body']));
   if (pr.headRefName !== t.branch || pr.baseRefName !== R.base) throw new Error(`PR #${pr.number} is ${pr.headRefName} -> ${pr.baseRefName}, expected ${t.branch} -> ${R.base} (${id})`);
   // The PR carries its repo, so every later read of it goes to the same one.
   if (!R.isDefault) {
@@ -1305,6 +1305,25 @@ async function settleStuck(st) {
 }
 
 async function finishMerged(st, m, id, t, pr) {
+  // A bundle lead taken out of its bundle and put back in the queue: when the merged PR's title does not name it and it
+  // is back to agent-ready without agent-building, it leaves this machine's state (the queue skips any ticket in state)
+  // and is left as it is in Linear. Its companions still bundled to the PR are settled as merged.
+  if (t.bundle?.length && typeof pr.title === 'string' && pr.title && !new RegExp(`\\b${id}\\b`, 'i').test(pr.title)) {
+    let names = null;
+    try {
+      names = (await gql('query($id:String!){ issue(id:$id){ labels{ nodes{ name } } } }', { id })).issue.labels.nodes.map((l) => l.name);
+    } catch (e) {
+      log(`${id}: could not read its labels to check whether it left its bundle (${errText(e)})`);
+    }
+    if (names?.includes(L.ready) && !names.includes(L.building)) {
+      clearMergeRequest(id);
+      log(`${id}: its bundle PR #${pr.number} merged without it (not in the title, and back to ${L.ready}), so it leaves this machine's state; its companions are settled as merged`);
+      await settleCompanions(st, m, id, t, 'merged', { pr });
+      delete st.tickets[id];
+      saveState(st);
+      return;
+    }
+  }
   clearMergeRequest(id);
   Object.assign(t, { status: 'merged', mergedAt: iso(), mergedSha: pr.mergeCommit?.oid ?? null });
   st.stuckStreak = 0;
@@ -1314,6 +1333,8 @@ async function finishMerged(st, m, id, t, pr) {
   const iid = await issueId(id);
   await effects(t, id, [
     [`remove agent-building from ${id}`, () => removeLabel(iid, m.label.building)],
+    // A ticket redispatched by hand may carry agent-ready again.
+    [`remove agent-ready from ${id}`, () => removeLabel(iid, m.label.ready)],
     [`move ${id} to Verifying`, () => setState(iid, m.verifying)],
     [`comment the merge on ${id}`, () => comment(iid, `Merged ${pr.url} (agent dispatcher on ${HOST}). Moved to ${STATES.verifying}.`)],
   ]);
@@ -2757,10 +2778,15 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null, say = n
   for (const k of ['stalledSince', 'stuckAt', 'reason']) delete t[k];
   saveState(st);
   log(`${id}: redispatched to ${out.label}/${out.id}${wasStuck ? ' (was stuck)' : ''}`);
-  if (wasStuck) {
+  // Every replacement swaps agent-ready for agent-building the way a claim does, so no other machine claims it again, and
+  // a stuck ticket loses agent-stuck.
+  {
     const m = await teamMeta();
-    await addLabel(issue.id, m.label.building);
-    await removeLabel(issue.id, m.label.stuck);
+    await effects(t, id, [
+      [`add agent-building to ${id}`, () => addLabel(issue.id, m.label.building)],
+      [`remove agent-ready from ${id}`, () => removeLabel(issue.id, m.label.ready)],
+      ...(wasStuck ? [[`remove agent-stuck from ${id}`, () => removeLabel(issue.id, m.label.stuck)]] : []),
+    ]);
   }
   // Companions follow the new worker, back out of stuck when the bundle went stuck with its lead.
   for (const mate of members.slice(1)) {
@@ -2912,6 +2938,23 @@ const engines = makeEngineHooks(() => ({
     markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig, mayWake, newWorkHeld, noteStart }),
 }));
 
+// A read-only list, once a tick, of tickets in Verifying or done that still carry agent-ready or agent-building, for the
+// orchestrator to clean up ticket by ticket. Nothing is changed here.
+async function labelCheck() {
+  let d;
+  try {
+    d = await gql(`query labelCheck($team:String!,$names:[String!],$verifying:String!){ issues(first:100, filter:{team:{key:{eq:$team}},
+      labels:{name:{in:$names}}, or:[{state:{name:{eq:$verifying}}}, {state:{type:{eq:"completed"}}}]}){ nodes{ identifier state{ name } labels{ nodes{ name } } } } }`,
+    { team: TEAM, names: [L.ready, L.building], verifying: STATES.verifying });
+  } catch (e) {
+    return log(`label check could not run (${errText(e)})`);
+  }
+  for (const n of d?.issues?.nodes ?? []) {
+    const stale = (n.labels?.nodes ?? []).map((l) => l.name).filter((l) => l === L.ready || l === L.building);
+    if (n.state?.name && stale.length) log(`label check: ${n.identifier} is ${n.state.name} and still labeled ${stale.join(' and ')}`);
+  }
+}
+
 // --- commands ------------------------------------------------------------------------------------------
 
 async function tick() {
@@ -2953,6 +2996,7 @@ async function tick() {
     await teardownFinished(st, workers);
     await watchWorkers(st, workers);
     await watchSignIns(st);
+    await labelCheck();
     await dispatch(st, m);
     await sentryTriage();
     await codexAutoReset(st);
