@@ -3,9 +3,8 @@
 #
 # Why: a CI review bot runs several review axes and each round costs a push plus
 # roughly ten minutes. Two independent model families reviewing the same diff locally
-# catch most of what the bot would, before the push. See docs/pr-review.md "the right
-# long-term fix is a local pre-push hook that runs the same reviewer prompts the CI
-# review runs".
+# catch most of what the bot would, before the push (docs/pr-review.md, "Before the
+# first push").
 #
 # Usage:
 #   cross-review.sh <worktree-path> [base-ref] [extra-context-file]
