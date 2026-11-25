@@ -26,7 +26,7 @@ function box(other) {
 const fresh = (tickets) => ({ host: 'host-b', at: new Date().toISOString(), tickets });
 const logged = (out) => out.split('\n').filter((l) => /orphan label check: ENG-88/.test(l));
 
-test('a ticket no machine holds is logged once a day, asked about once after an hour, and no label is touched', () => {
+test('a ticket no machine holds is logged once a day, asked about once past the heartbeat window plus 30 minutes, and no label is touched', () => {
   const b = box(fresh({ 'ENG-90': 'building' }));
   const out1 = tick(b);
   assert.equal(new Set(logged(out1)).size, 1, out1);
@@ -36,9 +36,17 @@ test('a ticket no machine holds is logged once a day, asked about once after an 
   b.beat(fresh({ 'ENG-90': 'building' }));
   assert.equal(logged(tick(b)).length, 0, 'logged once a day');
   const memFile = path.join(b.stateDir, 'orphan-labels.json');
-  const mem = JSON.parse(fs.readFileSync(memFile, 'utf8'));
-  mem['ENG-88'].since = new Date(Date.now() - 2 * 3.6e6).toISOString();
-  fs.writeFileSync(memFile, JSON.stringify(mem));
+  const setSince = (minutes) => {
+    const mem = JSON.parse(fs.readFileSync(memFile, 'utf8'));
+    mem['ENG-88'].since = new Date(Date.now() - minutes * 60_000).toISOString();
+    fs.writeFileSync(memFile, JSON.stringify(mem));
+  };
+  // Past the hour but inside heartbeat window plus 30 minutes (120 by default): no ask yet.
+  setSince(100);
+  b.beat(fresh({ 'ENG-90': 'building' }));
+  tick(b);
+  assert.equal(lines(b, 'asks').some((l) => l.includes('ENG-88')), false, 'no ask inside heartbeat window plus 30 minutes');
+  setSince(130);
   b.beat(fresh({ 'ENG-90': 'building' }));
   tick(b);
   b.beat(fresh({ 'ENG-90': 'building' }));
@@ -63,12 +71,35 @@ test('a missing, ticket-less or stale heartbeat makes that machine unreadable, n
   }
 });
 
-test('status prints a note instead of failing when Linear cannot be read, and still lists the tickets', async () => {
+test('status with the secrets command missing prints a note instead of failing, and still lists the tickets', async () => {
   const b = box(fresh({}));
-  const preload = path.join(b.home, 'preload.mjs');
-  fs.writeFileSync(preload, `${fs.readFileSync(preload, 'utf8')}\nglobalThis.fetch = async () => { throw new Error('no key'); };\n`);
+  const cfg = JSON.parse(fs.readFileSync(b.configFile, 'utf8'));
+  cfg.linear = { ...cfg.linear, apiKeyCommand: ['no-such-secrets-cli', 'get', 'LINEAR_API_KEY'] };
+  fs.writeFileSync(b.configFile, JSON.stringify(cfg));
   const { run } = await import('./capacity-sandbox.mjs');
-  const out = run(b, ['status']);
-  assert.match(out, /queue: unknown, Linear could not be read \(no key\)/);
+  const out = run(b, ['status'], { LINEAR_API_KEY: '' });
+  assert.match(out, /queue: unknown, Linear could not be read \(.*no-such-secrets-cli ENOENT/);
   assert.match(out, /ENG-68\s+stuck/);
+});
+
+test('orphanLabels.askAfterMinutes never goes below the heartbeat window plus 30 minutes', () => {
+  const b = box(fresh({ 'ENG-90': 'building' }));
+  const cfg = JSON.parse(fs.readFileSync(b.configFile, 'utf8'));
+  cfg.dispatcher.orphanLabels = { heartbeatMinutes: 60, askAfterMinutes: 10 };
+  fs.writeFileSync(b.configFile, JSON.stringify(cfg));
+  tick(b);
+  const memFile = path.join(b.stateDir, 'orphan-labels.json');
+  const setSince = (minutes) => {
+    const mem = JSON.parse(fs.readFileSync(memFile, 'utf8'));
+    mem['ENG-88'].since = new Date(Date.now() - minutes * 60_000).toISOString();
+    fs.writeFileSync(memFile, JSON.stringify(mem));
+  };
+  setSince(80);
+  b.beat(fresh({ 'ENG-90': 'building' }));
+  tick(b);
+  assert.equal(lines(b, 'asks').some((l) => l.includes('ENG-88')), false, '80 minutes is under 60 + 30');
+  setSince(95);
+  b.beat(fresh({ 'ENG-90': 'building' }));
+  tick(b);
+  assert.equal(lines(b, 'asks').filter((l) => l.includes('ENG-88 is labeled')).length, 1);
 });

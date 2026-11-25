@@ -12,7 +12,7 @@ import { capBox, lines, tick } from './capacity-sandbox.mjs';
 const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, ...GIT_ENV }, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-function sweepBox({ prNumber = null } = {}) {
+function sweepBox({ prNumber = null, agentWorktrees = null } = {}) {
   const probe = capBox();
   const root = fs.realpathSync(probe.home);
   const origin = path.join(root, 'origin.git');
@@ -39,7 +39,7 @@ function sweepBox({ prNumber = null } = {}) {
   const gd = git(agent, 'rev-parse', '--absolute-git-dir');
   for (const f of ['HEAD', 'index', 'logs/HEAD']) fs.utimesSync(path.join(gd, f), old, old);
   const box = capBox({ config: { repoPath: repo }, dispatcher: { worktreeCleanup: { enabled: true, dryRun: false, sweepHours: 24, atRiskAskDays: 7,
-    keptFoldersDir: path.join(root, 'kept') } },
+    keptFoldersDir: path.join(root, 'kept'), ...(agentWorktrees ? { agentWorktrees } : {}) } },
   tickets: { 'ENG-57': { status: 'merge-asked', account: 'b', workerId: 'gone', branch: 'agent/eng-57', prNumber, claimedAt: '2026-11-24T00:00:00Z' } } });
   // The sweep's `gh pr list --state all` sees one merged bundle PR naming ENG-57; every other gh call goes to the sandbox's stub.
   const prList = JSON.stringify([{ number: 4705, state: 'MERGED', headRefName: 'agent/eng-50', headRefOid: 'f'.repeat(40),
@@ -80,4 +80,17 @@ test('an Agent tool worktree with commits on no remote is kept and asked about a
   fs.writeFileSync(memFile, JSON.stringify(mem));
   tick(box, GIT_ENV);
   assert.equal(lines(box, 'asks').filter((l) => /agent-ab95bd8f5c32d2c61/.test(l)).length, 1, 'asked once');
+});
+
+test('a sweep notice (no remote of the Agent tool rule\'s name) is logged once, not every sweep', () => {
+  const { box } = sweepBox({ agentWorktrees: { remote: 'upstream' } });
+  const first = tick(box, GIT_ENV);
+  const memFile = path.join(box.stateDir, 'worktree-sweep.json');
+  const mem = JSON.parse(fs.readFileSync(memFile, 'utf8'));
+  mem.lastRun = new Date(Date.now() - 25 * 3.6e6).toISOString();
+  fs.writeFileSync(memFile, JSON.stringify(mem));
+  const second = tick(box, GIT_ENV);
+  const line = /the Agent tool worktree rule is off: this repo has no remote named upstream/;
+  assert.match(first, line);
+  assert.doesNotMatch(second, line);
 });

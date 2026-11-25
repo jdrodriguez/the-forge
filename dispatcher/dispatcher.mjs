@@ -2042,6 +2042,7 @@ async function worktreeSweep(st) {
   if (mem.lastRun && hoursSince(mem.lastRun) < WT_CFG.sweepHours && !(mem.dryRun && !dry)) return;
   const atRisk = {};
   const foreign = [];
+  const notices = [];
   let failed = 0;
   let wt;
   try {
@@ -2081,6 +2082,11 @@ async function worktreeSweep(st) {
       const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry,
         clones: WT_CFG.clones, ...wtOpts(wt), scanners: wtScanners(wt), trashDir: await trashDir(),
         liveBranches: new Set(liveHere.map(([, t]) => t.branch).filter(Boolean)), liveIds: liveHere.map(([id]) => id) });
+      // A notice (a rule the repo's setup turns off) is logged once, the first sweep it appears in.
+      for (const n of out.notices ?? []) {
+        if (!(mem.notices ?? []).includes(n)) log(`${label}: ${n}`);
+        notices.push(n);
+      }
       if (out.error) {
         failed += 1;
         log(`${label}: ${out.error}`);
@@ -2128,7 +2134,7 @@ async function worktreeSweep(st) {
   }
   if (!DRY) {
     try {
-      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk, foreign }, null, 2)}\n`);
+      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk, foreign, notices }, null, 2)}\n`);
     } catch (e) {
       log(`worktree sweep: could not save its state (${errText(e)})`);
     }
@@ -3034,7 +3040,12 @@ async function labelCheck() {
 // named once a day, and no ticket is reported that tick, since any of them could be its. Report only: a ticket is logged
 // once a day, and the human is asked once when it has read as held by nobody for over an hour. No queue label is changed.
 const ORPHAN_LABELS = path.join(LOCAL, 'orphan-labels.json');
-const ORPHAN_BEAT_MINUTES = 90;
+// orphanLabels.heartbeatMinutes: how old another machine's heartbeat may be and still count. orphanLabels.askAfterMinutes:
+// how long a ticket reads as held by nobody before the ask, never less than the heartbeat window plus 30 minutes, so a
+// sync stall right after another machine's claim never asks.
+const ORPHAN_CFG = { heartbeatMinutes: 90, askAfterMinutes: 120, ...(cfg.orphanLabels ?? {}) };
+const ORPHAN_BEAT_MINUTES = Number.isFinite(ORPHAN_CFG.heartbeatMinutes) && ORPHAN_CFG.heartbeatMinutes > 0 ? ORPHAN_CFG.heartbeatMinutes : 90;
+const ORPHAN_ASK_MINUTES = Math.max(Number.isFinite(ORPHAN_CFG.askAfterMinutes) ? ORPHAN_CFG.askAfterMinutes : 120, ORPHAN_BEAT_MINUTES + 30);
 async function orphanLabelCheck(st) {
   let mem = {};
   try {
@@ -3091,7 +3102,7 @@ async function orphanLabelCheck(st) {
       log(`orphan label check: ${id} (${n.state?.name ?? '?'}) is labeled ${labels.join(' and ')}, but no enabled machine's state holds it`);
       rec.loggedDay = today;
     }
-    if (asker && !rec.asked && hoursSince(rec.since) > 1) {
+    if (asker && !rec.asked && hoursSince(rec.since) * 60 > ORPHAN_ASK_MINUTES) {
       const ask = `${id} is labeled ${labels.join(' and ')}, but no machine's dispatcher state (${cfg.enabledHosts.join(', ')}) has held it for over an hour, so nothing will wake it or move it on.`;
       if (DRY) log(`would ask ${HUMAN}: ${ask}`);
       else {

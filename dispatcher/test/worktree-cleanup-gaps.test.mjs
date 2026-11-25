@@ -440,3 +440,52 @@ test("an Agent tool worktree counts a commit left only as a reflog entry's old c
   const r = sweepRepo({ repo, prs: {}, dirs: [], fetch: false }).results.find((x) => x.name === 'agent-4444444444444444d');
   assert.equal(r.rule, 'agent-unpushed', r.reason);
 });
+
+test('kept notes: a link inside the folder stays a link, a link out to a file is copied as content, one out to a folder is skipped with a note', () => {
+  const { repo, kept, root } = setup();
+  const { wt, head } = worktree(repo, 'links');
+  const notes = path.join(wt, '.claude/notes');
+  fs.mkdirSync(path.join(notes, 'sub'), { recursive: true });
+  fs.writeFileSync(path.join(notes, 'sub/a.md'), 'a');
+  fs.symlinkSync('sub/a.md', path.join(notes, 'inside'));
+  fs.writeFileSync(path.join(root, 'outside.txt'), 'from outside');
+  fs.symlinkSync(path.join(root, 'outside.txt'), path.join(notes, 'to-file'));
+  fs.symlinkSync(root, path.join(notes, 'to-dir'));
+  const r = teardownWorktree({ path: wt, repo, pr: merged(head), dirs: [], keptDir: kept });
+  assert.equal(r.action, 'removed', r.reason);
+  assert.match(r.reason, /to-file pointed outside \.claude\/notes, so its target's content was copied/);
+  assert.match(r.reason, /to-dir skipped: a link to/);
+  const dest = path.join(kept, 'app', 'links', today, '.claude/notes');
+  assert.equal(fs.readlinkSync(path.join(dest, 'inside')), 'sub/a.md');
+  assert.equal(fs.lstatSync(path.join(dest, 'to-file')).isFile(), true);
+  assert.equal(fs.readFileSync(path.join(dest, 'to-file'), 'utf8'), 'from outside');
+  assert.equal(fs.existsSync(path.join(dest, 'to-dir')), false);
+});
+
+test('a kept-notes destination that resolves inside the checkout is refused before anything is made there', () => {
+  const { repo, root } = setup();
+  const { wt, head } = worktree(repo, 'lands-inside');
+  fs.mkdirSync(path.join(wt, '.claude/notes'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.claude/notes/a.md'), 'a');
+  fs.mkdirSync(path.join(wt, '.claude/stash'), { recursive: true });
+  // keptFoldersDir itself is a link into the checkout, and nothing below it exists yet.
+  const kd = path.join(root, 'kd-link');
+  fs.symlinkSync(path.join(wt, '.claude/stash'), kd);
+  const r = teardownWorktree({ path: wt, repo, pr: merged(head), dirs: [], keptDir: kd });
+  assert.equal(r.rule, 'keep-copy', r.reason);
+  assert.deepEqual(fs.readdirSync(path.join(wt, '.claude/stash')), [], 'nothing was made inside the checkout');
+});
+
+test('the Agent tool rule reads the remote agentWorktrees.remote names; with no such remote it is off and the sweep says so', () => {
+  const { repo } = setup();
+  const { wt } = worktree(repo, 'agent-5555555555555555e', 'agent/eng-11-x');
+  age(wt, 30);
+  const off = sweepRepo({ repo, prs: {}, dirs: [], fetch: false, agent: { remote: 'upstream' }, dryRun: true });
+  assert.equal(off.results.find((x) => x.name === 'agent-5555555555555555e').rule, 'agent-unknown');
+  assert.deepEqual(off.notices, ['the Agent tool worktree rule is off: this repo has no remote named upstream (worktreeCleanup.agentWorktrees.remote)']);
+  git(repo, 'remote', 'add', 'upstream', git(repo, 'remote', 'get-url', 'origin'));
+  git(repo, 'fetch', '-q', 'upstream');
+  const on = sweepRepo({ repo, prs: {}, dirs: [], fetch: false, agent: { remote: 'upstream' }, dryRun: true });
+  assert.deepEqual(on.notices, []);
+  assert.equal(on.results.find((x) => x.name === 'agent-5555555555555555e').would, 'removed');
+});

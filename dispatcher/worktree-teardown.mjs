@@ -29,6 +29,7 @@
 // work GitHub lacks and nothing is using it, transient when a later try may succeed (a live process), foreign for a folder
 // that is not this repo's, and would when a dry run held back a removal or a move.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,8 +46,9 @@ export const REBUILDABLE_IGNORED = ['node_modules', 'dist', 'build', 'out', '.tu
 // Folders that may hold an agent's notes: copied out, then the checkout may go. worktreeCleanup.keepFolders replaces it.
 export const KEEP_FOLDERS = ['.claude/notes'];
 export const KEPT_FOLDERS_DIR = path.join(os.homedir(), '.cache/forge/kept-notes');
-// Claude Code's Agent tool names its worktrees agent-<hex>. worktreeCleanup.agentWorktrees overrides either key.
-export const AGENT_WORKTREES = { pattern: '^agent-[0-9a-f]{8,}$', idleDays: 7 };
+// Claude Code's Agent tool names its worktrees agent-<hex>. worktreeCleanup.agentWorktrees overrides any key; remote is
+// the remote whose branches count as saved.
+export const AGENT_WORKTREES = { pattern: '^agent-[0-9a-f]{8,}$', idleDays: 7, remote: 'origin' };
 // A process whose parent's command line holds one of these is the board's or the dispatcher's own scan.
 export const SCANNERS = ['/queue-board/', '/dispatcher.mjs'];
 const READ_ONLY_GIT = new Set(['status', 'rev-parse', 'rev-list', 'log', 'ls-files', 'merge-base', 'cat-file', 'for-each-ref', 'show-ref', 'diff']);
@@ -430,10 +432,12 @@ function idleDays(dir) {
 const agentRule = (cfg) => {
   const c = { ...AGENT_WORKTREES, ...(cfg && typeof cfg === 'object' ? cfg : {}) };
   if (cfg === false || c.enabled === false) return null;
+  const idleDays = Number.isFinite(c.idleDays) && c.idleDays >= 0 ? c.idleDays : AGENT_WORKTREES.idleDays;
+  const remote = typeof c.remote === 'string' && /^[\w.-]+$/.test(c.remote) ? c.remote : AGENT_WORKTREES.remote;
   try {
-    return { rx: new RegExp(c.pattern), idleDays: Number.isFinite(c.idleDays) && c.idleDays >= 0 ? c.idleDays : AGENT_WORKTREES.idleDays };
+    return { rx: new RegExp(c.pattern), idleDays, remote };
   } catch {
-    return { rx: new RegExp(AGENT_WORKTREES.pattern), idleDays: AGENT_WORKTREES.idleDays };
+    return { rx: new RegExp(AGENT_WORKTREES.pattern), idleDays, remote };
   }
 };
 
@@ -487,7 +491,7 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
     const rule = agentRule(agent);
     if (rule?.rx.test(path.basename(wtPath))) {
       const on = meta.branch ?? 'a detached HEAD';
-      if (!savedRefs) return { ...meta, verdict: 'keep', rule: 'agent-unknown', reason: `Agent tool worktree on ${on}; the branches GitHub has could not be read` };
+      if (!savedRefs) return { ...meta, verdict: 'keep', rule: 'agent-unknown', reason: `Agent tool worktree on ${on}; the branches on remote ${rule.remote} could not be read` };
       const unsaved = unsavedCount(wtPath, savedRefs);
       if (unsaved) return { ...meta, verdict: 'keep', atRisk: true, rule: 'agent-unpushed', reason: `Agent tool worktree on ${on}: ${unsaved} commit(s) on no branch GitHub has` };
       const idle = idleDays(wtPath);
@@ -540,28 +544,66 @@ export function classifyClone(dir, { repo, base = 'main', prs = {}, dirs, liveBr
   return { verdict: 'trash', branch, rule: 'trash', keep: keptFolders(dir, keep), reason: `PR #${pr.number} ${pr.state.toLowerCase()}, nothing in it beyond GitHub` };
 }
 
+// Where a path lands once every part of it that exists is resolved: the real path of its nearest existing folder, then
+// the rest. A destination is judged by this before anything is made.
+function landsAt(p) {
+  let head = path.resolve(p);
+  const rest = [];
+  while (!fs.existsSync(head) && path.dirname(head) !== head) {
+    rest.unshift(path.basename(head));
+    head = path.dirname(head);
+  }
+  return path.join(key(head), ...rest);
+}
+const sha256 = (p) => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 // Copies a checkout's keep folders to <root>/<repo name>/<checkout name>/<date>/ (a -2, -3 suffix when that exists) and
-// checks every file arrived with its size. Returns the folder; throws when a copy is missing or short.
+// checks every file by its SHA-256. A symlink stays a link only when it points inside its keep folder; one pointing
+// outside is copied as its target's content when that is a file, and skipped with a note otherwise. Returns
+// { dest, notes }; throws when the destination resolves inside the checkout or a copy does not match.
 export function copyKeptFolders(dir, repo, folders, root = KEPT_FOLDERS_DIR, date = new Date().toLocaleDateString('en-CA')) {
   const base = path.join(String(root).replace(/^~(?=\/|$)/, os.homedir()), path.basename(repo), path.basename(dir));
   let dest = path.join(base, date);
   for (let i = 2; fs.existsSync(dest); i++) dest = path.join(base, `${date}-${i}`);
-  const files = (top) => fs.readdirSync(top, { recursive: true, withFileTypes: true }).filter((e) => !e.isDirectory())
-    .map((e) => {
-      const p = path.join(e.parentPath ?? e.path, e.name);
-      return `${path.relative(top, p)}:${fs.lstatSync(p).size}`;
-    }).sort();
+  // The copies must land outside the checkout, followed through any symlink on the way: checked before mkdir, and
+  // again after, in case a link appeared meanwhile.
+  if (within(landsAt(dest), key(dir))) throw new Error(`${dest} resolves inside the checkout`);
   fs.mkdirSync(dest, { recursive: true });
-  // The copies must land outside the checkout, followed through any symlink on the way.
   if (within(key(dest), key(dir))) throw new Error(`${dest} resolves inside the checkout`);
+  const notes = [];
+  const copyFile = (src, dst, st) => {
+    fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
+    fs.utimesSync(dst, st.atime, st.mtime);
+    if (sha256(src) !== sha256(dst)) throw new Error(`the copy of ${path.relative(dir, src)} in ${dst} does not match`);
+  };
   for (const rel of folders) {
-    const from = path.join(dir, rel);
-    const to = path.join(dest, rel);
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true, errorOnExist: true, force: false });
-    if (files(from).join('\n') !== files(to).join('\n')) throw new Error(`the copy of ${rel} in ${to} does not match`);
+    const top = key(path.join(dir, rel));
+    const walk = (from, to) => {
+      fs.mkdirSync(to, { recursive: true });
+      for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+        const src = path.join(from, e.name);
+        const dst = path.join(to, e.name);
+        const shown = path.relative(dir, src);
+        const st = fs.lstatSync(src);
+        if (st.isDirectory()) walk(src, dst);
+        else if (st.isSymbolicLink()) {
+          const link = fs.readlinkSync(src);
+          if (within(key(path.resolve(path.dirname(src), link)), top)) {
+            fs.symlinkSync(link, dst);
+            if (fs.readlinkSync(dst) !== link) throw new Error(`the copy of the link ${shown} does not match`);
+            continue;
+          }
+          const target = fs.statSync(src, { throwIfNoEntry: false });
+          if (target?.isFile()) {
+            copyFile(src, dst, target);
+            notes.push(`${shown} pointed outside ${rel}, so its target's content was copied`);
+          } else notes.push(`${shown} skipped: a link to ${link}, outside ${rel}`);
+        } else if (st.isFile()) copyFile(src, dst, st);
+        else notes.push(`${shown} skipped: not a file`);
+      }
+    };
+    walk(path.join(dir, rel), path.join(dest, rel));
   }
-  return dest;
+  return { dest, notes };
 }
 
 // Moves a folder into the dated trash folder. Across volumes a rename fails (EXDEV), so it copies, then removes.
@@ -628,7 +670,8 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
   let copied = '';
   if (!held && c.keep?.length) {
     try {
-      copied = `; ${c.keep.join(', ')} copied to ${copyKeptFolders(wtPath, repo, c.keep, keptDir)}`;
+      const { dest, notes } = copyKeptFolders(wtPath, repo, c.keep, keptDir);
+      copied = `; ${c.keep.join(', ')} copied to ${dest}${notes.length ? ` (${notes.slice(0, 3).join('; ')}${notes.length > 3 ? '; ...' : ''})` : ''}`;
     } catch (e) {
       return { action: 'kept', reason: `copying ${c.keep.join(', ')} out failed (${errText(e)})`, ...extra, rule: 'keep-copy' };
     }
@@ -726,10 +769,21 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
   const ids = liveIds.map((id) => id.toUpperCase());
   // A worker often pushes HEAD to a branch named unlike its local one, so a PR whose head is this HEAD counts as its PR.
   const byHead = new Map(Object.values(prs).filter((p) => p.headRefOid).map((p) => [p.headRefOid, p]));
-  // The branches GitHub has, read once and only when an Agent tool worktree needs them.
+  // The branches the remote has, read once and only when an Agent tool worktree needs them. A repo with no remote of that
+  // name turns the rule off, and the sweep says so in notices.
   const rule = agentRule(agent);
+  const notices = [];
+  let remoteThere = true;
+  if (rule) {
+    try {
+      remoteThere = git(repo, ['remote']).split('\n').includes(rule.remote);
+    } catch {
+      remoteThere = false;
+    }
+    if (!remoteThere) notices.push(`the Agent tool worktree rule is off: this repo has no remote named ${rule.remote} (worktreeCleanup.agentWorktrees.remote)`);
+  }
   let saved;
-  const savedRefs = () => (saved === undefined ? (saved = savedRemoteRefs(repo)) : saved);
+  const savedRefs = () => (saved === undefined ? (saved = remoteThere ? savedRemoteRefs(repo, rule.remote) : null) : saved);
   for (const w of listed) {
     // Only worktrees in the worktrees folder: one a person made elsewhere is theirs.
     if (!within(key(w.path), folderReal) || key(w.path) === folderReal) continue;
@@ -753,5 +807,5 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
     results.push({ path: f, name: path.basename(f), branch: null,
       ...teardownWorktree({ path: f, repo, base, dirs, listed, dryRun, trashDir, rebuildable, clones, prs, liveBranches, liveIds, keep, keptDir, agent, recheck }) });
   }
-  return { results };
+  return { results, notices };
 }
