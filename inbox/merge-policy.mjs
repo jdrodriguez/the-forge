@@ -28,7 +28,12 @@ export function isDriver(lockFile, sessionId) {
 
 const nameOf = (c) => c.name ?? c.context ?? '';
 const resultOf = (c) => c.conclusion || c.state || '';
-const timeOf = (c) => { const t = Date.parse(c.startedAt || c.completedAt || ''); return t > 0 ? t : 0; };
+// A run that has not finished or has no time ranks newest, so a queued re-run is never hidden behind an older pass.
+const timeOf = (c) => {
+  if (c.status && c.status !== 'COMPLETED') return Infinity;
+  const t = Date.parse(c.startedAt || c.completedAt || '');
+  return t > 0 ? t : Infinity;
+};
 const OK = ['SUCCESS', 'SKIPPED', 'NEUTRAL'];
 
 // checkGate(pr, policy): null when the PR may merge, else why not. pr carries mergeStateStatus and statusCheckRollup

@@ -617,3 +617,10 @@ test('the lock is read again before a direct enqueue when gh left no queue entry
   assert.equal(box.enqueued(), '596', 'no direct enqueue');
   assert.match(box.calls(), /gh pr merge 596 --repo your-org\/your-app --disable-auto/);
 });
+
+test('a queued re-run with no time ranks newer than an older pass, so the PR waits', () => {
+  const box = sandbox().pr(597, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS', startedAt: at(1) }, { name: 'build', status: 'QUEUED', conclusion: null }, { name: 'Claude Code Review', conclusion: 'SUCCESS' }] }));
+  box.run(['597']);
+  has(box, 'STOP at #597: check(s) failing or pending: build');
+  assert.equal(box.enqueued(), '');
+});
