@@ -222,6 +222,15 @@ function headSaved(dir, head, pr, base) {
   const onBase = ok(dir, ['rev-parse', '--verify', '-q', baseRef]) && git(dir, ['rev-list', '--count', `${baseRef}..HEAD`]) === '0';
   return { inPrHead, onBase };
 }
+// Whether a clone is one ext-worker.sh made from this repo: its objects/info/alternates names this repo's objects folder.
+function engineClone(dir, repo) {
+  try {
+    const objects = key(path.join(repo, '.git/objects'));
+    return fs.readFileSync(path.join(dir, '.git/objects/info/alternates'), 'utf8').split('\n').some((l) => l.trim() && key(l.trim()) === objects);
+  } catch {
+    return false;
+  }
+}
 // Whether a folder in the worktrees folder was a worktree of this repo whose metadata is gone: its .git file names a
 // gitdir under this repo's worktrees metadata that no longer exists.
 function formerWorktree(dir, repo) {
@@ -253,7 +262,10 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
   // lsof and /proc report real paths, compared the same way.
   const used = dirs.some((d) => within(key(d), here));
   if (!entry) {
-    if (fs.statSync(path.join(wtPath, '.git'), { throwIfNoEntry: false })?.isDirectory()) {
+    if (fs.lstatSync(path.join(wtPath, '.git'), { throwIfNoEntry: false })?.isDirectory()) {
+      // An engine clone borrows this repo's objects through objects/info/alternates (ext-worker-clone.sh); any other
+      // clone is not this repo's to touch.
+      if (!engineClone(wtPath, repo)) return { verdict: 'keep', foreign: true, rule: 'foreign', reason: "a clone that does not borrow this repo's objects; left alone" };
       return { verdict: 'keep', clone: true, rule: 'clone', reason: 'a standalone clone (how ext-worker.sh runs Codex and Grok), not a worktree' };
     }
     if (entries.some((w) => within(key(w.path), here) && key(w.path) !== here)) return { verdict: 'keep', rule: 'contains-worktree', reason: 'a tracked worktree sits inside it' };

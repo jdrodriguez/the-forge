@@ -172,7 +172,8 @@ test('a former worktree git no longer tracks goes to the Trash; a scratch folder
   for (const f of fs.readdirSync(orphan)) fs.utimesSync(path.join(orphan, f), old, old);
   fs.utimesSync(orphan, old, old);
   const clone = path.join(base, 'codex-clone');
-  fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(clone, '.git/objects/info'), { recursive: true });
+  fs.writeFileSync(path.join(clone, '.git/objects/info/alternates'), `${path.join(repo, '.git/objects')}\n`);
   fs.utimesSync(clone, old, old);
   const fresh = path.join(base, 'just-made');
   fs.mkdirSync(fresh);
@@ -399,7 +400,7 @@ test('a tracked worktree reached through a symlinked or differently cased path i
 // A standalone clone in the worktrees folder, as ext-worker.sh makes for an engine: its own .git, its branch pushed.
 function clone(repo, name, branch = name) {
   const dir = path.join(repo, '.claude/worktrees', name);
-  execFileSync('git', ['clone', '-q', git(repo, 'remote', 'get-url', 'origin'), dir], { stdio: 'ignore' });
+  execFileSync('git', ['clone', '-q', '--reference', repo, git(repo, 'remote', 'get-url', 'origin'), dir], { stdio: 'ignore' });
   git(dir, 'checkout', '-q', '-b', branch);
   const head = commit(dir, `${name}.txt`);
   git(dir, 'push', '-q', 'origin', `HEAD:refs/heads/${branch}`);
@@ -438,4 +439,17 @@ test('an engine clone with an open PR, local changes or unpushed commits is kept
   const rules = Object.fromEntries(sweepRepo({ repo, prs, trashDir: trash, dirs: [], clones: 'on' }).results.map((r) => [r.name, r.rule]));
   assert.deepEqual([rules.open, rules.dirty, rules.ahead], ['pr-open', 'dirty', 'unpushed']);
   assert.ok(fs.existsSync(open.dir) && fs.existsSync(dirty.dir) && fs.existsSync(ahead.dir));
+});
+
+test("a clone that does not borrow this repo's objects is another repo's: reported and left, even with clones on", () => {
+  const { repo, trash } = setup();
+  const dir = path.join(repo, '.claude/worktrees', 'someone-else');
+  execFileSync('git', ['clone', '-q', git(repo, 'remote', 'get-url', 'origin'), dir], { stdio: 'ignore' });
+  git(dir, 'checkout', '-q', '-b', 'agent/eng-9');
+  const head = commit(dir, 'x.txt');
+  ageAll(dir);
+  const r = sweepRepo({ repo, prs: { 'agent/eng-9': merged(head) }, trashDir: trash, dirs: [], clones: 'on' }).results.find((x) => x.name === 'someone-else');
+  assert.equal(r.action, 'kept');
+  assert.equal(r.foreign, true);
+  assert.ok(fs.existsSync(dir));
 });
