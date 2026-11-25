@@ -134,3 +134,13 @@ test('an ended worker on a conflicting PR waits when its replacement cannot star
   assert.equal(state(box).tickets['ENG-9'].status, 'building');
   assert.match(state(box).tickets['ENG-9'].note, /waiting to start its replacement/);
 });
+
+test('orchestrator events go to orchestrator.eventsDir when it is set', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'events-'));
+  const box = capBox({ config: { orchestrator: { sessionName: 'Specdesk', eventsDir: dir } }, dispatcher: { longRunNoticeHours: 1 },
+    tickets: { 'ENG-9': live(9) }, prs: { 9: { branch: 'agent/eng-9', merge: 'BLOCKED' } }, ps: [busy(9)] });
+  tick(box);
+  const files = fs.readdirSync(dir);
+  assert.equal(files.length, 1);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'))).sort(), ['at', 'host', 'id', 'link', 'subtitle', 'text']);
+});

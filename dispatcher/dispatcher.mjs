@@ -157,9 +157,9 @@ async function notify(subtitle, text, { id = null, link = null, progress = false
 }
 
 // Notices the orchestrator must act on (a ticket still going, an account signed out, an engine PR merged without
-// review) also go to <sharedDir>/orchestrator-events/, one JSON file each. inbox/dispatcher-events-watch.sh wakes the
-// orchestrator session on each new file. Best effort: never throws.
-const ORCH_EVENTS = path.join(SHARED, 'orchestrator-events');
+// review) also go to orchestrator.eventsDir (default <sharedDir>/orchestrator-events), one JSON file each, for the
+// orchestrator's events watcher. Best effort: never throws.
+const ORCH_EVENTS = conf.orchestrator?.eventsDir || path.join(SHARED, 'orchestrator-events');
 function tellOrchestrator(subtitle, text, id, link) {
   try {
     fs.mkdirSync(ORCH_EVENTS, { recursive: true });

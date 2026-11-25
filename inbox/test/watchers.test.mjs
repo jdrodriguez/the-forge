@@ -47,15 +47,3 @@ test('merge-request-watch.sh reports each new merge request once per head', () =
   assert.equal(r.stdout, 'MERGE ENG-7 PR #70 head 0123456789 from host-a: migrations/1_x.sql\n');
   assert.equal(fs.readFileSync(path.join(box.stateDir, 'merge-requests-seen'), 'utf8'), 'ENG-7 0123456789abcdef\n');
 });
-
-test('dispatcher-events-watch.sh reports each new orchestrator event once, and skips old ones', () => {
-  const box = sandbox();
-  const dir = path.join(box.shared, 'orchestrator-events');
-  fs.mkdirSync(dir);
-  fs.writeFileSync(path.join(dir, 'a.json'), JSON.stringify({ at: '2020-01-01T00:00:00Z', host: 'host-a', id: 'ENG-1', subtitle: 'old', text: 'x' }));
-  fs.writeFileSync(path.join(dir, 'b.json'), JSON.stringify({ at: new Date().toISOString(), host: 'host-a', id: 'ENG-7', subtitle: 'ENG-7 still going', text: '9h in', link: 'https://example.com/pull/7' }));
-  const r = run(box, 'dispatcher-events-watch.sh');
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout, 'EVENT ENG-7 on host-a: ENG-7 still going: 9h in (https://example.com/pull/7)\n');
-  assert.equal(fs.readFileSync(path.join(box.stateDir, 'orchestrator-events-seen'), 'utf8'), 'a.json\nb.json\n');
-});
