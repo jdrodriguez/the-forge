@@ -365,6 +365,43 @@ test('a board ticket found by branch (pr.number, no prNumber) owns its PR, and a
   assert.deepEqual(r.byPr[66].checks.pending, ['quality']);
 });
 
+test('a queued re-run with no start time ranks newer than an older pass', async () => {
+  const checks = [
+    { __typename: 'CheckRun', name: 'quality', status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: ago(30), completedAt: ago(29) },
+    { __typename: 'CheckRun', name: 'quality', status: 'QUEUED', conclusion: null, startedAt: null, completedAt: null },
+    { __typename: 'StatusContext', context: VERDICT, state: 'SUCCESS', startedAt: ago(1) },
+  ];
+  const { byPr } = await run({ prs: [pr(67, { checks })], approvals: [{ pr: 67, head: A }] });
+  assert.deepEqual(byPr[67].checks.pending, ['quality']);
+  assert.doesNotMatch(byPr[67].actions.join(';'), /re-queue/);
+});
+
+test('a PR the detail read missed, or one with over 100 threads, is never ready', async () => {
+  const fake = fakeGh([pr(68)], {});
+  const gh = (args) => (args[1] === 'graphql' ? { data: { repository: {} } } : fake.gh(args));
+  const box = tmpBox();
+  fs.writeFileSync(box.s.owners, '[]');
+  const data = await collect(box.s, { gh, board: async () => ({ tickets: [] }) });
+  const row = classifyAll(data, NOW, box.s).rows[0];
+  assert.match(row.actions.join(';'), /its details could not be read/);
+  assert.doesNotMatch(row.actions.join(';'), /needs first orchestrator review/);
+  const many = { ...detail(69), reviewThreads: { pageInfo: { hasNextPage: true }, nodes: [] } };
+  const { byPr, report } = await run({ prs: [pr(69)], details: { 69: many } });
+  assert.match(byPr[69].actions.join(';'), /over 100 review threads/);
+  assert.doesNotMatch(byPr[69].actions.join(';'), /needs first orchestrator review/);
+  assert.match(report, /over 100 open threads/);
+});
+
+test('a review still running after CI finished gets a next step', async () => {
+  const checks = [
+    { __typename: 'CheckRun', name: 'quality', status: 'COMPLETED', conclusion: 'SUCCESS', completedAt: ago(1) },
+    { __typename: 'CheckRun', name: VERDICT, status: 'IN_PROGRESS', conclusion: null, startedAt: ago(0.2) },
+  ];
+  const { byPr } = await run({ prs: [pr(71, { checks })] });
+  assert.equal(byPr[71].checks.verdict, 'pending');
+  assert.match(byPr[71].actions.join(';'), /review running/);
+});
+
 // ---- the CLI, with a fake gh on PATH and the board on a local port ----------------------------------------------
 const execFileP = promisify(execFile);
 

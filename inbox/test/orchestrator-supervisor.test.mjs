@@ -1,6 +1,7 @@
 // orchestrator-supervisor.mjs, in process, with a throwaway state folder and a fake fetch standing in for the board and
 // Slack. Nothing reaches the network.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,7 @@ const NOW = Date.parse('2026-01-01T12:00:00Z');
 const ago = (m) => new Date(NOW - m * 60000).toISOString();
 const TOKEN = 'xoxb-fake-token';
 
-function box({ token = true } = {}) {
+function box({ token = true, slack = true } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-'));
   const stateDir = path.join(home, 'state');
   const sharedDir = path.join(home, 'shared');
@@ -23,13 +24,14 @@ function box({ token = true } = {}) {
   fs.mkdirSync(stateDir);
   if (token) fs.writeFileSync(path.join(stateDir, 'bot-token'), `${TOKEN}\n`);
   const cfg = { ...EXAMPLE, paths: { stateDir, sharedDir }, slack: { ...EXAMPLE.slack, botTokenFile: path.join(stateDir, 'bot-token') },
-    orchestrator: { ...EXAMPLE.orchestrator, lockFile: null, approvalsFile: null, leaseMinutes: 30, supervisor: { waitMinutes: 30, cooldownMinutes: 60 } } };
+    orchestrator: { ...EXAMPLE.orchestrator, lockFile: null, approvalsFile: null, leaseMinutes: 30, supervisor: { waitMinutes: 30, repageMinutes: [60, 240] } } };
+  if (!slack) delete cfg.slack;
   const p = orchestratorPaths(cfg);
   take(p, 'S1');
   const posts = [];
   let board = { tickets: [] };
   const fetchImpl = async (url, opts = {}) => {
-    if (url.includes('slack.com')) { posts.push({ headers: opts.headers, body: JSON.parse(opts.body) }); return { ok: true, json: async () => (slackOk ? { ok: true } : { ok: false, error: 'ratelimited' }) }; }
+    if (url.includes('slack.com')) { posts.push({ headers: opts.headers, body: JSON.parse(opts.body) }); return slackOk === 429 ? { ok: false, status: 429, json: async () => ({}) } : { ok: true, status: 200, json: async () => (slackOk ? { ok: true } : { ok: false, error: 'ratelimited' }) }; }
     if (url.includes('/api/snapshot')) { if (!board) throw new Error('ECONNREFUSED'); return { ok: true, json: async () => board }; }
     throw new Error(`unexpected fetch ${url}`);
   };
@@ -72,14 +74,25 @@ test('an expired lease with green work waiting pages once, names it, and never m
   assert.ok(!fs.readFileSync(path.join(b.stateDir, 'orchestrator-supervisor.json'), 'utf8').includes(TOKEN));
 });
 
-test('cooldown: no second page within cooldownMinutes, another after it', async () => {
+test('one outage gets the first page, one at 60 and one at 240 minutes, then none until the lease is renewed', async () => {
   const b = box();
   b.setBoard({ tickets: [askedTicket('ENG-6', 106, 55)] });
+  const at = (m) => NOW + m * 60000;
   await b.run();
-  assert.match(await b.run(NOW + 59 * 60000), /^cooldown: paged 59m ago/);
+  assert.match(await b.run(at(59)), /^cooldown: page 2 is due 60m after the first \(59m so far\)/);
   assert.equal(b.posts.length, 1);
-  await b.run(NOW + 61 * 60000);
+  await b.run(at(61));
   assert.equal(b.posts.length, 2);
+  assert.match(await b.run(at(200)), /^cooldown: page 3 is due 240m/);
+  await b.run(at(241));
+  assert.equal(b.posts.length, 3);
+  assert.match(b.posts[2].body.text, /This is the last page for this outage/);
+  assert.match(await b.run(at(600)), /^page cap reached for this outage \(3 sent\)/);
+  assert.equal(b.posts.length, 3);
+  renew(b.p, 'S1', at(601));
+  assert.match(await b.run(at(602)), /^lease current/);
+  await b.run(at(700));
+  assert.equal(b.posts.length, 4, 'a new outage pages again');
 });
 
 test('the kill switch only logs', async () => {
@@ -128,7 +141,30 @@ test('a page Slack refuses starts no cooldown, and an approval of a closed PR do
   b.setSlack(false);
   assert.match(await b.run(), /ACTED: Slack refused the page: ratelimited\. 1 waiting: PR #120/);
   b.setSlack(true);
+  assert.match(await b.run(NOW + 2 * 60000), /^backing off after a refused page/);
   assert.match(await b.run(NOW + 5 * 60000), /ACTED: paged/);
   assert.equal(b.posts.length, 2);
   assert.doesNotMatch(b.posts[1].body.text, /#121/);
+});
+
+test('an HTTP 429 counts as a refusal, and the backoff doubles', async () => {
+  const b = box();
+  b.setBoard({ tickets: [askedTicket('ENG-6', 106, 55)] });
+  b.setSlack(429);
+  assert.match(await b.run(), /Slack refused the page: ratelimited/);
+  await b.run(NOW + 5 * 60000);
+  assert.match(await b.run(NOW + 12 * 60000), /^backing off after a refused page/, 'second wait is 10 minutes');
+});
+
+test('a config with no slack section reports Slack as not configured', async () => {
+  const b = box({ slack: false });
+  b.setBoard({ tickets: [askedTicket('ENG-6', 106, 55)] });
+  assert.match(await b.run(), /ACTED: Slack not configured \(no slack\.channel\), page not sent/);
+  assert.equal(b.posts.length, 0);
+});
+
+test('install-supervisor.sh quotes values for systemd and escapes them for the plist', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'inbox/install-supervisor.sh'), 'utf8').split('\n').filter((l) => /^(sq|xe)\(\)/.test(l)).join('\n');
+  const r = spawnSync('bash', ['-c', `${src}\nsq 'HOME=/a b/"c"\\d'; echo; xe '/x & <y>'`], { encoding: 'utf8' });
+  assert.equal(r.stdout, '"HOME=/a b/\\"c\\"\\\\d"\n/x &amp; &lt;y&gt;');
 });

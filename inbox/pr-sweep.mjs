@@ -119,8 +119,10 @@ export function readChecks(rollup, required, s) {
   for (const c of rollup ?? []) {
     const name = c.name ?? c.context;
     if (!name) continue;
-    const t = ms(c.completedAt) || ms(c.startedAt);
     const result = c.__typename === 'StatusContext' ? c.state : c.status === 'COMPLETED' ? c.conclusion : 'PENDING';
+    // A run that has not finished, or has no time, ranks newer than any finished one, so a queued re-run is never
+    // hidden behind yesterday's pass.
+    const t = (PENDING.has(result) ? 0 : ms(c.completedAt) || ms(c.startedAt)) || Infinity;
     const prev = latest.get(name);
     if (!prev || t >= prev.t) latest.set(name, { name, result, t });
   }
@@ -137,7 +139,7 @@ export function readChecks(rollup, required, s) {
   let lastCheckAt = 0;
   for (const name of req) if (!isReview(name) && !latest.has(name)) pending.push(name);
   for (const c of latest.values()) {
-    if (!s.ignoreActivity.some((rx) => rx.test(c.name))) lastCheckAt = Math.max(lastCheckAt, c.t);
+    if (!s.ignoreActivity.some((rx) => rx.test(c.name)) && c.t !== Infinity) lastCheckAt = Math.max(lastCheckAt, c.t);
     if (isReview(c.name) || s.supportChecks.includes(c.name)) continue;
     if (FAIL.has(c.result)) (req.has(c.name) ? failing : failingOther).push(c.name);
     else if (PENDING.has(c.result)) pending.push(c.name);
@@ -148,7 +150,7 @@ export function readChecks(rollup, required, s) {
 // ---- reads -------------------------------------------------------------------------------------------------------
 const PR_FIELDS = `number mergeable mergeStateStatus headRefOid
   mergeQueueEntry{state position enqueuedAt}
-  reviewThreads(first:100){nodes{isResolved}}
+  reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}
   commits(last:1){nodes{commit{committedDate}}}
   pushes: timelineItems(itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT], last:1){nodes{... on HeadRefForcePushedEvent{createdAt}}}
   ejections: timelineItems(itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT], last:10){nodes{... on RemovedFromMergeQueueEvent{createdAt reason}}}
@@ -225,6 +227,8 @@ function workerName(t) {
 
 export function classifyPr(pr, ctx, now, s) {
   const { details, required, snapshot, owners, approvals, mergeRequests } = ctx;
+  // A PR the detail read did not return is unknown, and unknown is never ready.
+  const unread = !details.has(pr.number);
   const d = details.get(pr.number) ?? {};
   const head = d.headRefOid ?? pr.headRefOid;
   const state = d.mergeStateStatus && d.mergeStateStatus !== 'UNKNOWN' ? d.mergeStateStatus : pr.mergeStateStatus ?? 'UNKNOWN';
@@ -233,7 +237,7 @@ export function classifyPr(pr, ctx, now, s) {
   const checks = pr.headRefOid && d.headRefOid && pr.headRefOid !== d.headRefOid
     ? { failing: [], failingOther: [], pending: ['checks for the new head'], verdict: 'pending', lastCheckAt: 0 }
     : readChecks(pr.statusCheckRollup, required, s);
-  const threads = (d.reviewThreads?.nodes ?? []).filter((t) => !t.isResolved).length;
+  const threads = d.reviewThreads?.pageInfo?.hasNextPage ? Infinity : (d.reviewThreads?.nodes ?? []).filter((t) => !t.isResolved).length;
   const inQueue = !!d.mergeQueueEntry;
   const lastPush = Math.max(ms(d.commits?.nodes?.[0]?.commit?.committedDate), ms(d.pushes?.nodes?.[0]?.createdAt));
   const ejections = (d.ejections?.nodes ?? []).filter((e) => e?.createdAt);
@@ -284,7 +288,7 @@ export function classifyPr(pr, ctx, now, s) {
   } else if (staleFor >= s.staleH) bucket = 'OWNED BUT STALE';
 
   const ownerNames = [...ownerList, ...staleOwners].map((o) => (typeof o === 'string' ? o : o.who));
-  const row = { number: pr.number, title: pr.title, ticket, state, head, checks, threads, inQueue, ejections, lastEject, approvedCurrent, lastApproved, idleH, pushH, staleFor, owners: ownerNames, hints, bucket };
+  const row = { number: pr.number, title: pr.title, ticket, state, head, checks, threads, unread, inQueue, ejections, lastEject, approvedCurrent, lastApproved, idleH, pushH, staleFor, owners: ownerNames, hints, bucket };
   row.actions = bucket === 'OK' ? [] : actionsFor(row, mergeRequests.get(pr.number), now, s);
   return row;
 }
@@ -296,11 +300,13 @@ export function actionsFor(r, mergeRequest, now, s) {
   if (!r.inQueue && r.ejections.length) a.push(`ejected from the merge queue ${r.ejections.length}x, last for ${r.lastEject.reason ?? '?'} ${hrs((now - ms(r.lastEject.createdAt)) / H)} ago`);
   if (r.checks.failing.length) a.push(`fix failing check ${r.checks.failing.slice(0, 4).join(', ')}`);
   if (r.checks.verdict === 'failure') a.push(`address the review findings (${review} failed on this head)`);
-  if (r.threads) a.push(`answer ${r.threads} unresolved thread${r.threads === 1 ? '' : 's'}`);
+  if (r.unread) a.push('its details could not be read (gh): check it by hand');
+  if (r.threads === Infinity) a.push('over 100 review threads: check them by hand');
+  else if (r.threads) a.push(`answer ${r.threads} unresolved thread${r.threads === 1 ? '' : 's'}`);
   const ciDone = !r.checks.pending.length;
   if (r.checks.verdict === 'missing' && ciDone) a.push(`no ${review} on this head: re-request the review`);
   if (!r.checks.failing.length && r.checks.failingOther.length) a.push(`non-required check failing: ${r.checks.failingOther.slice(0, 3).join(', ')}`);
-  const clean = r.state !== 'DIRTY' && !r.checks.failing.length && r.checks.verdict === 'success' && !r.threads;
+  const clean = !r.unread && r.state !== 'DIRTY' && !r.checks.failing.length && r.checks.verdict === 'success' && !r.threads;
   const mergeable = ['CLEAN', 'HAS_HOOKS', 'UNSTABLE'].includes(r.state);
   if (clean && ciDone && !mergeable) a.push(`merge state ${r.state}: see what blocks it before queueing`);
   else if (clean && ciDone) {
@@ -310,6 +316,7 @@ export function actionsFor(r, mergeRequest, now, s) {
     else a.push('needs first orchestrator review');
   }
   if (!ciDone && !a.length) a.push(`CI running (${r.checks.pending.length} pending): check back after it finishes`);
+  if (ciDone && r.checks.verdict === 'pending' && !a.length) a.push('review running: check back after it finishes');
   for (const h of r.hints) {
     if (h.kind === 'idle' && h.waiting) a.push(`${h.t.id}'s worker waits on ${s.human}'s answer: answer it or take the PR over`);
     else if (h.kind === 'ended') a.push(`${h.t.id}'s worker ended (${h.t.workerState}): re-dispatch or take it over`);
@@ -335,8 +342,9 @@ const BUCKETS = ['APPROVED BUT NOT MOVING', 'NO OWNER', 'OWNED BUT STALE'];
 
 function line(r) {
   const owner = r.owners.length ? r.owners.join('; ') : `none${r.hints.length ? ` (${r.hints.map((h) => h.text).join('; ')})` : ''}`;
+  const threads = r.threads === Infinity ? 'over 100' : r.threads;
   const appr = r.approvedCurrent ? 'current head approved' : r.lastApproved ? `approved head ${sha8(r.lastApproved.head)} is not current` : 'never approved';
-  return `- #${r.number}${r.ticket ? ` ${r.ticket}` : ''} [${r.state}] owner: ${owner} | push ${hrs(r.pushH)} ago, activity ${hrs(r.idleH)} ago | review ${r.checks.verdict}, ${r.threads} open thread${r.threads === 1 ? '' : 's'}, ${appr} -> ${r.actions.join('; ')}`;
+  return `- #${r.number}${r.ticket ? ` ${r.ticket}` : ''} [${r.state}] owner: ${owner} | push ${hrs(r.pushH)} ago, activity ${hrs(r.idleH)} ago | review ${r.checks.verdict}, ${threads} open thread${r.threads === 1 ? '' : 's'}, ${appr} -> ${r.actions.join('; ')}`;
 }
 
 export function render(result, now, s) {

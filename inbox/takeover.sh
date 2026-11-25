@@ -34,8 +34,7 @@ echo "===== approved heads not yet merged (merge the current ones with: merge-ap
 bash "$INBOX/merge-approved.sh" --approved
 echo
 
-pid=$(node -e 'try { const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.kill(d.pid, 0); console.log(`${d.pid} ${d.session === process.argv[2] ? "mine" : "other"}`); } catch {}' \
-  "$(node "$ROOT/lib/config.mjs" get paths.stateDir)/orchestrator-watch.pid" "$me")
+pid=$(node "$INBOX/orchestrator.mjs" watcher "$me")
 case "$pid" in
   *mine) echo "WATCHER: this session's watcher is running (PID ${pid% *})." ;;
   *other) echo "WATCHER: a watcher another session started is running (PID ${pid% *}). It wakes only that session, so arm your own." ;;

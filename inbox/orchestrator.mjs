@@ -13,7 +13,9 @@
 //   orchestrator.mjs expired [minutes]   exit 0 when the lease is older than minutes (default orchestrator.leaseMinutes),
 //                                        missing, or held by a session that lost the lock; exit 1 while it is current
 //   orchestrator.mjs take <session>      move the lock to the session, logging the change to <lockFile>.log
+//   orchestrator.mjs watcher [session]   "<pid> mine|other" when the watcher in the PID file is running
 //   orchestrator.mjs guard               the Stop hook: reads the hook's JSON on stdin (orchestrator-watch-guard.sh)
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,16 +70,17 @@ export function readLease(p, now = Date.now()) {
   }
 }
 
+// A lease renewed "in the future" (clock skew between machines) counts as expired, never as current forever.
 export function expired(p, minutes = p.leaseMinutes, now = Date.now()) {
   const l = readLease(p, now);
-  return !l || l.session !== holder(p) || l.ageMin >= minutes;
+  return !l || l.session !== holder(p) || l.ageMin < 0 || l.ageMin >= minutes;
 }
 
 export function status(p, now = Date.now()) {
   const lock = holder(p);
   const l = readLease(p, now);
   if (!l) return `lease: none (lock holder: ${lock || 'none'})`;
-  const state = l.session !== lock ? `expired (lock moved to ${lock || 'none'})` : l.ageMin >= p.leaseMinutes ? 'expired' : 'current';
+  const state = l.session !== lock ? `expired (lock moved to ${lock || 'none'})` : l.ageMin < 0 ? 'expired (renewed in the future: clock skew)' : l.ageMin >= p.leaseMinutes ? 'expired' : 'current';
   return `lease: holder ${l.session}, renewed ${l.renewedAt}, age ${l.ageMin}m, ${state}`;
 }
 
@@ -92,18 +95,29 @@ export function take(p, session, who = '') {
   return prev;
 }
 
-// The live watcher this session started, if any: the PID file names the session that started the watcher, and a
-// watcher wakes only that session, so a watcher another session started does not count.
-export function ownWatcher(p, session) {
+// A process's start time as ps prints it, or '' when it is not running. A PID together with its start time names one
+// process, so a PID reused after a reboot never passes for the watcher.
+export function procStart(pid) {
+  try {
+    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+}
+export const alive = (pid, started) => Boolean(pid && started) && procStart(pid) === started;
+
+// The watcher named in the PID file, when it is running: { pid, session, mine }. A watcher wakes only the session that
+// started it, so only one this session started counts for it.
+export function liveWatcher(p, session) {
   try {
     const d = JSON.parse(fs.readFileSync(p.watchPid, 'utf8'));
-    if (d.session !== session) return null;
-    process.kill(d.pid, 0);
-    return d.pid;
+    if (!alive(d.pid, d.started)) return null;
+    return { pid: d.pid, session: d.session, mine: Boolean(session) && d.session === session };
   } catch {
     return null;
   }
 }
+export const ownWatcher = (p, session) => (liveWatcher(p, session)?.mine ? liveWatcher(p, session).pid : null);
 
 // guard(p, input): the Stop hook's answer, or '' to let the stop through. Only the lock holder is held, and only once
 // per stop (stop_hook_active), so a watcher that cannot start never traps the session.
@@ -132,6 +146,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   } else if (cmd === 'take' && arg) {
     const prev = take(p, arg, `${os.userInfo().username}@${os.hostname().split('.')[0]}, ${process.env.CLAUDE_CODE_ENTRYPOINT ?? 'unknown app'}`);
     console.log(prev === arg ? `DRIVER: this session (${arg}) already holds the orchestrator role.` : `DRIVER: this session (${arg}) is now the orchestrator. Previous driver: ${prev || 'none'}.`);
+  } else if (cmd === 'watcher') {
+    const w = liveWatcher(p, arg);
+    if (w) console.log(`${w.pid} ${w.mine ? 'mine' : 'other'}`);
   } else if (cmd === 'guard') {
     let input = {};
     try { input = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { /* no input: let the stop through */ }

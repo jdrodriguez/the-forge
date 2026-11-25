@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // orchestrator-supervisor.mjs: pages the human in Slack when work has waited on the orchestrator and no session is
 // driving. It never starts a session and never moves the driver lock: only the human picks the orchestrator.
-// install-supervisor.sh runs it every orchestrator.supervisor.everyMinutes on the orchestrator's machine, outside any
-// session, so it keeps working when the driver's account hits a limit.
+// install-supervisor.sh runs it every orchestrator.supervisor.everyMinutes on one machine, outside any session, so it
+// keeps working when the driver's account hits a limit.
 //
 // Each run, in order:
 //   1. The lease is current (orchestrator.leaseMinutes): log "lease current" and stop.
@@ -10,7 +10,8 @@
 //      waiting on the human (its age from its merge request's "at"), and an approved head in the ledger with no
 //      merged line after it. With the board unreachable, the merge request files stand in. None: log and stop.
 //   3. <stateDir>/supervisor.off exists: log what it would have done and stop.
-//   4. Paged within cooldownMinutes: log "cooldown" and stop.
+//   4. One outage gets the first page and one at each of repageMinutes after it, then nothing until a driver renews
+//      the lease. A page Slack refused or rate limited is retried after 5 minutes, doubling to an hour.
 //   5. Post one page to slack.channel with the bot token in slack.botTokenFile, naming what waits and who holds the lock.
 // One line per run goes to <stateDir>/orchestrator-supervisor.log; the last page is in orchestrator-supervisor.json.
 import { execFileSync } from 'node:child_process';
@@ -80,19 +81,23 @@ export function waiting(cfg, board, now, waitMin, isOpen = ghOpen) {
     .map((i) => ({ minutes: Math.floor((now - i.since) / 60000), text: i.text })).filter((i) => i.minutes >= waitMin);
 }
 
-// supervise({ cfg, now, fetchImpl }): one run. Returns the line it logged.
+// supervise({ cfg, now, fetchImpl, isOpen }): one run. Returns the line it logged.
 export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImpl = fetch, isOpen = ghOpen } = {}) {
   const p = orchestratorPaths(cfg);
   const sup = cfg.orchestrator?.supervisor ?? {};
   const waitMin = Number(sup.waitMinutes ?? 30);
-  const cooldownMin = Number(sup.cooldownMinutes ?? 60);
+  const repage = (sup.repageMinutes ?? [60, 240]).map(Number);
   const state = cfg.paths.stateDir;
   const logFile = path.join(state, 'orchestrator-supervisor.log');
   const stateFile = path.join(state, 'orchestrator-supervisor.json');
   fs.mkdirSync(state, { recursive: true });
   const log = (msg) => { fs.appendFileSync(logFile, `${new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z')} ${msg}\n`); return msg; };
   const lease = status(p, now);
-  if (!expired(p, p.leaseMinutes, now)) return log(`lease current, no action. ${lease}`);
+  // A current lease ends the outage: the next one pages from the start again.
+  if (!expired(p, p.leaseMinutes, now)) {
+    fs.rmSync(stateFile, { force: true });
+    return log(`lease current, no action. ${lease}`);
+  }
 
   let board = null;
   try {
@@ -103,21 +108,33 @@ export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImp
   if (!items.length) return log(`nothing waiting ${waitMin}m+ (board ${board ? 'ok' : 'unreachable'}), no action. ${lease}`);
   const summary = items.map((i) => `${i.text} for ${i.minutes}m`).join('; ');
   if (fs.existsSync(path.join(state, 'supervisor.off'))) return log(`kill switch supervisor.off set: would page. ${items.length} waiting: ${summary}. ${lease}`);
-  let last = 0;
-  try { last = JSON.parse(fs.readFileSync(stateFile, 'utf8')).lastActionAt; } catch { /* never paged */ }
-  const since = Math.floor((now - (Date.parse(last) || 0)) / 60000);
-  if (since < cooldownMin) return log(`cooldown: paged ${since}m ago. Still ${items.length} waiting: ${summary}. ${lease}`);
+
+  // One outage gets the first page, then one at each of repageMinutes after it, then nothing until a driver returns.
+  // A page Slack refused or rate limited is retried after 5 minutes, doubling to an hour.
+  let st = {};
+  try { st = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { /* no outage yet */ }
+  const pages = st.pages ?? 0;
+  if (st.retryAt && now < Date.parse(st.retryAt)) return log(`backing off after a refused page until ${st.retryAt}. ${items.length} waiting: ${summary}. ${lease}`);
+  if (pages > repage.length) return log(`page cap reached for this outage (${pages} sent). Still ${items.length} waiting: ${summary}. ${lease}`);
+  if (pages > 0) {
+    const dueMin = repage[pages - 1];
+    const sinceFirst = Math.floor((now - Date.parse(st.firstPageAt)) / 60000);
+    if (sinceFirst < dueMin) return log(`cooldown: page ${pages + 1} is due ${dueMin}m after the first (${sinceFirst}m so far). Still ${items.length} waiting: ${summary}. ${lease}`);
+  }
 
   const lock = holder(p) || 'none';
+  const next = pages < repage.length ? `Next page at ${repage[pages]} minutes after the first, if still idle.` : 'This is the last page for this outage.';
   const text = [`*Orchestrator idle.* ${lease} Lock holder: ${lock}.`, `*Waiting on the orchestrator (${items.length}):*`,
     ...items.map((i) => `- ${i.text}, waiting ${i.minutes}m`),
     `No session was started and the lock was not moved (host ${os.hostname().split('.')[0]}). To keep it, wake the lock holder; to change it, run /forge-takeover in the session you choose.`,
-    `Next page no sooner than ${cooldownMin} minutes. To stop the supervisor: touch ${path.join(state, 'supervisor.off')}`].join('\n');
+    `${next} To stop the supervisor: touch ${path.join(state, 'supervisor.off')}`].join('\n');
   let paged;
   let sent = false;
+  let refused = false;
   let token = '';
   try { token = fs.readFileSync(cfg.slack?.botTokenFile || path.join(state, 'slack-bot-token'), 'utf8').trim(); } catch { /* none */ }
-  if (!token) paged = 'no Slack bot token, page not sent';
+  if (!cfg.slack?.channel) paged = 'Slack not configured (no slack.channel), page not sent';
+  else if (!token) paged = 'no Slack bot token, page not sent';
   else {
     try {
       const r = await fetchImpl('https://slack.com/api/chat.postMessage', {
@@ -126,15 +143,22 @@ export async function supervise({ cfg = loadConfig(), now = Date.now(), fetchImp
         body: JSON.stringify({ channel: cfg.slack.channel, text, unfurl_links: false, unfurl_media: false }),
         signal: AbortSignal.timeout(20_000),
       });
-      const d = await r.json();
+      const d = r.status === 429 ? { ok: false, error: 'ratelimited' } : await r.json();
       sent = Boolean(d.ok);
+      refused = !d.ok;
       paged = d.ok ? `paged ${cfg.slack.channelName ?? cfg.slack.channel}` : `Slack refused the page: ${d.error}`;
     } catch {
       paged = 'Slack unreachable';
+      refused = true;
     }
   }
-  // Only a delivered page starts the cooldown, so a refused one is tried again next run.
-  if (sent) fs.writeFileSync(stateFile, JSON.stringify({ lastActionAt: new Date(now).toISOString(), paged, waiting: summary }));
+  if (sent) {
+    fs.writeFileSync(stateFile, JSON.stringify({ firstPageAt: st.firstPageAt ?? new Date(now).toISOString(), pages: pages + 1, lastActionAt: new Date(now).toISOString(), paged, waiting: summary }));
+  } else if (refused) {
+    const refusals = (st.refusals ?? 0) + 1;
+    const wait = Math.min(5 * 2 ** (refusals - 1), 60);
+    fs.writeFileSync(stateFile, JSON.stringify({ ...st, refusals, retryAt: new Date(now + wait * 60000).toISOString() }));
+  }
   return log(`ACTED: ${paged}. ${items.length} waiting: ${summary}. ${lease}`);
 }
 

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { expired, guard, orchestratorPaths, readLease, renew, status, take } from '../orchestrator.mjs';
+import { expired, guard, orchestratorPaths, procStart, readLease, renew, status, take } from '../orchestrator.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const EXAMPLE = JSON.parse(fs.readFileSync(path.join(ROOT, 'agent-queue.config.example.json'), 'utf8'));
@@ -53,13 +53,16 @@ test('the Stop hook: holds the lock holder only, once per stop, unless its own w
   take(p, 'new-session');
   const live = spawn('sleep', ['30']);
   try {
-    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: live.pid, session: 'old-session' }));
+    const started = procStart(live.pid);
+    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: live.pid, started, session: 'old-session' }));
     assert.match(guard(p, { session_id: 'new-session' }), /"decision":"block"/, "the previous orchestrator's watcher does not count");
     assert.equal(guard(p, { session_id: 'other-session' }), '', 'a session without the lock stops normally');
     assert.equal(guard(p, { session_id: 'new-session', stop_hook_active: true }), '', 'never blocks twice in a row');
-    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: live.pid, session: 'new-session' }));
+    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: live.pid, started, session: 'new-session' }));
     assert.equal(guard(p, { session_id: 'new-session' }), '', 'its own live watcher lets it stop');
-    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: 999999, session: 'new-session' }));
+    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: live.pid, started: 'Thu Jan  1 00:00:00 1970', session: 'new-session' }));
+    assert.match(guard(p, { session_id: 'new-session' }), /"decision":"block"/, 'a live PID with another start time is a reused PID');
+    fs.writeFileSync(p.watchPid, JSON.stringify({ pid: 999999, started, session: 'new-session' }));
     assert.match(guard(p, { session_id: 'new-session' }), /orchestrator-watch\.mjs/, 'a dead watcher blocks, naming the command');
     assert.equal(readLease(p).session, 'new-session', 'a stop by the holder renews the lease');
   } finally {
@@ -105,7 +108,7 @@ test('orchestrator-watch.mjs exits with the first watcher that fires, restarts a
     { name: 'fires', cmd: 'bash', args: ['-c', 'sleep 0.5; echo "MERGE ENG-7 PR #70"'] },
     { name: 'slow', cmd: 'sleep', args: ['30'] },
   ];
-  const r = spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify(watchers), CLAUDE_CODE_SESSION_ID: 'S1' }), encoding: 'utf8', timeout: 20000 });
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify(watchers), CLAUDE_CODE_SESSION_ID: 'S1', FORGE_RESPAWN_MS: '20' }), encoding: 'utf8', timeout: 20000 });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '== fires\nMERGE ENG-7 PR #70\n');
   assert.ok(fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean).length >= 2, 'the quiet watcher was restarted');
@@ -182,5 +185,47 @@ test('orchestrator-watch.mjs stops and says so when the lock moves to another se
   const mover = { name: 'mover', cmd: process.execPath, args: ['-e', `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(box.p.lock)}, 'S2\\n'), 300); setTimeout(() => {}, 30000)`] };
   const r = spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify([mover]), CLAUDE_CODE_SESSION_ID: 'S1', FORGE_LOCK_POLL_MS: '100' }), encoding: 'utf8', timeout: 20000 });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /== takeover\nthis session lost the orchestrator lock to S2; the watcher stopped/);
+  assert.match(r.stdout, /== takeover\nthe orchestrator lock is held by S2, not this session; the watcher stopped/);
+});
+
+test('lease: a renewal time in the future (clock skew) counts as expired', () => {
+  const { p } = sandbox();
+  const now = Date.parse('2026-01-01T12:00:00Z');
+  take(p, 'S1');
+  renew(p, 'S1', now + 10 * MIN);
+  assert.equal(expired(p, 30, now), true);
+  assert.match(status(p, now), /clock skew/);
+});
+
+test('a watcher started without the lock stops at once, and a watcher that keeps exiting 2 backs off', () => {
+  const box = sandbox();
+  take(box.p, 'S1');
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify([{ name: 's', cmd: 'sleep', args: ['30'] }]), CLAUDE_CODE_SESSION_ID: 'S9', FORGE_LOCK_POLL_MS: '100' }), encoding: 'utf8', timeout: 20000 });
+  assert.match(r.stdout, /held by S1, not this session/);
+  const marker = path.join(box.home, 'spins');
+  const spin = { name: 'spin', cmd: 'bash', args: ['-c', `echo x >> ${marker}; exit 2`] };
+  const fire = { name: 'fire', cmd: 'bash', args: ['-c', 'sleep 1.5; echo done'] };
+  spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify([spin, fire]), FORGE_RESPAWN_MS: '400' }), encoding: 'utf8', timeout: 20000 });
+  const runs = fs.readFileSync(marker, 'utf8').split('\n').filter(Boolean).length;
+  assert.ok(runs >= 2 && runs <= 6, `restarted with a delay, not in a tight loop (${runs} runs)`);
+});
+
+test('watchers stop when the combined watcher is killed outright, and a new start sweeps any left over', async () => {
+  const box = sandbox();
+  const marker = path.join(box.home, 'child-pid');
+  const w = [{ name: 'long', cmd: 'bash', args: ['-c', `echo $$ > ${marker}; sleep 60`] }];
+  const parent = spawn(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify(w), FORGE_PARENT_POLL_MS: '100' }) });
+  for (let i = 0; i < 50 && !fs.existsSync(marker); i++) await new Promise((r) => setTimeout(r, 100));
+  const childPid = Number(fs.readFileSync(marker, 'utf8'));
+  const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  assert.ok(isAlive(childPid));
+  parent.kill('SIGKILL');
+  for (let i = 0; i < 50 && isAlive(childPid); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(isAlive(childPid), false, 'the watcher ended with its parent');
+  const left = spawn('sleep', ['60'], { detached: true });
+  const leftStarted = procStart(left.pid);
+  fs.writeFileSync(box.p.watchPid, JSON.stringify({ pid: 999999, started: 'x', session: '', children: [{ pid: left.pid, started: leftStarted }] }));
+  spawnSync(process.execPath, [path.join(ROOT, 'inbox/orchestrator-watch.mjs')], { env: box.env({ FORGE_WATCHERS: JSON.stringify([{ name: 'f', cmd: 'bash', args: ['-c', 'echo hi'] }]) }), encoding: 'utf8', timeout: 20000 });
+  for (let i = 0; i < 20 && isAlive(left.pid) && procStart(left.pid); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(procStart(left.pid), '', 'the leftover watcher group was stopped');
 });

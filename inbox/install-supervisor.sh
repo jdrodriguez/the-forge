@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # install-supervisor.sh [--remove]: installs or removes the orchestrator supervisor (orchestrator-supervisor.mjs) on
 # this machine, every orchestrator.supervisor.everyMinutes (default 5): a launchd job on macOS, a systemd user timer on
-# Linux. Install it on one machine; the lock and lease it reads are in the shared folder.
+# Linux. Install it on one machine; the lock and lease it reads are in the shared folder. A systemd user timer runs only
+# while you are logged in unless linger is on: sudo loginctl enable-linger "$USER".
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -22,6 +23,9 @@ case $MIN in '' | *[!0-9]* | 0) MIN=5 ;; esac
 CONFIG="${AGENT_QUEUE_CONFIG:-$ROOT/agent-queue.config.json}"
 case $CONFIG in /*) ;; *) CONFIG="$PWD/$CONFIG" ;; esac
 PATHS="$(dirname "$NODE"):$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Values quoted for systemd ("..." with \ and " escaped) and escaped for the plist's XML.
+sq() { local v=${1//\\/\\\\}; printf '"%s"' "${v//\"/\\\"}"; }
+xe() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 
 if [ "$(uname)" = Linux ]; then
   UNITS="$HOME/.config/systemd/user"
@@ -33,6 +37,7 @@ if [ "$(uname)" = Linux ]; then
     exit 0
   fi
   mkdir -p "$STATE_DIR" "$UNITS"
+  [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || echo "warning: linger is off, so the timer stops at logout (sudo loginctl enable-linger $USER)" >&2
   cat >"$UNITS/$UNIT.service" <<EOF
 [Unit]
 Description=$DESC
@@ -40,10 +45,10 @@ Description=$DESC
 [Service]
 Type=oneshot
 WorkingDirectory=$HOME
-Environment=HOME=$HOME
-Environment=AGENT_QUEUE_CONFIG=$CONFIG
-Environment=PATH=$PATHS
-ExecStart=$NODE $DIR/orchestrator-supervisor.mjs
+Environment=$(sq "HOME=$HOME")
+Environment=$(sq "AGENT_QUEUE_CONFIG=$CONFIG")
+Environment=$(sq "PATH=$PATHS")
+ExecStart=$(sq "$NODE") $(sq "$DIR/orchestrator-supervisor.mjs")
 StandardOutput=append:$STATE_DIR/orchestrator-supervisor.systemd.log
 StandardError=append:$STATE_DIR/orchestrator-supervisor.systemd.log
 EOF
@@ -83,28 +88,28 @@ cat >"$DEST" <<EOF
   <string>$LABEL</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$NODE</string>
-    <string>$DIR/orchestrator-supervisor.mjs</string>
+    <string>$(xe "$NODE")</string>
+    <string>$(xe "$DIR/orchestrator-supervisor.mjs")</string>
   </array>
   <key>StartInterval</key>
   <integer>$((MIN * 60))</integer>
   <key>RunAtLoad</key>
   <false/>
   <key>WorkingDirectory</key>
-  <string>$HOME</string>
+  <string>$(xe "$HOME")</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>$HOME</string>
+    <string>$(xe "$HOME")</string>
     <key>AGENT_QUEUE_CONFIG</key>
-    <string>$CONFIG</string>
+    <string>$(xe "$CONFIG")</string>
     <key>PATH</key>
-    <string>$PATHS</string>
+    <string>$(xe "$PATHS")</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>$STATE_DIR/orchestrator-supervisor.launchd.log</string>
+  <string>$(xe "$STATE_DIR/orchestrator-supervisor.launchd.log")</string>
   <key>StandardErrorPath</key>
-  <string>$STATE_DIR/orchestrator-supervisor.launchd.log</string>
+  <string>$(xe "$STATE_DIR/orchestrator-supervisor.launchd.log")</string>
 </dict>
 </plist>
 EOF
