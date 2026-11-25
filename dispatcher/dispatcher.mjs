@@ -2731,6 +2731,24 @@ async function sentryTriage() {
   }
 }
 
+// Codex auto-reset (codex-reset.mjs): on codexAutoReset.host only, since one Codex account serves every machine, it
+// spends a free Codex rate-limit reset when a window is spent, or one about to expire. Loaded here and nowhere at the
+// top, so a throw in it is one log line. A reset ends this machine's engine cooldown for Codex, so the next round can
+// use the refilled window at once. Off unless codexAutoReset.enabled.
+async function codexAutoReset(st) {
+  if (!cfg.codexAutoReset?.enabled) return;
+  try {
+    const mod = await import('./codex-reset.mjs');
+    const out = await mod.run({ cfg, host: HOST, ledger: mod.ledgerFile(conf), dry: DRY, log, notify: (s, t) => notify(s, t, { progress: true }) });
+    if (out.reset && st.engineLimits?.codex) {
+      delete st.engineLimits.codex;
+      saveState(st);
+    }
+  } catch (e) {
+    log(`codex auto-reset failed, the tick goes on (${errText(e)})`);
+  }
+}
+
 // --- engine workers ------------------------------------------------------------------------------------
 
 // Codex and Grok as queue accounts. The logic is in engine-workers.mjs and engine-rounds.mjs, loaded on first use and
@@ -2787,6 +2805,7 @@ async function tick() {
     await watchSignIns(st);
     await dispatch(st, m);
     await sentryTriage();
+    await codexAutoReset(st);
     await worktreeSweep(st);
     await writeHeartbeat(st);
     st.lastTick = iso();

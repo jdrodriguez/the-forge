@@ -201,3 +201,11 @@ test("the proxy's allowlist matches a host exactly or a subdomain of a *. entry,
   assert.equal(hostAllowed('evilgithub.com', allow), false);
   assert.equal(hostAllowed('github.com.evil.test', allow), false);
 });
+
+test('codexModel reaches the engine launcher, and a value that is not a plain model name is dropped', () => {
+  const base = { repoPath: '/tmp/r', paths: { stateDir: '/tmp/s', sharedDir: '/tmp/s/shared' } };
+  const model = (m) => spawnSync('bash', ['-c', `${shellConfig({ ...base, dispatcher: { externalBuilders: { fallback: { codexModel: m } } } })}\nprintf '%s' "$EW_CODEX_MODEL"`], { encoding: 'utf8' }).stdout;
+  assert.equal(model('gpt-5.1-codex'), 'gpt-5.1-codex');
+  assert.equal(model('x"; rm -rf /'), '');
+  assert.equal(model(undefined), '');
+});
