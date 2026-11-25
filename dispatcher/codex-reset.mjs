@@ -77,6 +77,8 @@ export function appServer(requests, bin = codexBin()) {
     const timer = setTimeout(() => finish(`codex app-server gave no answer in ${TIMEOUT_MS / 1000}s`), TIMEOUT_MS);
     const send = (o) => p.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...o })}\n`);
     p.on('error', (e) => finish(e.code === 'ENOENT' ? 'codex is not installed here' : e.message));
+    // A server that closes its input mid-conversation fails the call instead of throwing out of the tick.
+    p.stdin.on('error', (e) => finish(`codex app-server closed its input (${e.code ?? e.message})`));
     p.on('close', () => finish(err.trim().split('\n').at(-1) || 'codex app-server exited early'));
     p.stderr.on('data', (d) => (err = (err + d).slice(-2000)));
     p.stdout.on('data', (d) => {
@@ -183,6 +185,26 @@ export const resetHost = (cfg) => cfg.codexAutoReset?.host ?? cfg.enabledHosts?.
 export async function run({ cfg, host, ledger: file, dry = false, log = () => {}, notify = async () => {}, now = Date.now(), call = appServer }) {
   const c = cfg.codexAutoReset;
   if (!c?.enabled || host !== resetHost(cfg)) return { checked: false, reset: false };
+  // One run at a time, the tick's and `--apply`'s alike, so neither overwrites the other's ledger record. A lock older
+  // than ten minutes is from a run that died.
+  const lock = `${file}.lock`;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.mkdirSync(lock);
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    if (now - fs.statSync(lock).mtimeMs < 10 * 60_000) {
+      log('codex auto-reset: another run holds the ledger, skipped');
+      return { checked: false, reset: false };
+    }
+  }
+  try {
+    return await runLocked({ c, host, file, dry, log, notify, now, call });
+  } finally {
+    fs.rmSync(lock, { recursive: true, force: true });
+  }
+}
+async function runLocked({ c, host, file, dry, log, notify, now, call }) {
   const ledger = readLedger(file);
   let snap;
   try {

@@ -98,11 +98,13 @@ function repoByGithub(github) {
 }
 // A ticket's repo: the entry its claim recorded by key, while that entry still names the same github repo. Anything
 // else that names a repo (an entry renamed or changed since the claim) keeps the orchestrator's merge.
+// The claim also records the checkout, base and brief it used (t.repoAt), so a ticket whose entry changed still finds its
+// PR on the same base and briefs a replacement the same way.
 function repoOf(t) {
   if (!t?.repo) return DEFAULT_REPO;
   const e = t.repoKey && t.repoKey !== 'default' ? cfg.repos?.[t.repoKey] : null;
   if (e?.github === t.repo) return withRepo(t.repoKey, e);
-  return withRepo(t.repo, { github: t.repo, mergeMode: 'orchestrator' });
+  return withRepo(t.repo, { ...(t.repoAt ?? {}), github: t.repo, mergeMode: 'orchestrator' });
 }
 // Every repo the queue builds in, repoPath's first, once each.
 function allRepos() {
@@ -111,6 +113,15 @@ function allRepos() {
   return [...seen.values()];
 }
 const ghRepo = (pr) => pr?.repo ?? REPO;
+// Whether the folder at a mapped repo's path is a checkout of that repo: its origin names owner/name on GitHub.
+function checkoutOf(R) {
+  try {
+    const url = run('git', ['-C', R.path, 'remote', 'get-url', 'origin'], { timeout: 10_000 });
+    return url.replace(/\.git$/, '').replace(/\/$/, '').toLowerCase().endsWith(R.github.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 const DRY = process.argv.includes('--dry-run');
 // `tick --dry-run --bundle` shows what bundling would do while the config still has it off.
 const FORCE_BUNDLE = DRY && process.argv.includes('--bundle');
@@ -1699,7 +1710,7 @@ function prNeedsWorker(id, pr, notGreen) {
   }
   return { dirty, threads, what: [dirty ? `PR #${pr.number} conflicting with ${BASE}` : null, threads].filter(Boolean).join(' and ') };
 }
-const fixNote = (id, t, pr, fix) => `Your previous worker on ${id} ended, but its PR ${pr.url} cannot merge yet: ${fix.what}. Continue its work instead of starting over: the worktree for ${t.branch} under ${repoOf(t).worktrees}/ may hold commits that were never pushed, so check it first and push them.${fix.dirty ? ` Merge origin/${BASE} into the branch (no rebase, no force-push) and resolve every conflict keeping both sides: what ${BASE} changed and what this ticket adds. Run the checks the conflicted files touch before you push.` : ''}${fix.threads ? ' Read every unresolved review thread on the PR, fix the code where the finding is right, reply on each thread saying what changed or why it stays, and resolve it.' : ''} Push once through ${GATED_PUSH} and drive the PR to green. Then carry on with the brief below.\n\n`;
+const fixNote = (id, t, pr, fix) => `Your previous worker on ${id} ended, but its PR ${pr.url} cannot merge yet: ${fix.what}. Continue its work instead of starting over: the worktree for ${t.branch} under ${repoOf(t).worktrees}/ may hold commits that were never pushed, so check it first and push them.${fix.dirty ? ` Merge origin/${repoOf(t).base} into the branch (no rebase, no force-push) and resolve every conflict keeping both sides: what ${repoOf(t).base} changed and what this ticket adds. Run the checks the conflicted files touch before you push.` : ''}${fix.threads ? ' Read every unresolved review thread on the PR, fix the code where the finding is right, reply on each thread saying what changed or why it stays, and resolve it.' : ''} Push once through ${GATED_PUSH} and drive the PR to green. Then carry on with the brief below.\n\n`;
 
 // Never fails a ticket for taking long. A long run gets an informational post every longRunNoticeHours; a ticket
 // that stops moving gets one note to the human and stays in the queue; only a worker that is gone, with nothing
@@ -2326,7 +2337,8 @@ function pickAccount(accounts, engines = []) {
   // externalBuilders.fallback.prefer: an engine listed there takes the ticket ahead of every Claude account while it has
   // room, in the list's order. Burn accounts still go first.
   for (const label of cfg.externalBuilders?.fallback?.prefer ?? []) {
-    const e = engines.find((x) => x.label === label && engineUsable(x));
+    // Only with a usage reading: an engine whose usage could not be read never goes ahead of a known account.
+    const e = engines.find((x) => x.label === label && x.usage?.available && engineUsable(x));
     if (e) return e;
   }
   const regular = accounts.filter((a) => usedHere(a.label) && !fallbackAccounts.includes(a.label) && usable(a));
@@ -2531,6 +2543,7 @@ async function dispatch(st, m) {
     const repo = repoForIssue(issue);
     if (!repo.isDefault) {
       const missing = !repo.path || !fs.existsSync(repo.path) ? `no checkout of ${repo.github} at ${repo.path}`
+        : !checkoutOf(repo) ? `a checkout at ${repo.path} whose origin is not ${repo.github}`
         : !fs.existsSync(briefFile(repo)) ? `no worker brief ${repo.brief} for ${repo.github}` : null;
       if (missing) {
         log(`${issue.identifier}: builds in ${repo.github}, but ${HOST} has ${missing}, so it is left for a machine that has`);
@@ -2573,6 +2586,12 @@ async function dispatch(st, m) {
       log(`${id}: another machine claimed it first`);
       continue;
     }
+    // A platform label added since the list was read still holds.
+    const needsNow = requiredPlatform(now.issue);
+    if (needsNow && (needsNow.platform !== process.platform || acct.engine)) {
+      log(`${id}: now labeled ${needsNow.label}, so it is left for a ${needsNow.platform} machine${acct.engine ? ' and a Claude worker' : ''}`);
+      continue;
+    }
     // An engine ticket takes one slot in the same pool as a Claude one, and is never bundled. An engine that fails to
     // start is not offered again this tick, so one broken launcher can't churn the queue, and the ticket is offered at
     // once to the next account with room: a start that fails for a reason tied to the ticket (a Claude worktree where
@@ -2607,7 +2626,7 @@ async function dispatch(st, m) {
     const mates = [];
     for (const c of pickCompanions(issue, ready, taken).filter((x) => repoForIssue(x)?.github === repo.github)) {
       const cur = await gql('query($id:String!){ issue(id:$id){ labels{ nodes{ name } } } }', { id: c.identifier });
-      if (cur.issue.labels.nodes.some((l) => l.name === L.ready)) mates.push(c);
+      if (cur.issue.labels.nodes.some((l) => l.name === L.ready) && requiredPlatform(cur.issue)?.platform === requiredPlatform(now.issue)?.platform) mates.push(c);
     }
     for (const c of mates) taken.add(c.identifier);
     const members = [issue, ...mates];
@@ -2626,7 +2645,7 @@ async function dispatch(st, m) {
 
     // Journal the claim before touching Linear, so a crash anywhere below is reconciled next tick.
     // t.repo only for a mapped repo: a ticket with none builds in repoPath.
-    const inRepo = repo.isDefault ? {} : { repo: repo.github, repoKey: repo.key };
+    const inRepo = repo.isDefault ? {} : { repo: repo.github, repoKey: repo.key, repoAt: { path: repo.path, base: repo.base, brief: repo.brief } };
     const t = { status: 'claiming', claimedAt: iso(), branch, priorStateId: issue.state.id, ...inRepo,
       ...(bundleIds.length ? { bundle: bundleIds } : {}), ...(useSentrySlot ? { sentry: true } : {}) };
     st.tickets[id] = t;
