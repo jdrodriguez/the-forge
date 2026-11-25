@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { CLAUDE_T, ENGINE_T, HEAD, OLD, ROOM, claude, claudeBriefs, engineBox, issue, mergeRequest, merges, plans, starts, tick, ticket } from './engine-sandbox.mjs';
+import { state } from './sandbox.mjs';
 
 const DIRTY = { mergeStateStatus: 'DIRTY' };
 const marker = (box, id = 'ENG-9') => {
@@ -44,9 +45,10 @@ test('a round due on a ticket waiting for the orchestrator waits for a free slot
   const busy = [{ label: 'b', id: 'w-live', status: 'busy', kind: 'background', pid: 1 }];
   const full = engineBox({ host: { maxWorkers: 1 }, tickets: { 'ENG-9': asked, 'ENG-8': CLAUDE_T }, registry: { status: 'done' }, pr: DIRTY, ps: busy });
   const out = tick(full);
-  assert.match(out, /ENG-9: a round is due \(resolve its conflict with main\) but every slot on host-a is taken, so it waits/);
+  assert.match(out, /ENG-9: needs to work again \(resolve its conflict with main\), but this machine is full \(1\/1 slots in use\), so it waits in the wake queue/);
   assert.equal(starts(full).length, 0);
   assert.equal(ticket(full).status, 'merge-asked');
+  assert.deepEqual((state(full).wakeQueue ?? []).map((w) => w.id), ['ENG-9']);
   const room = engineBox({ host: { maxWorkers: 2 }, tickets: { 'ENG-9': asked, 'ENG-8': CLAUDE_T }, registry: { status: 'done' }, pr: DIRTY, ps: busy });
   tick(room);
   assert.equal(starts(room).length, 1);
@@ -97,4 +99,26 @@ test('a start that fails after its run began is adopted from the registry: it ke
   assert.equal(t.account, 'codex');
   assert.equal(claudeBriefs(box).length, 0, 'no Claude worker starts on it');
   assert.equal(ticket(box, 'ENG-12'), undefined, 'the adopted run holds the one slot');
+});
+
+test('a ticket waiting for a slot whose PR no longer needs a round leaves the wake queue', () => {
+  const asked = { ...ENGINE_T, status: 'merge-asked', prNumber: 7, riskySha: HEAD };
+  const box = engineBox({ tickets: { 'ENG-9': asked }, registry: { status: 'done' }, pr: { mergeStateStatus: 'BLOCKED' } });
+  const file = path.join(box.stateDir, 'state.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), wakeQueue: [{ id: 'ENG-9', since: OLD, reason: 'x', pool: 'regular' }] }));
+  assert.match(tick(box), /ENG-9: left the wake queue, it no longer needs a worker/);
+  assert.deepEqual(state(box).wakeQueue, []);
+  assert.equal(starts(box).length, 0);
+});
+
+test('an earlier waiter that no longer needs a worker blocks nobody behind it in the same tick', () => {
+  const asked = { ...ENGINE_T, status: 'merge-asked', prNumber: 7, riskySha: HEAD };
+  const box = engineBox({ host: { maxWorkers: 1 }, tickets: { 'ENG-9': asked, 'ENG-8': { ...CLAUDE_T, goneTicks: 2 } }, registry: { status: 'done' },
+    pr: { mergeStateStatus: 'BLOCKED' }, ps: [{ label: 'b', id: 'w-live', status: 'failed', state: 'failed', kind: 'background' }], usage: ROOM });
+  const file = path.join(box.stateDir, 'state.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')),
+    wakeQueue: [{ id: 'ENG-9', since: OLD, reason: 'x', pool: 'regular' }, { id: 'ENG-8', since: OLD, reason: 'x', pool: 'regular' }] }));
+  const out = tick(box);
+  assert.match(out, /ENG-8: a slot is free \(0\/1 in use\), so it wakes/);
+  assert.equal(claudeBriefs(box).length, 1);
 });
