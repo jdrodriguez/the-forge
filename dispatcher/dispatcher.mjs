@@ -1869,8 +1869,12 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
 // the human: at teardown at once, in the sweep after atRiskAskDays. dryRun logs what it would do and changes nothing.
 // Neither runs while the dispatcher is paused, and both catch their own errors so a failure never stops the tick.
 const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], rebuildableIgnored: null, clones: 'dry-run',
-  ...(cfg.worktreeCleanup ?? {}) };
-// worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one.
+  keepFolders: null, keptFoldersDir: null, agentWorktrees: null, scanners: null, ...(cfg.worktreeCleanup ?? {}) };
+// worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one. These are the module
+// options the keys set, with the module's defaults for null.
+const wtOpts = (wt) => ({ rebuildable: WT_CFG.rebuildableIgnored, keep: WT_CFG.keepFolders ?? wt.KEEP_FOLDERS,
+  keptDir: WT_CFG.keptFoldersDir ?? wt.KEPT_FOLDERS_DIR, agent: WT_CFG.agentWorktrees ?? wt.AGENT_WORKTREES });
+const wtScanners = (wt) => (Array.isArray(WT_CFG.scanners) ? WT_CFG.scanners : wt.SCANNERS);
 const SWEEP_STATE = path.join(LOCAL, 'worktree-sweep.json');
 const TEARDOWN_TRIES = 3; // ticks a live process may hold the worktree after its worker stops, before the human is asked
 let wtModule = null;
@@ -1899,7 +1903,7 @@ async function teardownFinished(st, workers) {
   let dirs;
   try {
     wt = await wtMod();
-    dirs = wt.processDirs();
+    dirs = wt.processDirs({ scanners: wtScanners(wt) });
   } catch (e) {
     return log(`worktree teardown skipped this tick (${errText(e)})`);
   }
@@ -1984,7 +1988,7 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   const absent = !entry && Boolean(t.branch) && !named.length && !outside.length;
   if (!entry) named.push(...outside);
   const res = entry ? wt.teardownWorktree({ path: entry.path, repo: R.path, base: R.base, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
-    rebuildable: WT_CFG.rebuildableIgnored })
+    ...wtOpts(wt) })
     : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
       : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
   const tries = (t.teardown?.tries ?? 0) + 1;
@@ -2048,11 +2052,26 @@ async function worktreeSweep(st) {
     const label = `worktree sweep (${path.basename(repo.path)})`;
     try {
       const prs = {};
-      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid']));
+      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt']));
       for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
+      // Each machine keeps its own state, so a ticket can be live here and finished on another machine. GitHub settles
+      // it: a ticket whose PR is merged or closed is not live, and the mismatch is logged. A live ticket counts its own
+      // PR, or one from its branch or naming it in the title opened since its claim; a finished one any of those. A
+      // branch with no PR of its own is judged against its ticket's PR. A ticket being claimed is left live.
+      const mine = Object.entries(st.tickets).filter(([, t]) => repoOf(t).github === repo.github && t.status !== 'claiming');
+      const isLive = (id) => live.some(([x]) => x === id);
+      const done = new Map(wt.finishedOnGitHub(mine.map(([id, t]) => ({ id, branch: t.branch ?? null, prNumber: t.prNumber ?? null,
+        since: isLive(id) ? (t.claimedAt ?? null) : null })), list).map((x) => [x.id, x]));
+      for (const [id, t] of mine) {
+        const d = done.get(id);
+        if (!d) continue;
+        if (isLive(id)) log(`${label}: ${id} is ${t.status} in this machine's state, but its PR #${d.pr.number} is ${d.pr.state.toLowerCase()} on GitHub; its worktree is judged as finished`);
+        if (t.branch && !prs[t.branch]) prs[t.branch] = d.pr;
+      }
+      const liveHere = live.filter(([id]) => !done.has(id));
       const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry,
-        rebuildable: WT_CFG.rebuildableIgnored, clones: WT_CFG.clones,
-        trashDir: await trashDir(), liveBranches: new Set(live.map(([, t]) => t.branch).filter(Boolean)), liveIds: live.map(([id]) => id) });
+        clones: WT_CFG.clones, ...wtOpts(wt), scanners: wtScanners(wt), trashDir: await trashDir(),
+        liveBranches: new Set(liveHere.map(([, t]) => t.branch).filter(Boolean)), liveIds: liveHere.map(([id]) => id) });
       if (out.error) {
         failed += 1;
         log(`${label}: ${out.error}`);
@@ -2062,7 +2081,7 @@ async function worktreeSweep(st) {
       const atRiskNow = out.results.filter((r) => r.atRisk);
       log(`${label}${dry ? ' (dry run, nothing changed)' : ''}: ${n('removed')} ${dry ? 'would be ' : ''}removed, ${n('trashed')} orphan(s) ${dry ? 'would be ' : ''}trashed, ${atRiskNow.length} at risk, ${n('kept') - atRiskNow.length} kept, of ${out.results.length}`);
       for (const r of out.results) if (r.would || r.action !== 'kept' || r.atRisk) log(`  ${r.would ? `would be ${r.would}` : r.action}${r.atRisk ? ' AT RISK' : ''}: ${r.name} [${r.branch ?? '-'}] ${r.reason}`);
-      for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason };
+      for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason, rule: r.rule };
       // A folder in the worktrees folder that is not this repo's (a scratch folder, another repo's worktree) is reported
       // once and left alone. Clones are counted by rule, for the dry run.
       for (const r of out.results.filter((x) => x.foreign)) {
@@ -2083,7 +2102,9 @@ async function worktreeSweep(st) {
     }
   }
   if (failed === repos.length) return;
-  const overdue = Object.entries(atRisk).filter(([, a]) => !a.asked && hoursSince(a.since) > WT_CFG.atRiskAskDays * 24);
+  // An Agent tool worktree with commits on no remote is asked about at once; its reason names the branch. The dispatcher
+  // never pushes it.
+  const overdue = Object.entries(atRisk).filter(([, a]) => !a.asked && (a.rule === 'agent-unpushed' || hoursSince(a.since) > WT_CFG.atRiskAskDays * 24));
   if (overdue.length) {
     const ask = `${overdue.length} worktree(s) on ${HOST} have held work GitHub lacks for over ${WT_CFG.atRiskAskDays} days, with no live ticket or process: ${overdue.map(([p, a]) => `${p} (${a.reason})`).join('; ')}`.slice(0, 1500);
     if (dry) log(`would ask ${HUMAN}: ${ask}`);
