@@ -55,10 +55,10 @@ flowchart LR
 One command copies The Forge to `~/the-forge`, links its skills into Claude Code, and starts an interview in Claude Code that sets up one to four computers:
 
 ```bash
-npx the-forge setup
+npx @jdrodriguez/the-forge setup
 ```
 
-`npm install -g the-forge` then `the-forge setup` works too: either way the lasting copy is `~/the-forge`, because npm replaces its own folders on upgrade. To run the newest code on GitHub instead of the newest release, use `npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone. `docs/setup.md` is the same ground as a written guide for someone who has never seen this system: what to buy or reuse, the programs each computer needs, Claude accounts and how several live on one computer, Codex, Grok, Tailscale, SSH, GitHub, Linear and Slack, what each computer runs, and how to add a computer later.
+`npm install -g @jdrodriguez/the-forge` then `the-forge setup` works too: either way the lasting copy is `~/the-forge`, because npm replaces its own folders on upgrade. To run the newest code on GitHub instead of the newest release, use `npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone. `docs/setup.md` is the same ground as a written guide for someone who has never seen this system: what to buy or reuse, the programs each computer needs, Claude accounts and how several live on one computer, Codex, Grok, Tailscale, SSH, GitHub, Linear and Slack, what each computer runs, and how to add a computer later.
 
 You need Claude Code (one Claude account is enough), Node 22 or newer, git, gh, jq, curl, a GitHub repository with CI, and a Linear workspace. Slack, Codex and Grok are optional. You do every sign-in yourself; no part of The Forge asks for, stores or prints a password, token or key.
 

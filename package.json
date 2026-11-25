@@ -1,5 +1,5 @@
 {
-  "name": "the-forge",
+  "name": "@jdrodriguez/the-forge",
   "version": "0.1.0",
   "description": "The Forge: a spec desk and an agent queue. Linear tickets are built into pull requests by Claude Code workers across several accounts and machines, and a Middle-earth board shows it all.",
   "license": "MIT",

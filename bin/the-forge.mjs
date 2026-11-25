@@ -70,7 +70,7 @@ computer the red-main watcher, the board and (macOS) the herald. launchd on macO
   update: `Usage: the-forge update [--dir <folder>] [--all] [--dry-run]
 
 Refreshes the lasting copy: a git clone pulls, a copied package takes the files of the package running now (so run it
-as npx the-forge@latest update). Your config and answers stay. Installed jobs are reloaded.
+as npx @jdrodriguez/the-forge@latest update). Your config and answers stay. Installed jobs are reloaded.
 
   --all  also copy the result to every other computer and reload their jobs (copy-to --install)`,
   'copy-to': `Usage: the-forge copy-to <computer> [--install] [--dry-run]
