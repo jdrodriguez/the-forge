@@ -17,11 +17,12 @@ export function policyFor(cfg, repo) {
 }
 
 // isDriver(lockFile, sessionId): a shell outside Claude Code (no session id) is the human, and no lock file means no
-// takeover has happened yet; otherwise the session id must be a line of the lock file.
+// takeover has happened yet; otherwise the session id must be a line of the lock file. A lock that exists but cannot
+// be read refuses every session. The lock keeps cooperating sessions from both merging; it is not access control.
 export function isDriver(lockFile, sessionId) {
   if (!sessionId) return true;
   let text;
-  try { text = fs.readFileSync(lockFile, 'utf8'); } catch { return true; }
+  try { text = fs.readFileSync(lockFile, 'utf8'); } catch (e) { return e.code === 'ENOENT'; }
   return text.split('\n').some((l) => l.trim() === sessionId);
 }
 

@@ -61,6 +61,7 @@ function showApproved(numbersOnly) {
     const p = view(a.pr, 'state,headRefOid,isDraft');
     if (p && p.state !== 'OPEN') continue;
     if (numbersOnly) {
+      if (!p) console.log(`#${a.pr}: could not read it (gh failed), left out`);
       if (p && p.headRefOid === a.head && !p.isDraft) out.push(String(a.pr));
       continue;
     }
@@ -88,14 +89,16 @@ if (!driver()) {
 renewLease();
 
 if (args[0] === '--approve') {
-  const [, pr, head, note] = args;
-  if (!/^\d+$/.test(pr ?? '') || !/^[0-9a-f]{40}$/.test(head ?? '') || !note) {
+  const [, raw, head, note] = args;
+  if (!/^\d+$/.test(raw ?? '') || !/^[0-9a-f]{40}$/.test(head ?? '') || !note) {
     console.log('usage: merge-approved.sh --approve <pr> <full 40-character head sha> "<note: what you checked>"');
     process.exit(1);
   }
+  const pr = String(Number(raw));
   const p = view(pr, 'state,headRefOid');
   if (p?.state !== 'OPEN') { console.log(`STOP: #${pr} is ${p?.state ?? 'unreadable'}, not open; nothing recorded`); process.exit(1); }
   if (p.headRefOid !== head) { console.log(`STOP: #${pr}'s current head is ${p.headRefOid}, not ${head}; review the current head and approve that`); process.exit(1); }
+  if (!driver()) { console.log(`STOP: this session lost the orchestrator lock (driver is now ${lockHolder()}); nothing recorded`); process.exit(1); }
   recordApproval(ledger, { pr, head, by: BY, note });
   console.log(`APPROVED #${pr} at head ${short(head)}, recorded in ${ledger.file}`);
   process.exit(0);
@@ -123,20 +126,24 @@ function newMigrations(p) {
 
 function afterMerge(pr) {
   const p = view(pr, 'headRefOid,headRefName,isCrossRepository,mergeCommit') ?? {};
-  if (p.headRefName && !p.isCrossRepository) tryGh(['api', '-X', 'DELETE', `repos/${REPO}/git/refs/heads/${p.headRefName}`]);
+  // Delete the branch only while it still points at the merged head, so a branch recreated under the same name stays.
+  const ref = p.headRefName && !p.isCrossRepository ? json(['api', `repos/${REPO}/git/ref/heads/${p.headRefName}`]) : null;
+  if (ref?.object?.sha && ref.object.sha === p.headRefOid) tryGh(['api', '-X', 'DELETE', `repos/${REPO}/git/refs/heads/${p.headRefName}`]);
   console.log(`MERGED #${pr}${REPO !== cfg.github.repo ? ` in ${REPO}` : ''} as ${short(p.mergeCommit?.oid)}`);
-  closeApprovals(ledger, { pr, head: p.headRefOid, by: BY });
+  try { closeApprovals(ledger, { pr, head: p.headRefOid, by: BY }); } catch (e) { console.log(`#${pr}: could not close its approvals in ${ledger.file} (${e.message})`); }
   const r = spawnSync(process.execPath, [path.join(ROOT, 'inbox', 'merged-to-verifying.mjs'), String(pr), REPO], { stdio: ['ignore', 'inherit', 'inherit'] });
   if (r.status !== 0) console.log(`#${pr}: could not check its ticket's Linear state`);
 }
 
 const enqueuedAt = {};
+const batchMigrations = [];
 let hold = null;
 
 // gate(pr): 'queued' when it went into the merge queue, 'merged' when it merged (now or before), 'held' otherwise,
 // with the reason printed.
 function gate(pr) {
   if (!/^\d+$/.test(pr)) { console.log(`STOP: '${pr}' is not a PR number`); return 'held'; }
+  pr = String(Number(pr));
   let p = view(pr, 'state,isDraft,title,labels');
   if (!p) { console.log(`STOP at #${pr}: could not read it (gh failed)`); return 'held'; }
   if (p.state === 'MERGED') { console.log(`MERGED #${pr} already`); afterMerge(pr); return 'merged'; }
@@ -179,9 +186,10 @@ function gate(pr) {
   try { why = checkGate(p, policy); } catch (e) { why = `the check gate could not be evaluated (${e.message})`; }
   if (why) { console.log(`STOP at #${pr}: ${why}`); return 'held'; }
   if (policy.resolvedThreads) {
-    const r = gql(`query{repository(${GQL_REPO}){pullRequest(number:${pr}){reviewThreads(first:100){nodes{isResolved}}}}}`);
-    const nodes = r?.data?.repository?.pullRequest?.reviewThreads?.nodes;
-    const open = nodes ? nodes.filter((t) => !t.isResolved).length : null;
+    const r = gql(`query{repository(${GQL_REPO}){pullRequest(number:${pr}){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}`);
+    const threads = r?.data?.repository?.pullRequest?.reviewThreads;
+    if (threads?.pageInfo?.hasNextPage) { console.log(`STOP at #${pr}: over 100 review threads; check them by hand`); return 'held'; }
+    const open = threads?.nodes ? threads.nodes.filter((t) => !t.isResolved).length : null;
     if (open !== 0) { console.log(`STOP at #${pr}: ${open ?? 'an unknown number of (gh failed)'} unresolved review thread(s)`); return 'held'; }
   }
   if (REPO === cfg.github.repo) {
@@ -190,14 +198,18 @@ function gate(pr) {
     console.log(out.at(-1));
     if (r.status !== 0) { console.log(`STOP at #${pr}: pre-merge check did not pass`); console.log(out.slice(-8).join('\n')); return 'held'; }
   }
-  // The queue refuses a migration file name that a PR ahead of it already adds.
+  // Two PRs that pass alone can clash once both land: a migration whose prefix (premerge.migrations.prefixLength) a PR
+  // ahead in the merge queue, or one enqueued earlier in this run, already uses is held.
   const mine = newMigrations(p);
   if (mine.length && policy.mode === 'queue') {
     const q = gql(`query{repository(${GQL_REPO}){mergeQueue(branch:"${BASE}"){entries(first:30){nodes{pullRequest{number files(first:100){nodes{path}}}}}}}}`);
-    const queued = new Set((q?.data?.repository?.mergeQueue?.entries?.nodes ?? [])
-      .filter((n) => String(n.pullRequest.number) !== pr).flatMap((n) => n.pullRequest.files.nodes.map((f) => f.path)));
-    const clash = mine.find((m) => queued.has(m));
-    if (clash) { console.log(`STOP at #${pr}: new migration ${clash} has the same file name as a PR ahead in the merge queue; rename it`); return 'held'; }
+    const ahead = (q?.data?.repository?.mergeQueue?.entries?.nodes ?? [])
+      .filter((n) => String(n.pullRequest.number) !== pr).flatMap((n) => n.pullRequest.files.nodes.map((f) => f.path))
+      .filter((f) => f.startsWith(`${MIG.dir}/`));
+    const prefix = (f) => path.basename(f).slice(0, MIG.prefixLength ?? path.basename(f).length);
+    const taken = new Set([...ahead, ...batchMigrations].map(prefix));
+    const clash = mine.find((m) => taken.has(prefix(m)));
+    if (clash) { console.log(`STOP at #${pr}: new migration ${clash} has the same prefix as one a PR ahead in the merge queue adds; renumber it`); return 'held'; }
   }
   if (!driver()) { console.log(`STOP before #${pr}: this session lost the orchestrator lock during the run (driver is now ${lockHolder()}); not merged`); return 'held'; }
   // A merge run on a PR with no approval on file is the driver's approval, recorded once the gate has passed.
@@ -222,6 +234,7 @@ function gate(pr) {
   if (process.env.MERGE_JUMP) {
     if (!enqueue(true)) { console.log(`STOP at #${pr}: the jump to the front of the merge queue was refused`); return 'held'; }
     console.log(`#${pr} sent to the front of the merge queue at head ${short(head)}`);
+    batchMigrations.push(...mine);
     return 'queued';
   }
   if (!merge() && stateNow() !== 'MERGED') { console.log(`STOP at #${pr}: merge refused`); return 'held'; }
@@ -230,11 +243,15 @@ function gate(pr) {
   const e = gql(`query{repository(${GQL_REPO}){pullRequest(number:${pr}){state mergeQueueEntry{state}}}}`)?.data?.repository?.pullRequest;
   if (e?.state === 'MERGED') { console.log(`#${pr} merged at head ${short(head)}`); return 'queued'; }
   if (!e?.mergeQueueEntry?.state) {
-    if (!enqueue(false)) { console.log(`STOP at #${pr}: gh reported the merge accepted, but the PR has no merge queue entry and a direct enqueue was refused`); return 'held'; }
+    // Auto-merge left on would land a later, unapproved push, so it is turned off when the PR does not go in.
+    const refuse = (why) => { tryGh(['pr', 'merge', pr, '--repo', REPO, '--disable-auto']); console.log(`STOP at #${pr}: ${why}; auto-merge turned off`); return 'held'; };
+    if (!driver()) return refuse(`this session lost the orchestrator lock during the run (driver is now ${lockHolder()})`);
+    if (!enqueue(false)) return refuse('gh reported the merge accepted, but the PR has no merge queue entry and a direct enqueue was refused');
     console.log(`#${pr} had no queue entry after gh pr merge (auto-merge already on?); enqueued directly at head ${short(head)}`);
   } else {
     console.log(`#${pr} enqueued at head ${short(head)}`);
   }
+  batchMigrations.push(...mine);
   return 'queued';
 }
 

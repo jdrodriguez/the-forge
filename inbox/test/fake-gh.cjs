@@ -5,6 +5,7 @@
 //   ci.yml             gh workflow view      queue.json      the mergeQueue query
 //   threads-<n>.json   reviewThreads         entry-<n>.json  the entry check right after a merge
 //   poll-<n>           one pullRequest JSON per line, served in turn to the queue watcher's polls (the last repeats)
+//   ref-<n>            the SHA branch-<n> points at (default: PR n's head)
 // gh pr merge appends <n> to $FAKE/enqueued and, with $FAKE/merge-marks-merged present, marks the PR MERGED. A direct
 // enqueue appends "enqueue" or "jump". $FAKE/hook.cjs, when present, runs first with the arguments.
 const fs = require('node:fs');
@@ -19,6 +20,7 @@ const fail = () => process.exit(1);
 
 const [a, b, n] = args;
 if (a === 'pr' && b === 'view') { const s = read(`pr-${n}.json`); if (!s) fail(); out(s); }
+else if (a === 'pr' && b === 'merge' && args.includes('--disable-auto')) out('');
 else if (a === 'pr' && b === 'merge') {
   if (fs.existsSync(`${F}/merge-refuse-${n}`)) fail();
   fs.appendFileSync(`${F}/enqueued`, `${n}\n`);
@@ -47,6 +49,11 @@ else if (a === 'api' && b === 'graphql') {
     wrap(JSON.parse(lines[i]));
   } else if (pr) wrap(JSON.parse(read(`entry-${pr}.json`, '{"state":"OPEN","mergeQueueEntry":{"state":"QUEUED"}}')));
   else out({ data: {} });
+}
+else if (a === 'api' && /\/git\/ref\/heads\/branch-\d+$/.test(b)) {
+  // A branch-<n> ref points at PR n's head, or at $FAKE/ref-<n> when that file holds another SHA.
+  const num = b.match(/branch-(\d+)$/)[1];
+  out({ object: { sha: read(`ref-${num}`, null)?.trim() ?? JSON.parse(read(`pr-${num}.json`, '{}')).headRefOid } });
 }
 else if (a === 'api') out('');
 else out('[]');

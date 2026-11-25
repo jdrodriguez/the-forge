@@ -118,6 +118,7 @@ test('an approval is recorded for the exact head, honored, and closed by the mer
   assert.match(box.calls(), /premerge 101/);
   assert.match(box.calls(), /lease renew/);
   assert.match(box.calls(), /to-verifying 101 your-org\/your-app/);
+  assert.match(box.calls(), new RegExp(`gh pr merge 101 --repo your-org/your-app --squash --match-head-commit ${A}`));
   assert.match(box.calls(), /gh api -X DELETE repos\/your-org\/your-app\/git\/refs\/heads\/branch-101/);
   const last = box.ledger().at(-1);
   assert.equal(last.event, 'merged');
@@ -211,7 +212,7 @@ test('a migration file name a PR ahead in the queue already adds stops the PR', 
   box.write('queue.json', { data: { repository: { mergeQueue: { entries: { nodes: [{ pullRequest: { number: 9, files: { nodes: [{ path: 'migrations/20261122900005_x.sql' }] } } }] } } } } });
   box.run(['206']);
   assert.equal(box.rc, 1);
-  has(box, 'same file name as a PR ahead in the merge queue');
+  has(box, 'same prefix as one a PR ahead in the merge queue adds');
 });
 
 const runs = (...r) => JSON.stringify(r.map(([id, conclusion, status = 'completed']) => ({ databaseId: id, status, conclusion, headBranch: `gh-readonly-queue/main/pr-${id}-x`, createdAt: '2026-01-01T00:00:00Z' })));
@@ -454,4 +455,63 @@ test('--repo: the driver lock is read again right before the merge', () => {
   assert.equal(box.rc, 1);
   has(box, 'lost the orchestrator lock');
   assert.equal(box.enqueued(), '');
+});
+
+test('a PR number with leading zeros is the same PR, so an old approval still stops it', () => {
+  const box = sandbox().pr(103, B);
+  box.approve(103, A);
+  box.run(['0103']);
+  assert.equal(box.rc, 1);
+  has(box, `approval on file is for head ${A.slice(0, 10)}`);
+  assert.equal(box.enqueued(), '');
+});
+
+test('two PRs in one batch with the same migration prefix: the second is held', () => {
+  const box = sandbox()
+    .pr(210, A, (p) => ({ ...p, files: [{ path: 'migrations/20261125000000_a.sql' }] }))
+    .pr(211, A, (p) => ({ ...p, files: [{ path: 'migrations/20261125000000_b.sql' }] }));
+  box.run(['210', '211']);
+  assert.equal(box.rc, 1);
+  assert.equal(box.enqueued(), '210');
+  has(box, 'STOP at #211: new migration migrations/20261125000000_b.sql has the same prefix');
+});
+
+test('a merged branch that now points elsewhere is not deleted', () => {
+  const box = sandbox().pr(130, A);
+  box.write('ref-130', B);
+  box.run(['130']);
+  assert.equal(box.rc, 0, box.out);
+  assert.ok(!box.calls().includes('DELETE'), box.calls());
+});
+
+test('a refused direct enqueue turns auto-merge off, and the jump and direct enqueue name the checked head', () => {
+  const box = sandbox().pr(413, A).pr(414, A);
+  box.write('entry-413.json', { state: 'OPEN', mergeQueueEntry: null });
+  box.run(['413']);
+  assert.match(box.calls(), new RegExp(`oid=${A}`));
+  box.write('enqueue-refuse', '');
+  box.write('entry-414.json', { state: 'OPEN', mergeQueueEntry: null });
+  box.run(['414']);
+  has(box, 'auto-merge turned off');
+  assert.match(box.calls(), /gh pr merge 414 --repo your-org\/your-app --disable-auto/);
+});
+
+test('over 100 review threads holds the PR', () => {
+  const box = sandbox({ resolvedThreads: true }).pr(140, A);
+  box.write('threads-140.json', { reviewThreads: { pageInfo: { hasNextPage: true }, nodes: [] } });
+  box.run(['140']);
+  has(box, 'STOP at #140: over 100 review threads');
+  assert.equal(box.enqueued(), '');
+});
+
+test('a lock that exists but cannot be read refuses every Claude Code session', () => {
+  const box = sandbox().pr(150, A);
+  fs.rmSync(path.join(box.state, 'orchestrator-session'));
+  fs.mkdirSync(path.join(box.state, 'orchestrator-session'));
+  box.run(['150']);
+  assert.equal(box.rc, 1);
+  has(box, 'not the orchestrator');
+  fs.rmdirSync(path.join(box.state, 'orchestrator-session'));
+  box.run(['150']);
+  assert.equal(box.rc, 0, 'no lock at all means no takeover yet');
 });
