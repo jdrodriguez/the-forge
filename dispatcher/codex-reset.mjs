@@ -125,14 +125,15 @@ export async function readLimits(call = appServer) {
 }
 
 const hoursUntil = (ms, now) => (ms == null ? Infinity : (ms - now) / HOUR);
+const hoursSince = (ms, now) => (now - ms) / HOUR;
 const round = (n) => Math.round(n * 10) / 10;
 
 // Pure: what the rules say for this snapshot. { act: true, creditId, key, rule, reason } or { act: false, reason }.
 export function decide(snap, now, opts = {}, lastResetAt = null) {
   const o = { ...DEFAULTS, ...opts };
   if (!snap.availableCount) return { act: false, reason: 'no free reset is available' };
-  if (lastResetAt && hoursUntil(now, lastResetAt) < o.minHoursBetweenResets) {
-    return { act: false, reason: `a reset was spent ${round(hoursUntil(now, lastResetAt))}h ago, under minHoursBetweenResets (${o.minHoursBetweenResets}h)` };
+  if (lastResetAt && hoursSince(lastResetAt, now) < o.minHoursBetweenResets) {
+    return { act: false, reason: `a reset was spent ${round(hoursSince(lastResetAt, now))}h ago, under minHoursBetweenResets (${o.minHoursBetweenResets}h)` };
   }
   // Soonest expiry first; a credit that never expires goes last. With no detail rows, the backend picks (creditId null).
   const credit = [...snap.credits].sort((x, y) => (x.expiresAt ?? Infinity) - (y.expiresAt ?? Infinity))[0] ?? null;
@@ -164,13 +165,30 @@ export async function consume(creditId, key, call = appServer) {
   return outcome; // reset | nothingToReset | noCredit | alreadyRedeemed
 }
 
+// A missing ledger is an empty one. One that cannot be read or parsed is corrupt: nothing is spent while it is, since an
+// empty reading would lose the spacing clock. The bad file is copied aside once and left in place for a person.
 function readLedger(file) {
+  let text;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return { resets: [] };
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    return e.code === 'ENOENT' ? { resets: [] } : { corrupt: `unreadable (${e.code ?? e.message})` };
   }
+  let why = null;
+  try {
+    const l = JSON.parse(text);
+    if (Array.isArray(l?.resets)) return l;
+    why = 'missing its resets list';
+  } catch (e) {
+    why = `not JSON (${e.message})`;
+  }
+  const aside = `${file}.corrupt`;
+  if (!fs.existsSync(aside)) fs.copyFileSync(file, aside);
+  return { corrupt: `${why}; a copy is at ${aside}` };
 }
+// The last spend for the spacing clock. A pending record (a redeem call that never answered) counts, since the server
+// may have redeemed it.
+const lastSpend = (ledger) => ledger.resets.filter((r) => r.outcome === 'reset' || r.outcome === 'pending').at(-1)?.at ?? null;
 function writeLedger(file, ledger) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(ledger, null, 2)}\n`);
@@ -179,6 +197,8 @@ function writeLedger(file, ledger) {
 
 // The host that spends resets: codexAutoReset.host, else the first of dispatcher.enabledHosts.
 export const resetHost = (cfg) => cfg.codexAutoReset?.host ?? cfg.enabledHosts?.[0] ?? null;
+// This machine's name, the same way the dispatcher's tick names it, so the tick and `--apply` agree on the reset host.
+export const thisHost = () => os.hostname().split('.')[0];
 
 // The dispatcher's entry. cfg is the dispatcher section. Returns { checked, reset, outcome?, decision? }; never throws
 // for the tick's sake.
@@ -186,17 +206,30 @@ export async function run({ cfg, host, ledger: file, dry = false, log = () => {}
   const c = cfg.codexAutoReset;
   if (!c?.enabled || host !== resetHost(cfg)) return { checked: false, reset: false };
   // One run at a time, the tick's and `--apply`'s alike, so neither overwrites the other's ledger record. A lock older
-  // than ten minutes is from a run that died.
+  // than ten minutes is from a run that died: it is removed and taken again. Only the run that took the lock releases it.
   const lock = `${file}.lock`;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.mkdirSync(lock);
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    if (now - fs.statSync(lock).mtimeMs < 10 * 60_000) {
-      log('codex auto-reset: another run holds the ledger, skipped');
-      return { checked: false, reset: false };
+  const take = () => {
+    try {
+      fs.mkdirSync(lock);
+      return true;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      return false;
     }
+  };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  let mine = take();
+  if (!mine) {
+    let age = 0;
+    try {
+      age = Date.now() - fs.statSync(lock).mtimeMs;
+    } catch { /* released meanwhile; the second take decides */ }
+    if (age > 10 * 60_000) fs.rmSync(lock, { recursive: true, force: true });
+    mine = take();
+  }
+  if (!mine) {
+    log('codex auto-reset: another run holds the ledger, skipped');
+    return { checked: false, reset: false };
   }
   try {
     return await runLocked({ c, host, file, dry, log, notify, now, call });
@@ -206,6 +239,10 @@ export async function run({ cfg, host, ledger: file, dry = false, log = () => {}
 }
 async function runLocked({ c, host, file, dry, log, notify, now, call }) {
   const ledger = readLedger(file);
+  if (ledger.corrupt) {
+    log(`codex auto-reset: the ledger ${file} is ${ledger.corrupt}; nothing is spent until it is fixed`);
+    return { checked: false, reset: false, corrupt: true };
+  }
   let snap;
   try {
     snap = await readLimits(call);
@@ -213,21 +250,25 @@ async function runLocked({ c, host, file, dry, log, notify, now, call }) {
     log(`codex auto-reset: could not read Codex usage, nothing spent (${e.message})`);
     return { checked: false, reset: false };
   }
-  const last = ledger.resets.filter((r) => r.outcome === 'reset').at(-1)?.at ?? null;
+  const last = lastSpend(ledger);
   const d = decide(snap, now, c, last ? Date.parse(last) : null);
   if (!d.act) return { checked: true, reset: false, decision: d };
   if (dry) {
     log(`codex auto-reset: would spend a free reset (${d.reason}), dry run`);
     return { checked: true, reset: false, decision: d };
   }
+  // The record goes down before the call: a call that times out after the server redeemed still starts the spacing clock.
+  const rec = { at: new Date(now).toISOString(), host, rule: d.rule, reason: d.reason, creditId: d.creditId, key: d.key, outcome: 'pending' };
+  ledger.resets.push(rec);
+  writeLedger(file, ledger);
   let outcome;
   try {
     outcome = await consume(d.creditId, d.key, call);
   } catch (e) {
-    log(`codex auto-reset: the redeem call failed, nothing known spent (${e.message})`);
+    log(`codex auto-reset: the redeem call failed (${e.message}); it may have spent a reset, so it counts for the spacing`);
     return { checked: true, reset: false, decision: d };
   }
-  ledger.resets.push({ at: new Date(now).toISOString(), host, rule: d.rule, reason: d.reason, creditId: d.creditId, key: d.key, outcome });
+  rec.outcome = outcome;
   writeLedger(file, ledger);
   const left = Math.max(0, snap.availableCount - (outcome === 'reset' ? 1 : 0));
   log(`codex auto-reset: ${outcome} (${d.reason}); ${left} free reset(s) left`);
@@ -240,10 +281,11 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import
   const cfg = conf.dispatcher ?? {};
   if (process.argv.includes('--apply')) {
     // The same path the tick takes: the host and enabled checks, the ledger and its spacing rule.
-    console.log(JSON.stringify(await run({ cfg, host: os.hostname().split('.')[0], ledger: ledgerFile(conf), log: console.log }), null, 2));
+    console.log(JSON.stringify(await run({ cfg, host: thisHost(), ledger: ledgerFile(conf), log: console.log }), null, 2));
   } else {
     const snap = await readLimits();
-    const last = readLedger(ledgerFile(conf)).resets.filter((r) => r.outcome === 'reset').at(-1)?.at ?? null;
+    const ledger = readLedger(ledgerFile(conf));
+    const last = ledger.corrupt ? null : lastSpend(ledger);
     const d = decide(snap, Date.now(), cfg.codexAutoReset ?? {}, last ? Date.parse(last) : null);
     const when = (ms) => ms && new Date(ms).toISOString();
     console.log(JSON.stringify({ snapshot: { ...snap, windows: snap.windows.map((w) => ({ ...w, resetsAt: when(w.resetsAt) })),

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = process.env.CODEX_RESET_SRC ?? path.join(HERE, '..', 'codex-reset.mjs');
-const { decide, run, readLimits } = await import(SRC);
+const { decide, run, readLimits, thisHost } = await import(SRC);
 
 const NOW = Date.parse('2026-11-09T23:00:00Z');
 const H = 3_600_000;
@@ -135,4 +135,61 @@ test('a Codex that cannot be read is logged and spends nothing', async () => {
   const out = await run({ cfg: CFG, host: 'host-a', now: NOW, call: async () => { throw new Error('codex is not installed here'); }, ledger: tmpLedger(), log: (m) => logs.push(m) });
   assert.equal(out.reset, false);
   assert.match(logs[0], /could not read Codex usage/);
+});
+
+test('minHoursBetweenResets counts from the last spend: 23h later nothing is spent, 25h later one is', async () => {
+  const ledgerFile = tmpLedger();
+  const cfg = { codexAutoReset: { ...CFG.codexAutoReset, minHoursBetweenResets: 24 } };
+  const first = fakeCodex(LIMITS(100, 60, [['a', 200], ['b', 300]]));
+  assert.equal((await run({ cfg, host: 'host-a', now: NOW, call: first.call, ledger: ledgerFile })).reset, true);
+  const early = fakeCodex(LIMITS(100, 60, [['b', 300]]));
+  const out = await run({ cfg, host: 'host-a', now: NOW + 23 * H, call: early.call, ledger: ledgerFile });
+  assert.equal(early.consumed.length, 0);
+  assert.match(out.decision.reason, /spent 23h ago, under minHoursBetweenResets \(24h\)/);
+  const later = fakeCodex(LIMITS(100, 60, [['b', 300]]));
+  assert.equal((await run({ cfg, host: 'host-a', now: NOW + 25 * H, call: later.call, ledger: ledgerFile })).reset, true);
+});
+
+test('a redeem call that fails after its record went down still starts the spacing clock', async () => {
+  const ledgerFile = tmpLedger();
+  const limits = LIMITS(100, 60, [['b', 500], ['a', 200]]);
+  const flaky = async (requests) => {
+    if (requests[0].method === 'account/rateLimits/read') return { 1: { result: limits } };
+    throw new Error('codex app-server gave no answer in 25s');
+  };
+  assert.equal((await run({ cfg: CFG, host: 'host-a', now: NOW, call: flaky, ledger: ledgerFile })).reset, false);
+  assert.equal(JSON.parse(fs.readFileSync(ledgerFile, 'utf8')).resets[0].outcome, 'pending');
+  const codex = fakeCodex(limits);
+  await run({ cfg: CFG, host: 'host-a', now: NOW + H, call: codex.call, ledger: ledgerFile });
+  assert.equal(codex.consumed.length, 0, 'a pending redeem counts as spent');
+});
+
+test('a corrupt ledger spends nothing, stays in place, and a copy is kept aside', async () => {
+  const ledgerFile = tmpLedger();
+  fs.writeFileSync(ledgerFile, '{ not json');
+  const codex = fakeCodex(LIMITS(100, 60, [['a', 200]]));
+  const logs = [];
+  const out = await run({ cfg: CFG, host: 'host-a', now: NOW, call: codex.call, ledger: ledgerFile, log: (m) => logs.push(m) });
+  assert.equal(out.corrupt, true);
+  assert.equal(codex.consumed.length, 0);
+  assert.equal(fs.readFileSync(ledgerFile, 'utf8'), '{ not json');
+  assert.equal(fs.readFileSync(`${ledgerFile}.corrupt`, 'utf8'), '{ not json');
+  assert.match(logs.join('\n'), /nothing is spent until it is fixed/);
+});
+
+test('a live lock skips the run and stays; a stale lock is removed and taken; the taker releases it', async () => {
+  const ledgerFile = tmpLedger();
+  const lock = `${ledgerFile}.lock`;
+  fs.mkdirSync(lock);
+  const codex = fakeCodex(LIMITS(100, 60, [['a', 200]]));
+  assert.equal((await run({ cfg: CFG, host: 'host-a', now: NOW, call: codex.call, ledger: ledgerFile })).checked, false);
+  assert.ok(fs.existsSync(lock), 'a lock this run did not take stays');
+  const old = new Date(Date.now() - 60 * 60_000);
+  fs.utimesSync(lock, old, old);
+  assert.equal((await run({ cfg: CFG, host: 'host-a', now: NOW, call: codex.call, ledger: ledgerFile })).checked, true);
+  assert.ok(!fs.existsSync(lock), 'released by the run that took it');
+});
+
+test('the tick and --apply name this machine the same way', () => {
+  assert.equal(thisHost(), os.hostname().split('.')[0]);
 });

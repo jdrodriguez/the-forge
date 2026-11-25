@@ -2915,7 +2915,7 @@ async function codexAutoReset(st) {
   if (!cfg.codexAutoReset?.enabled) return;
   try {
     const mod = await import('./codex-reset.mjs');
-    const out = await mod.run({ cfg, host: HOST, ledger: mod.ledgerFile(conf), dry: DRY, log, notify: (s, t) => notify(s, t, { progress: true }) });
+    const out = await mod.run({ cfg, host: mod.thisHost(), ledger: mod.ledgerFile(conf), dry: DRY, log, notify: (s, t) => notify(s, t, { progress: true }) });
     if (out.reset && st.engineLimits?.codex) {
       delete st.engineLimits.codex;
       saveState(st);
