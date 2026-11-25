@@ -1,5 +1,5 @@
-// The worktree sweep in the dispatcher: a ticket this machine's state calls live, whose PR GitHub shows merged (named
-// in a bundle PR's title), is judged as finished and the mismatch is logged; an Agent tool worktree with commits on no
+// The worktree sweep in the dispatcher: a ticket this machine's state calls live, whose own PR GitHub shows merged, is
+// judged as finished and the mismatch is logged; one matched only by a PR title stays live; an Agent tool worktree with commits on no
 // remote is asked about at once, naming its branch, and only once. Runs the real dispatcher in capacity-sandbox.mjs with
 // real git repos at repoPath.
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ import { capBox, lines, tick } from './capacity-sandbox.mjs';
 const GIT_ENV = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' };
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, ...GIT_ENV }, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
-function sweepBox() {
+function sweepBox({ prNumber = null } = {}) {
   const probe = capBox();
   const root = fs.realpathSync(probe.home);
   const origin = path.join(root, 'origin.git');
@@ -40,7 +40,7 @@ function sweepBox() {
   for (const f of ['HEAD', 'index', 'logs/HEAD']) fs.utimesSync(path.join(gd, f), old, old);
   const box = capBox({ config: { repoPath: repo }, dispatcher: { worktreeCleanup: { enabled: true, dryRun: false, sweepHours: 24, atRiskAskDays: 7,
     keptFoldersDir: path.join(root, 'kept') } },
-  tickets: { 'ENG-57': { status: 'merge-asked', account: 'b', workerId: 'gone', branch: 'agent/eng-57', prNumber: null, claimedAt: '2026-11-24T00:00:00Z' } } });
+  tickets: { 'ENG-57': { status: 'merge-asked', account: 'b', workerId: 'gone', branch: 'agent/eng-57', prNumber, claimedAt: '2026-11-24T00:00:00Z' } } });
   // The sweep's `gh pr list --state all` sees one merged bundle PR naming ENG-57; every other gh call goes to the sandbox's stub.
   const prList = JSON.stringify([{ number: 4705, state: 'MERGED', headRefName: 'agent/eng-50', headRefOid: 'f'.repeat(40),
     title: 'ENG-50, ENG-57: one bundle', createdAt: '2026-11-24T08:00:00Z' }]);
@@ -53,11 +53,18 @@ else process.stdout.write(require('node:child_process').execFileSync(__dirname +
   return { box, stale, agent };
 }
 
-test('a ticket live in local state whose PR GitHub shows merged is judged as finished, and the mismatch is logged', () => {
-  const { box, stale } = sweepBox();
+test('a ticket live in local state whose own PR GitHub shows merged is judged as finished, and the mismatch is logged', () => {
+  const { box, stale } = sweepBox({ prNumber: 4705 });
   const out = tick(box, GIT_ENV);
   assert.match(out, /ENG-57 is merge-asked in this machine's state, but its PR #4705 is merged on GitHub/);
   assert.ok(!fs.existsSync(stale), out);
+});
+
+test('a live ticket matched only by a merged PR title stays live (a title is free text), and the match is logged', () => {
+  const { box, stale } = sweepBox();
+  const out = tick(box, GIT_ENV);
+  assert.match(out, /ENG-57 is merge-asked in this machine's state, and merged PR #4705 names it in its title; it stays live here/);
+  assert.ok(fs.existsSync(stale), out);
 });
 
 test('an Agent tool worktree with commits on no remote is kept and asked about at once, naming its branch, once', () => {

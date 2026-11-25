@@ -794,13 +794,15 @@ const clearMergeRequest = (id) => fs.rmSync(path.join(MERGE_REQUESTS, `${id}.jso
 const HEARTBEATS = path.join(SHARED, 'heartbeats');
 const isSentry = (issue) => issue.labels.nodes.some((l) => l.name === L.sentry);
 // The heartbeat also carries this machine's wake queue, so `wake` on any machine can say where a ticket waits, its
-// worktree count (the folders in the worktrees folder of every repo the sweep covers), and, while workerReservePercent
-// is set, its working sessions per Claude account, for the other machines' reserve.
+// worktree count (the folders in the worktrees folder of every repo the sweep covers), every ticket in its state with
+// its status (for the other machines' orphan label check), and, while workerReservePercent is set, its working sessions
+// per Claude account, for the other machines' reserve.
 async function writeHeartbeat(st) {
   if (DRY) return;
   fs.mkdirSync(HEARTBEATS, { recursive: true });
   const wakeQueue = (st.wakeQueue ?? []).map(({ id, since, reason, pool }) => ({ id, since, reason, pool }));
   const beat = { host: HOST, platform: process.platform, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue, worktrees: await worktreeCount(),
+    tickets: Object.fromEntries(Object.entries(st.tickets ?? {}).map(([id, t]) => [id, t.status ?? null])),
     ...(reserving() ? { accountsWorking: accountsWorkingHere() } : {}) };
   fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify(beat)}\n`);
 }
@@ -1988,7 +1990,7 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   const absent = !entry && Boolean(t.branch) && !named.length && !outside.length;
   if (!entry) named.push(...outside);
   const res = entry ? wt.teardownWorktree({ path: entry.path, repo: R.path, base: R.base, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
-    ...wtOpts(wt) })
+    ...wtOpts(wt), recheck: () => wt.processDirs({ scanners: wtScanners(wt) }) })
     : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
       : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
   const tries = (t.teardown?.tries ?? 0) + 1;
@@ -2052,12 +2054,12 @@ async function worktreeSweep(st) {
     const label = `worktree sweep (${path.basename(repo.path)})`;
     try {
       const prs = {};
-      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt']));
+      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt,isCrossRepository']));
       for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
       // Each machine keeps its own state, so a ticket can be live here and finished on another machine. GitHub settles
-      // it: a ticket whose PR is merged or closed is not live, and the mismatch is logged. A live ticket counts its own
-      // PR, or one from its branch or naming it in the title opened since its claim; a finished one any of those. A
-      // branch with no PR of its own is judged against its ticket's PR. A ticket being claimed is left live.
+      // it: a live ticket whose own PR, or a PR from its branch opened since its claim, is merged or closed is not live,
+      // and the mismatch is logged. A merged PR naming it in the title only logs. A branch with no PR of its own is judged
+      // against its ticket's PR. A ticket being claimed is left live.
       const mine = Object.entries(st.tickets).filter(([, t]) => repoOf(t).github === repo.github && t.status !== 'claiming');
       const isLive = (id) => live.some(([x]) => x === id);
       const done = new Map(wt.finishedOnGitHub(mine.map(([id, t]) => ({ id, branch: t.branch ?? null, prNumber: t.prNumber ?? null,
@@ -2065,6 +2067,12 @@ async function worktreeSweep(st) {
       for (const [id, t] of mine) {
         const d = done.get(id);
         if (!d) continue;
+        // A title is free text, so a live ticket matched only by title stays live; the match is still logged.
+        if (isLive(id) && d.by === 'title') {
+          log(`${label}: ${id} is ${t.status} in this machine's state, and merged PR #${d.pr.number} names it in its title; it stays live here, check it by hand`);
+          done.delete(id);
+          continue;
+        }
         if (isLive(id)) log(`${label}: ${id} is ${t.status} in this machine's state, but its PR #${d.pr.number} is ${d.pr.state.toLowerCase()} on GitHub; its worktree is judged as finished`);
         if (t.branch && !prs[t.branch]) prs[t.branch] = d.pr;
       }
@@ -3019,6 +3027,80 @@ async function labelCheck() {
   }
 }
 
+// A ticket labeled agent-building or agent-stuck that no enabled machine's state holds: nothing will wake it or move it on.
+// This machine's state is read directly, every other one only from its synced heartbeat's tickets. A machine whose
+// heartbeat is missing, carries no tickets (an older dispatcher) or is over ORPHAN_BEAT_MINUTES old is unreadable: it is
+// named once a day, and no ticket is reported that tick, since any of them could be its. Report only: a ticket is logged
+// once a day, and the human is asked once when it has read as held by nobody for over an hour. No label is changed.
+const ORPHAN_LABELS = path.join(LOCAL, 'orphan-labels.json');
+const ORPHAN_BEAT_MINUTES = 90;
+async function orphanLabelCheck(st) {
+  let mem = {};
+  try {
+    mem = JSON.parse(fs.readFileSync(ORPHAN_LABELS, 'utf8'));
+  } catch { /* first run */ }
+  const today = iso().slice(0, 10);
+  const save = (data) => {
+    if (DRY) return;
+    try {
+      fs.writeFileSync(ORPHAN_LABELS, `${JSON.stringify(data, null, 2)}\n`);
+    } catch (e) {
+      log(`orphan label check: could not save its state (${errText(e)})`);
+    }
+  };
+  const held = new Set(Object.keys(st.tickets ?? {}));
+  const unreadable = [];
+  for (const host of cfg.enabledHosts.filter((h) => h !== HOST)) {
+    let beat = null;
+    try {
+      beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
+    } catch { /* no heartbeat */ }
+    if (!beat) unreadable.push(`${host} (no heartbeat)`);
+    else if (!beat.tickets || typeof beat.tickets !== 'object') unreadable.push(`${host} (its heartbeat lists no tickets)`);
+    else if (!(hoursSince(beat.at) * 60 <= ORPHAN_BEAT_MINUTES)) unreadable.push(`${host} (heartbeat ${beat.at ?? 'undated'})`);
+    else for (const id of Object.keys(beat.tickets)) held.add(id);
+  }
+  if (unreadable.length) {
+    if (mem._unreadableDay !== today) {
+      log(`orphan label check: skipped, unreadable: ${unreadable.join(', ')}`);
+      save({ ...mem, _unreadableDay: today });
+    }
+    return;
+  }
+  let d;
+  try {
+    d = await gql(`query orphanLabels($team:String!,$names:[String!]){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{in:$names}},
+      state:{type:{nin:["completed","canceled"]}}}){ nodes{ identifier state{ name } labels{ nodes{ name } } } } }`, { team: TEAM, names: [L.building, L.stuck] });
+  } catch (e) {
+    return log(`orphan label check could not run (${errText(e)})`);
+  }
+  const next = mem._unreadableDay ? { _unreadableDay: mem._unreadableDay } : {};
+  for (const n of d?.issues?.nodes ?? []) {
+    const id = n.identifier;
+    if (held.has(id)) continue;
+    const labels = (n.labels?.nodes ?? []).map((l) => l.name).filter((l) => l === L.building || l === L.stuck);
+    const rec = { since: mem[id]?.since ?? iso(), loggedDay: mem[id]?.loggedDay ?? null, asked: mem[id]?.asked ?? null };
+    if (rec.loggedDay !== today) {
+      log(`orphan label check: ${id} (${n.state?.name ?? '?'}) is labeled ${labels.join(' and ')}, but no enabled machine's state holds it`);
+      rec.loggedDay = today;
+    }
+    if (!rec.asked && hoursSince(rec.since) > 1) {
+      const ask = `${id} is labeled ${labels.join(' and ')}, but no machine's dispatcher state (${cfg.enabledHosts.join(', ')}) has held it for over an hour, so nothing will wake it or move it on.`;
+      if (DRY) log(`would ask ${HUMAN}: ${ask}`);
+      else {
+        try {
+          askHuman(id, 'blocked', ask, `Check its worker and branch, then re-queue it (${L.ready} on, ${labels.join(' and ')} off) or close it out`, 'it stays as it is');
+          rec.asked = iso();
+        } catch (e) {
+          log(`orphan label check: could not ask about ${id} (${errText(e)})`);
+        }
+      }
+    }
+    next[id] = rec;
+  }
+  save(next);
+}
+
 // --- commands ------------------------------------------------------------------------------------------
 
 async function tick() {
@@ -3061,6 +3143,7 @@ async function tick() {
     await watchWorkers(st, workers);
     await watchSignIns(st);
     await labelCheck();
+    await orphanLabelCheck(st);
     await dispatch(st, m);
     await sentryTriage();
     await codexAutoReset(st);
@@ -3094,9 +3177,15 @@ async function status() {
       console.log(`sentry triage: status unavailable (${errText(e)})`);
     }
   }
-  const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{eq:$ready}},
-    state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
-  console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
+  // Linear is the one read here that needs a secret. Without it (an SSH session that can't reach the secrets manager),
+  // status still lists this machine's tickets.
+  try {
+    const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{eq:$ready}},
+      state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
+    console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
+  } catch (e) {
+    console.log(`queue: unknown, Linear could not be read (${errText(e).split('\n')[0].slice(0, 160)}); set LINEAR_API_KEY. This machine's tickets follow.`);
+  }
   // The slots counted the way the tick counts them, and the tickets waiting for one here and on the other machines.
   try {
     const rows = await sessionRows(st);

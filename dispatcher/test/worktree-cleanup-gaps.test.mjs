@@ -273,6 +273,20 @@ test('finishedOnGitHub: by PR number, then branch, then a PR title naming the ti
   assert.deepEqual(out.map((t) => [t.id, t.pr.number]), [['ENG-6757', 4705], ['ENG-7001', 4801], ['ENG-7002', 4802]]);
 });
 
+test('finishedOnGitHub: a fork PR never counts, a title match counts only once merged, and each match says how it was made', () => {
+  const prs = [
+    { number: 10, state: 'MERGED', headRefName: 'x/eng-1', title: 'ENG-1: from a fork', isCrossRepository: true },
+    { number: 11, state: 'CLOSED', headRefName: 'y', title: 'ENG-2: closed, never merged' },
+    { number: 12, state: 'MERGED', headRefName: 'z', title: 'ENG-3, ENG-4: bundle' },
+    { number: 13, state: 'MERGED', headRefName: 'x/eng-5', title: 'five' },
+  ];
+  const out = finishedOnGitHub([
+    { id: 'ENG-1', branch: 'x/eng-1' }, { id: 'ENG-2', branch: 'q' }, { id: 'ENG-4', branch: 'r' },
+    { id: 'ENG-5', branch: 'x/eng-5' }, { id: 'ENG-6', prNumber: 13 },
+  ], prs);
+  assert.deepEqual(out.map((t) => [t.id, t.pr.number, t.by]), [['ENG-4', 12, 'title'], ['ENG-5', 13, 'branch'], ['ENG-6', 13, 'number']]);
+});
+
 test('finishedOnGitHub: a ticket built again counts only a PR opened since its claim, by branch or title; its own prNumber always', () => {
   const prs = [
     { number: 4745, state: 'MERGED', headRefName: 'agent/eng-6754-agent', title: 'ENG-6754: first attempt', createdAt: '2026-11-22T08:15:12Z' },
@@ -282,4 +296,94 @@ test('finishedOnGitHub: a ticket built again counts only a PR opened since its c
   assert.deepEqual(finishedOnGitHub([{ id: 'ENG-6754', branch: 'agent/eng-6754-agent', since }, { id: 'ENG-7400', branch: 'x', since }], prs), []);
   assert.deepEqual(finishedOnGitHub([{ id: 'ENG-6754', branch: 'agent/eng-6754-agent', prNumber: 4745, since }], prs).map((t) => t.pr.number), [4745]);
   assert.deepEqual(finishedOnGitHub([{ id: 'ENG-6754', branch: 'agent/eng-6754-agent', since: '2026-11-21T00:00:00Z' }], prs).map((t) => t.pr.number), [4745]);
+});
+
+test('status is read raw: a first entry whose path looks like a keep folder, or holds " -> ", still keeps a worktree', () => {
+  const { repo, kept } = setup();
+  const { wt } = worktree(repo, 'raw-status');
+  commit(wt, 'x.claude/notes/a.md', 'v1');
+  git(wt, 'push', '-q', 'origin', 'HEAD:refs/heads/raw-status');
+  const pr = merged(git(wt, 'rev-parse', 'HEAD'));
+  fs.writeFileSync(path.join(wt, 'x.claude/notes/a.md'), 'v2');
+  fs.mkdirSync(path.join(wt, '.claude/notes'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.claude/notes/n.md'), 'n');
+  assert.equal(teardownWorktree({ path: wt, repo, pr, dirs: [], keptDir: kept }).rule, 'dirty');
+  git(wt, 'checkout', '-q', '--', 'x.claude/notes/a.md');
+  fs.mkdirSync(path.join(wt, 'scratch -> .claude/notes'), { recursive: true });
+  fs.writeFileSync(path.join(wt, 'scratch -> .claude/notes/a.md'), 'x');
+  assert.equal(teardownWorktree({ path: wt, repo, pr, dirs: [], keptDir: kept }).rule, 'dirty');
+});
+
+test('a keep glob that also matches a file, or a tracked change inside a keep folder, still keeps a worktree', () => {
+  const { repo, kept } = setup();
+  const a = worktree(repo, 'glob-file');
+  fs.mkdirSync(path.join(a.wt, 'scratch-notes'));
+  fs.writeFileSync(path.join(a.wt, 'scratch-notes/n.md'), 'n');
+  fs.writeFileSync(path.join(a.wt, 'scratch-work.txt'), 'w');
+  assert.equal(teardownWorktree({ path: a.wt, repo, pr: merged(a.head), dirs: [], keptDir: kept, keep: ['scratch-*'] }).rule, 'dirty');
+  const b = worktree(repo, 'staged-note');
+  commit(b.wt, '.claude/notes/a.md', 'v1');
+  git(b.wt, 'push', '-q', 'origin', 'HEAD:refs/heads/staged-note');
+  fs.writeFileSync(path.join(b.wt, '.claude/notes/a.md'), 'v2');
+  git(b.wt, 'add', '.claude/notes/a.md');
+  fs.writeFileSync(path.join(b.wt, '.claude/notes/a.md'), 'v3');
+  assert.equal(teardownWorktree({ path: b.wt, repo, pr: merged(git(b.wt, 'rev-parse', 'HEAD')), dirs: [], keptDir: kept }).rule, 'dirty');
+});
+
+test('a collapsed ignored .claude/ holding only notes goes after the copy; anything beside the notes keeps it', () => {
+  const { repo, kept } = setup();
+  const { wt } = worktree(repo, 'collapsed');
+  fs.writeFileSync(path.join(wt, '.gitignore'), '.claude/\n');
+  git(wt, 'add', '.gitignore');
+  git(wt, 'commit', '-q', '-m', 'ignore');
+  git(wt, 'push', '-q', 'origin', 'HEAD:refs/heads/collapsed');
+  const pr = merged(git(wt, 'rev-parse', 'HEAD'));
+  fs.mkdirSync(path.join(wt, '.claude/notes'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.claude/notes/a.md'), 'a');
+  fs.writeFileSync(path.join(wt, '.claude/settings.local.json'), '{}');
+  const r = teardownWorktree({ path: wt, repo, pr, dirs: [], keptDir: kept });
+  assert.equal(r.rule, 'ignored');
+  assert.match(r.reason, /\.claude\/settings\.local\.json/);
+  fs.rmSync(path.join(wt, '.claude/settings.local.json'));
+  assert.equal(teardownWorktree({ path: wt, repo, pr, dirs: [], keptDir: kept }).action, 'removed');
+  assert.ok(fs.existsSync(path.join(kept, 'app', 'collapsed', today, '.claude/notes/a.md')));
+});
+
+test('keptFoldersDir inside the checkout, or submodules under a forced removal, keep a worktree', () => {
+  const { repo } = setup();
+  const a = worktree(repo, 'kept-inside');
+  fs.mkdirSync(path.join(a.wt, '.claude/notes'), { recursive: true });
+  fs.writeFileSync(path.join(a.wt, '.claude/notes/a.md'), 'a');
+  const r = teardownWorktree({ path: a.wt, repo, pr: merged(a.head), dirs: [], keptDir: path.join(a.wt, '.kept') });
+  assert.equal(r.rule, 'keep-copy');
+  assert.ok(fs.existsSync(path.join(a.wt, '.claude/notes/a.md')));
+  const b = worktree(repo, 'with-submodules');
+  commit(b.wt, '.gitmodules', '[submodule "x"]\n');
+  git(b.wt, 'push', '-q', 'origin', 'HEAD:refs/heads/with-submodules');
+  const head = git(b.wt, 'rev-parse', 'HEAD');
+  fs.rmSync(path.join(b.wt, 'with-submodules.txt'));
+  assert.equal(teardownWorktree({ path: b.wt, repo, pr: merged(head), dirs: [] }).rule, 'submodules');
+  assert.ok(fs.existsSync(b.wt));
+});
+
+test("an Agent tool worktree keeps a commit only its HEAD reflog reaches (left behind on a detached HEAD)", () => {
+  const { repo } = setup();
+  const { wt } = worktree(repo, 'agent-3333333333333333c', 'agent/eng-9-x');
+  git(wt, 'checkout', '-q', '--detach');
+  commit(wt, 'lost.txt');
+  git(wt, 'checkout', '-q', 'agent/eng-9-x');
+  age(wt, 30);
+  const r = sweepRepo({ repo, prs: {}, dirs: [], fetch: false }).results.find((x) => x.name === 'agent-3333333333333333c');
+  assert.equal(r.rule, 'agent-unpushed', r.reason);
+  assert.ok(fs.existsSync(wt));
+});
+
+test('a forced removal is judged again right before it happens: a process that came in keeps the worktree', () => {
+  const { repo } = setup();
+  const { wt, head } = worktree(repo, 'came-in');
+  fs.rmSync(path.join(wt, 'came-in.txt'));
+  const r = teardownWorktree({ path: wt, repo, pr: merged(head), dirs: [], recheck: () => [wt] });
+  assert.equal(r.action, 'kept');
+  assert.equal(r.rule, 'changed');
+  assert.ok(fs.existsSync(wt));
 });

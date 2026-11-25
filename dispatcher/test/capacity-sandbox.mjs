@@ -49,6 +49,7 @@ globalThis.fetch = async (url, init) => {
   if (query.includes('inverseRelations')) return json({ issues: { nodes: file('ready.json', []).filter((i) => !fs.existsSync(H + '/claimed-' + i.identifier)) } });
   if (query.includes('issue(id:$id){ labels')) return json({ issue: { labels: { nodes: (file('issue-labels.json', {})[variables.id] ?? ['agent-ready']).map((name) => ({ name })) } } });
   if (query.includes('labelCheck')) return json({ issues: { nodes: file('label-check.json', []) } });
+  if (query.includes('orphanLabels')) return json({ issues: { nodes: file('orphan-labels.json', []) } });
   if (query.includes('issues(')) return json({ issues: { nodes: (variables.label === 'agent-building' ? file('building.json', []) : []).map((identifier) => ({ identifier })) } });
   throw new Error('unhandled query ' + query.slice(0, 80));
 };

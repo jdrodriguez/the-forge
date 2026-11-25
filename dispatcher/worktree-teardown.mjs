@@ -203,11 +203,11 @@ export function trashDirFor(trashRoot = null, date = new Date().toLocaleDateStri
 
 // The newest modification time in a folder, reading at most MTIME_CAP entries, so a folder whose top is old but whose
 // files changed recently reads as recent.
-function newestMtime(dir, skip = new Set()) {
+function newestMtime(dir, skip = new Set(), cap = MTIME_CAP) {
   let newest = fs.statSync(dir).mtimeMs;
   let seen = 0;
   const stack = [dir];
-  while (stack.length && seen < MTIME_CAP) {
+  while (stack.length && seen < cap) {
     let ents;
     try {
       ents = fs.readdirSync(stack.pop(), { withFileTypes: true });
@@ -215,7 +215,7 @@ function newestMtime(dir, skip = new Set()) {
       continue;
     }
     for (const e of ents) {
-      if (++seen > MTIME_CAP) break;
+      if (++seen > cap) break;
       const p = path.join(e.parentPath ?? e.path, e.name);
       try {
         newest = Math.max(newest, fs.lstatSync(p).mtimeMs);
@@ -226,9 +226,6 @@ function newestMtime(dir, skip = new Set()) {
   return newest;
 }
 
-// The ignored entries in a checkout that may hold the only copy of something: every ignored file or folder not under a
-// rebuildable one, less a file identical to the main checkout's file at the same path. git collapses an ignored folder
-// to one entry, which counts by its own name.
 // A test for paths: a pattern with a slash names a path from the checkout's root (that path, or anything under it); one
 // without names any single part of a path.
 // rootOnly reads every pattern as a path from the root.
@@ -244,11 +241,24 @@ export function pathMatcher(list, { rootOnly = false } = {}) {
 // Each keep pattern is a path from the root with a glob only in its last part, and no '..'; any other list means the default.
 const keepList = (list) => (Array.isArray(list) && list.every((x) => typeof x === 'string' && x && !x.startsWith('/') && !x.split('/').includes('..')
   && !/[*?]/.test(path.dirname(x.replace(/\/$/, '')))) ? list : KEEP_FOLDERS);
-// A porcelain v1 path, unquoted when git quoted it.
-const statusPath = (line) => {
-  const p = line.slice(3).replace(/^.* -> /, '');
-  return p.startsWith('"') ? p.slice(1, -1).replace(/\\(.)/g, '$1') : p;
-};
+// The entries of `git status --porcelain=v1 -z`, as { xy, path }. -z gives raw paths: no quoting, and a rename's source
+// comes as its own entry, which is skipped.
+function statusEntries(dir) {
+  const out = execFileSync('git', ['--no-optional-locks', '-c', 'core.preloadIndex=false', '-C', dir, 'status', '--porcelain=v1', '-z',
+    '--untracked-files=all', '--ignore-submodules=none'], { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 << 20 });
+  const parts = out.split('\0');
+  const entries = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (!parts[i]) continue;
+    const xy = parts[i].slice(0, 2);
+    entries.push({ xy, path: parts[i].slice(3) });
+    if (xy[0] === 'R' || xy[0] === 'C') i++;
+  }
+  return entries;
+}
+// Whether a path is one of folders or inside one.
+const inside = (folders) => (f) => folders.some((d) => f.replace(/\/$/, '') === d || f.startsWith(`${d}/`));
+const WALK_CAP = 5000; // files read under one collapsed ignored folder before it simply counts as unsafe
 // The keep folders a checkout holds with something in them, as paths from its root. A keepFolders pattern is a path from
 // the root, with a glob only in its last part (packages/web/.visual-gate-*).
 export function keptFolders(dir, keep = KEEP_FOLDERS) {
@@ -271,8 +281,12 @@ export function keptFolders(dir, keep = KEEP_FOLDERS) {
   }
   return [...new Set(found)].sort();
 }
-function unsafeIgnored(dir, repo, rebuildable, keep = []) {
-  const kept = pathMatcher(keepList(keep), { rootOnly: true });
+// The ignored entries in a checkout that may hold the only copy of something: every ignored file or folder not under a
+// rebuildable one or a keep folder, less a file identical to the main checkout's file at the same path. git collapses an
+// ignored folder to one entry, which counts by its own name; one that holds a keep folder is read file by file instead,
+// so the keep folder is left out and everything beside it still counts.
+function unsafeIgnored(dir, repo, rebuildable, folders = []) {
+  const kept = inside(folders);
   const same = (f) => {
     try {
       return fs.statSync(path.join(dir, f)).isFile() && fs.readFileSync(path.join(dir, f)).equals(fs.readFileSync(path.join(repo, f)));
@@ -284,24 +298,50 @@ function unsafeIgnored(dir, repo, rebuildable, keep = []) {
   // git also lists each parent folder of an ignored entry; a folder that only holds other listed entries is not one.
   const leaves = listed.filter((f) => !(f.endsWith('/') && listed.some((o) => o !== f && o.startsWith(f))));
   const rebuilt = pathMatcher(rebuildableList(rebuildable));
-  return leaves.filter((f) => !rebuilt(f) && !kept(f) && !same(f));
+  const unsafe = [];
+  for (const f of leaves) {
+    if (rebuilt(f) || kept(f) || same(f)) continue;
+    if (!(f.endsWith('/') && folders.some((d) => d.startsWith(f)))) {
+      unsafe.push(f);
+      continue;
+    }
+    // A collapsed folder holding a keep folder: walk it, leaving the keep folders out.
+    const stack = [f.replace(/\/$/, '')];
+    let seen = 0;
+    while (stack.length) {
+      const rel = stack.pop();
+      for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+        const r = `${rel}/${e.name}`;
+        if (kept(r) || rebuilt(r)) continue;
+        if (++seen > WALK_CAP) {
+          unsafe.push(f);
+          stack.length = 0;
+          break;
+        }
+        if (e.isDirectory() && !e.isSymbolicLink()) stack.push(r);
+        else if (!same(r)) unsafe.push(r);
+      }
+    }
+  }
+  return [...new Set(unsafe)];
 }
 // What a checkout still holds that git or GitHub lacks, or null: changes, an operation in progress, ignored files.
-// Paths under a keep folder don't count (they are copied out first). A status that is only deletions of tracked files
-// returns rule 'deleted-only': HEAD holds those files, so the caller may finish a teardown that stopped partway.
+// Untracked or ignored files inside a keep folder don't count (they are copied out first); tracked changes there do. A
+// status that is only deletions of tracked files returns rule 'deleted-only': HEAD holds those files, so the caller may
+// finish a teardown that stopped partway.
 function localWork(dir, repo, rebuildable, keep = KEEP_FOLDERS) {
-  const kept = pathMatcher(keepList(keep), { rootOnly: true });
-  const lines = git(dir, ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']).split('\n').filter(Boolean)
-    .filter((l) => !kept(statusPath(l)));
+  const folders = keptFolders(dir, keep);
+  const kept = inside(folders);
+  const entries = statusEntries(dir).filter((e) => !(e.xy === '??' && kept(e.path)));
   const op = opInProgress(dir);
   if (op) return { rule: 'in-progress', reason: `a ${op.replace(/_HEAD$|-merge$|-apply$/, '').toLowerCase().replace('_', '-')} is in progress` };
-  const deletedOnly = lines.length > 0 && lines.every((l) => [' D', 'D '].includes(l.slice(0, 2)));
-  if (lines.length && !deletedOnly) {
-    return { rule: 'dirty', reason: `${lines.length} uncommitted or untracked path(s), first: ${lines[0].trim().slice(0, 80)}` };
+  const deletedOnly = entries.length > 0 && entries.every((e) => [' D', 'D '].includes(e.xy));
+  if (entries.length && !deletedOnly) {
+    return { rule: 'dirty', reason: `${entries.length} uncommitted or untracked path(s), first: ${`${entries[0].xy} ${entries[0].path}`.trim().slice(0, 80)}` };
   }
-  const ignored = unsafeIgnored(dir, repo, rebuildable, keep);
+  const ignored = unsafeIgnored(dir, repo, rebuildable, folders);
   if (ignored.length) return { rule: 'ignored', reason: `ignored files git does not keep (${ignored.slice(0, 3).join(', ')}${ignored.length > 3 ? ', ...' : ''}); save them, then remove it` };
-  if (deletedOnly) return { rule: 'deleted-only', deletedOnly: true, reason: `only ${lines.length} deleted tracked file(s), as a teardown that stopped partway leaves` };
+  if (deletedOnly) return { rule: 'deleted-only', deletedOnly: true, reason: `only ${entries.length} deleted tracked file(s), as a teardown that stopped partway leaves` };
   return null;
 }
 // Whether HEAD's work is on GitHub: in the PR's head, or nothing beyond origin/<base>.
@@ -363,14 +403,19 @@ export function savedRemoteRefs(repo, remote = 'origin') {
     return there === sha || (ok(repo, ['cat-file', '-e', `${there}^{commit}`]) && ok(repo, ['merge-base', '--is-ancestor', sha, there]));
   }).map((r) => r.ref);
 }
-// Commits in HEAD that none of refs holds.
+// Commits in HEAD, or anywhere in this worktree's HEAD reflog (a commit left behind on a detached HEAD), that none of refs
+// holds. Removing a worktree deletes its reflog, so a commit only the reflog reaches counts as unsaved.
 function unsavedCount(dir, refs) {
+  let logged = [];
+  try {
+    logged = git(dir, ['log', '-g', '--format=%H', 'HEAD']).split('\n').filter(Boolean);
+  } catch { /* no reflog */ }
   return Number(execFileSync('git', ['--no-optional-locks', '-C', dir, 'rev-list', '--count', '--stdin', 'HEAD'],
-    { encoding: 'utf8', input: refs.map((r) => `^${r}`).join('\n'), timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 }).trim());
+    { encoding: 'utf8', input: [...new Set(logged)].concat(refs.map((r) => `^${r}`)).join('\n'), timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 }).trim());
 }
 // Days since anything in a worktree changed: its files (node_modules left out) and its git metadata (HEAD, index, reflog).
 function idleDays(dir) {
-  let newest = newestMtime(dir, new Set(['node_modules']));
+  let newest = newestMtime(dir, new Set(['node_modules']), 50_000);
   try {
     const gd = git(dir, ['rev-parse', '--absolute-git-dir']);
     for (const f of ['HEAD', 'index', 'logs/HEAD']) newest = Math.max(newest, fs.statSync(path.join(gd, f), { throwIfNoEntry: false })?.mtimeMs ?? 0);
@@ -536,17 +581,22 @@ export function moveToTrash(wtPath, trashDir, rename = fs.renameSync) {
 }
 
 // Classifies, then acts: removes, trashes an orphan, or keeps. dryRun acts on nothing and says what it would do. Keep
-// folders are copied out before anything goes; a failed copy keeps the checkout.
+// folders are copied out before anything goes; a failed copy keeps the checkout. recheck, when given, returns a fresh
+// processDirs(): a removal that needs --force, a move to the trash, or an Agent tool removal is judged again with it
+// right before it happens, and anything that changed since keeps the checkout.
 export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null, dirs, listed = null, dryRun = false, trashDir = trashDirFor(), deleteBranch = true,
   rebuildable = REBUILDABLE_IGNORED, clones = 'dry-run', prs = {}, liveBranches = new Set(), liveIds = [], keep = KEEP_FOLDERS, keptDir = KEPT_FOLDERS_DIR,
-  agent = AGENT_WORKTREES, savedRefs = null }) {
+  agent = AGENT_WORKTREES, savedRefs = null, recheck = null }) {
+  const judge = (procs, fetch) => {
+    const v = classifyWorktree(wtPath, { repo, base, pr, dirs: procs, listed, fetch, rebuildable, keep, agent, savedRefs });
+    if (!v.clone) return v;
+    if (!CLONE_MODES.includes(clones) || clones === 'off') return { ...v, clonesOff: true };
+    return { ...classifyClone(wtPath, { repo, base, prs, dirs: procs, liveBranches, liveIds, rebuildable, keep }), clone: true };
+  };
   let c;
   try {
-    c = classifyWorktree(wtPath, { repo, base, pr, dirs, listed, fetch: !dryRun, rebuildable, keep, agent, savedRefs });
-    if (c.clone) {
-      if (!CLONE_MODES.includes(clones) || clones === 'off') return { action: 'kept', clone: true, rule: 'clones-off', reason: `${c.reason}; clone cleanup is off` };
-      c = { ...classifyClone(wtPath, { repo, base, prs, dirs, liveBranches, liveIds, rebuildable, keep }), clone: true };
-    }
+    c = judge(dirs, !dryRun);
+    if (c.clonesOff) return { action: 'kept', clone: true, rule: 'clones-off', reason: `${c.reason}; clone cleanup is off` };
   } catch (e) {
     return { action: 'kept', rule: 'error', reason: `could not inspect it (${errText(e)})` };
   }
@@ -557,6 +607,16 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
   const keepNote = c.keep?.length ? `copy ${c.keep.join(', ')} to ${path.join(String(keptDir), path.basename(repo), path.basename(wtPath))}/<date>, then ` : '';
   // Held back (a dry run, or a clone without clones "on"): nothing is copied either.
   const held = dryRun || (c.clone && clones !== 'on');
+  const forced = c.verdict === 'remove' && (c.force || c.keep?.length);
+  // git worktree remove refuses a worktree with submodules unless forced, and a submodule's own ignored files are never
+  // read here, so a forced removal leaves one alone.
+  if (forced && fs.existsSync(path.join(wtPath, '.gitmodules'))) {
+    return { action: 'kept', reason: `it has submodules, which a forced removal would delete unread (${c.reason})`, ...extra, rule: 'submodules' };
+  }
+  // The copies must outlive the checkout.
+  if (c.keep?.length && within(key(String(keptDir).replace(/^~(?=\/|$)/, os.homedir())), key(wtPath))) {
+    return { action: 'kept', reason: `keptFoldersDir ${keptDir} is inside the checkout, so its copies would go with it`, ...extra, rule: 'keep-copy' };
+  }
   let copied = '';
   if (!held && c.keep?.length) {
     try {
@@ -565,6 +625,18 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
       return { action: 'kept', reason: `copying ${c.keep.join(', ')} out failed (${errText(e)})`, ...extra, rule: 'keep-copy' };
     }
   }
+  // Judged again right before the change: a process that came in, or a file written, during the network reads or the copy.
+  const changed = () => {
+    if (held || !recheck || !(forced || c.verdict !== 'remove' || c.rule === 'agent-idle')) return null;
+    try {
+      const again = judge(recheck(), false);
+      return again.verdict === c.verdict && again.rule === c.rule ? null : `${again.reason}${copied}`;
+    } catch (e) {
+      return `could not judge it again (${errText(e)})${copied}`;
+    }
+  };
+  const moved = changed();
+  if (moved) return { action: 'kept', transient: true, reason: `it changed since it was judged: ${moved}`, ...extra, rule: 'changed' };
   if (c.verdict === 'orphan' || c.verdict === 'trash') {
     if (held) return { action: 'kept', would: 'trashed', reason: `dry run: would ${keepNote}move to ${trashDir} (${c.reason})`, ...extra };
     try {
@@ -579,7 +651,7 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
     const mutate = (args) => execFileSync('git', ['-C', main, ...args], { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
     if (c.unlock) mutate(['worktree', 'unlock', wtPath]);
     // --force only when what blocks a plain remove was checked above: deletions HEAD holds, keep folders copied out.
-    mutate(['worktree', 'remove', ...(c.force || c.keep?.length ? ['--force'] : []), wtPath]);
+    mutate(['worktree', 'remove', ...(forced ? ['--force'] : []), wtPath]);
     c.main = main;
   } catch (e) {
     return { action: 'kept', rule: 'error', reason: `git worktree remove refused (${errText(e)})${copied}` };
@@ -598,20 +670,25 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
 }
 
 // Tickets whose PR GitHub shows MERGED or CLOSED, from a list of { id, branch, prNumber, since } and the repo's PRs
-// ({ number, state, headRefName, title, createdAt }). A ticket's PR is its prNumber, else the newest PR from its branch,
-// else the newest PR whose title names it (a bundle's PR names every ticket in it). With since (when the ticket was
+// ({ number, state, headRefName, title, createdAt, isCrossRepository }). A ticket's PR is its prNumber, else the newest
+// PR from its branch, else the newest merged PR whose title names it (a bundle's PR names every ticket in it). A PR from
+// a fork never counts, since anyone can open one with any branch name or title. With since (when the ticket was
 // claimed), a branch or title match counts only for a PR opened at or after it: a ticket built again reuses its branch
-// name, and an earlier attempt's merged PR is not this build's. Each comes back with that pr.
+// name, and an earlier attempt's merged PR is not this build's. Each comes back with that pr and by: 'number', 'branch'
+// or 'title'. A title is free text, so a caller treats a title match as weaker than the other two.
 export function finishedOnGitHub(tickets, prList) {
   const newest = (xs) => [...xs].sort((a, b) => b.number - a.number)[0];
+  const own = prList.filter((p) => !p.isCrossRepository);
   return tickets.flatMap((t) => {
     const idRx = new RegExp(`(^|[^A-Za-z0-9])${t.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![0-9])`, 'i');
     const since = t.since ? Date.parse(t.since) : null;
     const fresh = (p) => since === null || Number.isNaN(since) || (p.createdAt && Date.parse(p.createdAt) >= since);
-    const pr = (t.prNumber && prList.find((p) => p.number === t.prNumber))
-      || (t.branch && newest(prList.filter((p) => p.headRefName === t.branch && fresh(p))))
-      || newest(prList.filter((p) => idRx.test(p.title ?? '') && fresh(p)));
-    return pr && ['MERGED', 'CLOSED'].includes(pr.state) ? [{ ...t, pr }] : [];
+    const byNumber = t.prNumber && own.find((p) => p.number === t.prNumber);
+    const byBranch = !byNumber && t.branch && newest(own.filter((p) => p.headRefName === t.branch && fresh(p)));
+    const byTitle = !byNumber && !byBranch && newest(own.filter((p) => p.state === 'MERGED' && idRx.test(p.title ?? '') && fresh(p)));
+    const pr = byNumber || byBranch || byTitle;
+    const by = byNumber ? 'number' : byBranch ? 'branch' : 'title';
+    return pr && ['MERGED', 'CLOSED'].includes(pr.state) ? [{ ...t, pr, by }] : [];
   });
 }
 
@@ -622,6 +699,8 @@ export function finishedOnGitHub(tickets, prList) {
 export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktrees', prs = {}, liveBranches = new Set(), liveIds = [], dryRun = false,
   trashDir = trashDirFor(), fetch = true, dirs = null, rebuildable = REBUILDABLE_IGNORED, clones = 'dry-run', keep = KEEP_FOLDERS, keptDir = KEPT_FOLDERS_DIR,
   agent = AGENT_WORKTREES, scanners = SCANNERS }) {
+  // A given dirs (a test's) is reused for the re-check; otherwise the processes are read again.
+  const recheck = dirs ? () => dirs : () => processDirs({ scanners });
   try {
     dirs ??= processDirs({ scanners });
   } catch (e) {
@@ -654,7 +733,7 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
     }
     const pr = (w.branch && prs[w.branch]) || (w.head && byHead.get(w.head)) || null;
     const agentRefs = !pr && rule?.rx.test(row.name) ? savedRefs() : null;
-    results.push({ ...row, ...teardownWorktree({ path: w.path, repo, base, pr, dirs, listed, dryRun, trashDir, rebuildable, keep, keptDir, agent, savedRefs: agentRefs }) });
+    results.push({ ...row, ...teardownWorktree({ path: w.path, repo, base, pr, dirs, listed, dryRun, trashDir, rebuildable, keep, keptDir, agent, savedRefs: agentRefs, recheck }) });
   }
   const tracked = new Set(listed.map((w) => key(w.path)));
   let folders = [];
@@ -664,7 +743,7 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
   for (const f of folders) {
     if (tracked.has(key(f))) continue;
     results.push({ path: f, name: path.basename(f), branch: null,
-      ...teardownWorktree({ path: f, repo, base, dirs, listed, dryRun, trashDir, rebuildable, clones, prs, liveBranches, liveIds, keep, keptDir, agent }) });
+      ...teardownWorktree({ path: f, repo, base, dirs, listed, dryRun, trashDir, rebuildable, clones, prs, liveBranches, liveIds, keep, keptDir, agent, recheck }) });
   }
   return { results };
 }
