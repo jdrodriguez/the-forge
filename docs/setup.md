@@ -3,10 +3,10 @@
 This guide takes you from nothing to a running queue on one to four computers. The short way is one command and an interview with Claude:
 
 ```bash
-npx the-forge setup
+npx @jdrodriguez/the-forge setup
 ```
 
-`npm install -g the-forge` then `the-forge setup` also works. Either way, `setup` copies The Forge to `~/the-forge` and runs everything from there, because npm replaces its own folders. For the newest code on GitHub instead of the newest release, use `npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone, which makes the clone the lasting copy.
+`npm install -g @jdrodriguez/the-forge` then `the-forge setup` also works. Either way, `setup` copies The Forge to `~/the-forge` and runs everything from there, because npm replaces its own folders. For the newest code on GitHub instead of the newest release, use `npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone, which makes the clone the lasting copy.
 
 `setup` then starts Claude Code on the `forge-setup` skill. The skill asks one question at a time and walks you through this guide, or you can follow it by hand. You do every sign-in yourself. `README.md` explains what The Forge does and lists the `the-forge` commands.
 
@@ -166,6 +166,6 @@ For daily use, pin a Claude Code session named Specdesk (`orchestrator.sessionNa
 ## Later
 
 - **Add a computer:** add it to `forge-answers.json`, run `the-forge init --answers forge-answers.json`, set up Tailscale and SSH for it, run `the-forge copy-to <host> --install`, then `copy-to` every other computer so each has the new config.
-- **Update:** `npx the-forge@latest update --all` refreshes `~/the-forge` here and on every other computer and reloads the jobs. After a global install, run `npm install -g the-forge` then `the-forge update --all`. A copy that is a git clone pulls instead. Your config and answers stay.
+- **Update:** `npx @jdrodriguez/the-forge@latest update --all` refreshes `~/the-forge` here and on every other computer and reloads the jobs. After a global install, run `npm install -g @jdrodriguez/the-forge` then `the-forge update --all`. A copy that is a git clone pulls instead. Your config and answers stay.
 - **Stop for a while:** `the-forge stop` unloads this computer's jobs and `the-forge start` brings them back. To hold the whole queue, run `node dispatcher/dispatcher.mjs pause "reason"`, and `resume` later.
 - **Remove:** `the-forge uninstall` on each computer, then delete `~/the-forge` and `~/.agent-queue`.

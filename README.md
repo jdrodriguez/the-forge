@@ -48,14 +48,14 @@ flowchart LR
 | `queue-board/` | The board (below), and `hourly-check.mjs`, which wakes the orchestrator only when something new needs it. |
 | `learning/` | The weekly failure sweep. |
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |
-| `docs/` | Setup, configuration, the ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene and the decisions. |
+| `docs/` | Setup, configuration, the ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene, the decisions, and how to write docs and comments here (`writing.md`). |
 
 `dispatcher/`, `fleet/`, `queue-board/`, `learning/` and `scripts/` each have a README with the full behavior.
 
 ## Set up
 
 ```bash
-npx the-forge setup
+npx @jdrodriguez/the-forge setup
 ```
 
 This copies The Forge to `~/the-forge`, links its skills into Claude Code, and starts an interview in Claude Code that sets up one to four computers. `docs/setup.md` is the full guide, including other ways to install.
