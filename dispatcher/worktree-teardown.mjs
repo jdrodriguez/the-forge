@@ -252,7 +252,7 @@ function statusEntries(dir) {
     if (!parts[i]) continue;
     const xy = parts[i].slice(0, 2);
     entries.push({ xy, path: parts[i].slice(3) });
-    if (xy[0] === 'R' || xy[0] === 'C') i++;
+    if (/[RC]/.test(xy)) i++;
   }
   return entries;
 }
@@ -289,7 +289,9 @@ function unsafeIgnored(dir, repo, rebuildable, folders = []) {
   const kept = inside(folders);
   const same = (f) => {
     try {
-      return fs.statSync(path.join(dir, f)).isFile() && fs.readFileSync(path.join(dir, f)).equals(fs.readFileSync(path.join(repo, f)));
+      // A regular file on both sides, never through a symlink.
+      return fs.lstatSync(path.join(dir, f)).isFile() && fs.lstatSync(path.join(repo, f)).isFile()
+        && fs.readFileSync(path.join(dir, f)).equals(fs.readFileSync(path.join(repo, f)));
     } catch {
       return false;
     }
@@ -406,9 +408,12 @@ export function savedRemoteRefs(repo, remote = 'origin') {
 // Commits in HEAD, or anywhere in this worktree's HEAD reflog (a commit left behind on a detached HEAD), that none of refs
 // holds. Removing a worktree deletes its reflog, so a commit only the reflog reaches counts as unsaved.
 function unsavedCount(dir, refs) {
+  // Both the old and the new commit of every entry in logs/HEAD: a pruned entry can leave a commit only as the next
+  // entry's old one.
   let logged = [];
   try {
-    logged = git(dir, ['log', '-g', '--format=%H', 'HEAD']).split('\n').filter(Boolean);
+    const text = fs.readFileSync(path.join(git(dir, ['rev-parse', '--absolute-git-dir']), 'logs/HEAD'), 'utf8');
+    logged = text.split('\n').flatMap((l) => l.split(' ').slice(0, 2)).filter((h) => /^[0-9a-f]{40,64}$/.test(h) && !/^0+$/.test(h));
   } catch { /* no reflog */ }
   return Number(execFileSync('git', ['--no-optional-locks', '-C', dir, 'rev-list', '--count', '--stdin', 'HEAD'],
     { encoding: 'utf8', input: [...new Set(logged)].concat(refs.map((r) => `^${r}`)).join('\n'), timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 }).trim());
@@ -546,6 +551,9 @@ export function copyKeptFolders(dir, repo, folders, root = KEPT_FOLDERS_DIR, dat
       const p = path.join(e.parentPath ?? e.path, e.name);
       return `${path.relative(top, p)}:${fs.lstatSync(p).size}`;
     }).sort();
+  fs.mkdirSync(dest, { recursive: true });
+  // The copies must land outside the checkout, followed through any symlink on the way.
+  if (within(key(dest), key(dir))) throw new Error(`${dest} resolves inside the checkout`);
   for (const rel of folders) {
     const from = path.join(dir, rel);
     const to = path.join(dest, rel);
@@ -610,7 +618,7 @@ export function teardownWorktree({ path: wtPath, repo, base = 'main', pr = null,
   const forced = c.verdict === 'remove' && (c.force || c.keep?.length);
   // git worktree remove refuses a worktree with submodules unless forced, and a submodule's own ignored files are never
   // read here, so a forced removal leaves one alone.
-  if (forced && fs.existsSync(path.join(wtPath, '.gitmodules'))) {
+  if (forced && (fs.existsSync(path.join(wtPath, '.gitmodules')) || ok(wtPath, ['cat-file', '-e', 'HEAD:.gitmodules']))) {
     return { action: 'kept', reason: `it has submodules, which a forced removal would delete unread (${c.reason})`, ...extra, rule: 'submodules' };
   }
   // The copies must outlive the checkout.

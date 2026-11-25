@@ -2055,7 +2055,8 @@ async function worktreeSweep(st) {
     try {
       const prs = {};
       const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid,title,createdAt,isCrossRepository']));
-      for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
+      // A PR from a fork can carry any branch name, so it never stands for a checkout here.
+      for (const p of list) if (!p.isCrossRepository && (!prs[p.headRefName] || p.number > prs[p.headRefName].number)) prs[p.headRefName] = p;
       // Each machine keeps its own state, so a ticket can be live here and finished on another machine. GitHub settles
       // it: a live ticket whose own PR, or a PR from its branch opened since its claim, is merged or closed is not live,
       // and the mismatch is logged. A merged PR naming it in the title only logs. A branch with no PR of its own is judged
@@ -3031,7 +3032,7 @@ async function labelCheck() {
 // This machine's state is read directly, every other one only from its synced heartbeat's tickets. A machine whose
 // heartbeat is missing, carries no tickets (an older dispatcher) or is over ORPHAN_BEAT_MINUTES old is unreadable: it is
 // named once a day, and no ticket is reported that tick, since any of them could be its. Report only: a ticket is logged
-// once a day, and the human is asked once when it has read as held by nobody for over an hour. No label is changed.
+// once a day, and the human is asked once when it has read as held by nobody for over an hour. No queue label is changed.
 const ORPHAN_LABELS = path.join(LOCAL, 'orphan-labels.json');
 const ORPHAN_BEAT_MINUTES = 90;
 async function orphanLabelCheck(st) {
@@ -3050,6 +3051,7 @@ async function orphanLabelCheck(st) {
   };
   const held = new Set(Object.keys(st.tickets ?? {}));
   const unreadable = [];
+  const readable = [HOST];
   for (const host of cfg.enabledHosts.filter((h) => h !== HOST)) {
     let beat = null;
     try {
@@ -3058,8 +3060,13 @@ async function orphanLabelCheck(st) {
     if (!beat) unreadable.push(`${host} (no heartbeat)`);
     else if (!beat.tickets || typeof beat.tickets !== 'object') unreadable.push(`${host} (its heartbeat lists no tickets)`);
     else if (!(hoursSince(beat.at) * 60 <= ORPHAN_BEAT_MINUTES)) unreadable.push(`${host} (heartbeat ${beat.at ?? 'undated'})`);
-    else for (const id of Object.keys(beat.tickets)) held.add(id);
+    else {
+      readable.push(host);
+      for (const id of Object.keys(beat.tickets)) held.add(id);
+    }
   }
+  // Every machine sees the same orphans, so only the first machine by name asks.
+  const asker = [...readable].sort()[0] === HOST;
   if (unreadable.length) {
     if (mem._unreadableDay !== today) {
       log(`orphan label check: skipped, unreadable: ${unreadable.join(', ')}`);
@@ -3084,7 +3091,7 @@ async function orphanLabelCheck(st) {
       log(`orphan label check: ${id} (${n.state?.name ?? '?'}) is labeled ${labels.join(' and ')}, but no enabled machine's state holds it`);
       rec.loggedDay = today;
     }
-    if (!rec.asked && hoursSince(rec.since) > 1) {
+    if (asker && !rec.asked && hoursSince(rec.since) > 1) {
       const ask = `${id} is labeled ${labels.join(' and ')}, but no machine's dispatcher state (${cfg.enabledHosts.join(', ')}) has held it for over an hour, so nothing will wake it or move it on.`;
       if (DRY) log(`would ask ${HUMAN}: ${ask}`);
       else {
@@ -3184,7 +3191,7 @@ async function status() {
       state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
     console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
   } catch (e) {
-    console.log(`queue: unknown, Linear could not be read (${errText(e).split('\n')[0].slice(0, 160)}); set LINEAR_API_KEY. This machine's tickets follow.`);
+    console.log(`queue: unknown, Linear could not be read (${errText(e).split('\n')[0].slice(0, 160)}). This machine's tickets follow.`);
   }
   // The slots counted the way the tick counts them, and the tickets waiting for one here and on the other machines.
   try {

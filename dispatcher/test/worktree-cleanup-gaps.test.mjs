@@ -387,3 +387,56 @@ test('a forced removal is judged again right before it happens: a process that c
   assert.equal(r.rule, 'changed');
   assert.ok(fs.existsSync(wt));
 });
+
+test('a symlink beside the notes is never read as a copy of the main checkout, and a kept dir reached through a link into the checkout is refused', () => {
+  const { repo, root } = setup();
+  const { wt } = worktree(repo, 'linked');
+  fs.writeFileSync(path.join(wt, '.gitignore'), '.claude/\n');
+  git(wt, 'add', '.gitignore');
+  git(wt, 'commit', '-q', '-m', 'ignore');
+  git(wt, 'push', '-q', 'origin', 'HEAD:refs/heads/linked');
+  const pr = merged(git(wt, 'rev-parse', 'HEAD'));
+  fs.mkdirSync(path.join(wt, '.claude/notes'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.claude/notes/a.md'), 'a');
+  fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'target.txt'), 'same');
+  fs.symlinkSync(path.join(root, 'target.txt'), path.join(wt, '.claude/link'));
+  fs.symlinkSync(path.join(root, 'target.txt'), path.join(repo, '.claude/link'));
+  const r = teardownWorktree({ path: wt, repo, pr, dirs: [], keptDir: path.join(root, 'k1') });
+  assert.equal(r.rule, 'ignored', r.reason);
+  fs.rmSync(path.join(wt, '.claude/link'));
+  // keptFoldersDir/<repo>/<checkout> is a link back into the checkout's ignored folder.
+  const kd = path.join(root, 'k2');
+  fs.mkdirSync(path.join(kd, 'app'), { recursive: true });
+  fs.mkdirSync(path.join(wt, '.claude/backup'), { recursive: true });
+  fs.symlinkSync(path.join(wt, '.claude/backup'), path.join(kd, 'app', 'linked'));
+  const r2 = teardownWorktree({ path: wt, repo, pr, dirs: [], keptDir: kd, keep: ['.claude/notes', '.claude/backup'] });
+  assert.equal(r2.rule, 'keep-copy', r2.reason);
+  assert.ok(fs.existsSync(path.join(wt, '.claude/notes/a.md')));
+});
+
+test('deleting only .gitmodules does not slip past the submodule guard', () => {
+  const { repo } = setup();
+  const { wt } = worktree(repo, 'sub-gone');
+  commit(wt, '.gitmodules', '[submodule "x"]\n');
+  git(wt, 'push', '-q', 'origin', 'HEAD:refs/heads/sub-gone');
+  const head = git(wt, 'rev-parse', 'HEAD');
+  fs.rmSync(path.join(wt, '.gitmodules'));
+  assert.equal(teardownWorktree({ path: wt, repo, pr: merged(head), dirs: [] }).rule, 'submodules');
+});
+
+test("an Agent tool worktree counts a commit left only as a reflog entry's old commit", () => {
+  const { repo } = setup();
+  const { wt } = worktree(repo, 'agent-4444444444444444d', 'agent/eng-10-x');
+  git(wt, 'checkout', '-q', '--detach');
+  const lost = commit(wt, 'lost.txt');
+  git(wt, 'checkout', '-q', 'agent/eng-10-x');
+  // Keep only the last entry, whose old commit is the lost one.
+  const gd = git(wt, 'rev-parse', '--absolute-git-dir');
+  const lines = fs.readFileSync(path.join(gd, 'logs/HEAD'), 'utf8').trim().split('\n');
+  assert.ok(lines.at(-1).startsWith(lost));
+  fs.writeFileSync(path.join(gd, 'logs/HEAD'), `${lines.at(-1)}\n`);
+  age(wt, 30);
+  const r = sweepRepo({ repo, prs: {}, dirs: [], fetch: false }).results.find((x) => x.name === 'agent-4444444444444444d');
+  assert.equal(r.rule, 'agent-unpushed', r.reason);
+});
