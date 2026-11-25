@@ -2202,7 +2202,9 @@ function pickAccount(accounts, engines = []) {
   const fiveHourOk = (u, min = floor) => u.five_hour == null || (u.five_hour.remaining_percentage ?? -1) >= min;
   const roomy = (a) => fiveHourOk(a.usage) && projected(a, 1) >= floor;
   const usable = (a) => a.signed_in && a.working < capOf(a.label) && a.usage?.available && roomy(a);
-  const engineUsable = (a) => a.working < capOf(a.label) && !a.usage?.limited && (!a.usage?.available || roomy(a));
+  // A credit-backed engine also stops at the ticket count its credit balance covers (creditCap, engine-workers.mjs).
+  const engineUsable = (a) => a.working < capOf(a.label) && !a.usage?.limited && (!a.usage?.available || roomy(a))
+    && (a.usage?.creditCap == null || a.working < a.usage.creditCap);
   const left = (a) => (a.usage?.available ? projected(a) : -1);
   // Spread usage away from the primary account, which the human's own sessions use. The sort is stable, so a tie keeps
   // the engines' place ahead of the Claude accounts.
@@ -2215,6 +2217,12 @@ function pickAccount(accounts, engines = []) {
     && (noFable(a.label) || fableAllowed(a)) && fiveHourOk(a.usage, burnFloor) && projected(a, 1) >= burnFloor;
   const burn = accounts.filter(burnable).sort((x, y) => left(y) - left(x))[0] ?? null;
   if (burn) return burn;
+  // externalBuilders.fallback.prefer: an engine listed there takes the ticket ahead of every Claude account while it has
+  // room, in the list's order. Burn accounts still go first.
+  for (const label of cfg.externalBuilders?.fallback?.prefer ?? []) {
+    const e = engines.find((x) => x.label === label && engineUsable(x));
+    if (e) return e;
+  }
   const regular = accounts.filter((a) => usedHere(a.label) && !fallbackAccounts.includes(a.label) && usable(a));
   return best([...engines.filter(engineUsable), ...regular]) ?? best(accounts.filter((a) => fallbackAccounts.includes(a.label) && usable(a)));
 }

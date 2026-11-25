@@ -137,15 +137,76 @@ const windowOf = (w) => (typeof w?.used === 'number' ? { remaining_percentage: M
 // An engine's usage in the shape of a fleet.sh usage row's `usage`. Codex reports a weekly window, and a five-hour one
 // on plans that have it; Grok one billing period, which stands in for the weekly window whatever its length, since it
 // is the window that runs out. `limited` is Codex's own word that a limit is reached right now.
-function usageOf(c, engine) {
+function usageOf(c, engine, st) {
   const p = readPlans(c);
   const s = p[engine];
   const weekly = windowOf(s?.weekly ?? s?.period);
-  if (s && !s.error && weekly) return { available: true, five_hour: windowOf(s.fiveHour), weekly, limited: Boolean(s.limited) };
+  if (s && !s.error && weekly) {
+    const usage = { available: true, five_hour: windowOf(s.fiveHour), weekly, limited: Boolean(s.limited) };
+    return creditBacked(c, engine, usage, s.credits, st) ?? usage;
+  }
   const why = s?.error ?? p.error ?? 'its reader gave no figures';
   if (!warned.has(engine)) c.log(`engine usage: could not read ${label(engine)}'s plan usage (${why}), so it ranks after every account with a reading`);
   warned.add(engine);
   return { available: false, five_hour: null, weekly: null, limited: false };
+}
+
+// An engine listed in fallback.creditBacked keeps taking tickets after its plan window is spent, since past the plan
+// limit it draws the account's paid credits on its own. Such an engine reads as creditBackedPercent (default 50) of its
+// week left and not limited whenever its real reading is under the floor or limited, so it stays a candidate. A
+// reading with real headroom is left as it is. Off unless the engine is listed.
+//
+// The credit floor: each credit reading is appended to <stateDir>/engine-credits.jsonl. A credit-backed engine stops
+// taking new tickets once its balance, less creditReservePerTicket for every ticket it is still building, would drop
+// under creditFloor, so running tickets finish on the credits held back for them. An unreadable balance counts as no
+// credits. creditCap is the most tickets the balance covers; pickAccount compares it with the engine's working count,
+// which goes up with each ticket started in the same tick, so one tick never over-admits on one reading.
+function creditBacked(c, engine, usage, balance, st) {
+  if (!(fb(c).creditBacked ?? []).includes(engine)) return null;
+  const floor = c.cfg.headroomFloorPercent ?? 10;
+  const spent = usage.limited || usage.weekly.remaining_percentage < floor || (usage.five_hour && usage.five_hour.remaining_percentage < floor);
+  if (!spent) return null;
+  const creditFloor = fb(c).creditFloor ?? 10000;
+  const reserve = fb(c).creditReservePerTicket ?? 2000;
+  const building = Object.values(st?.tickets ?? {}).filter((t) => t.driver === 'engine' && t.engine === engine && ['claiming', 'building'].includes(t.status)).length;
+  const rate = recordCredits(c, engine, balance);
+  if (typeof balance !== 'number' || balance - reserve * (building + 1) < creditFloor) {
+    if (!warned.has(`${engine}-floor`)) c.log(`engine credits: ${label(engine)} takes no new tickets on credits (balance ${balance ?? 'unknown'}, ${building} building with ${reserve} held back each, floor ${creditFloor}${rate})`);
+    warned.add(`${engine}-floor`);
+    return null;
+  }
+  const creditCap = reserve > 0 ? Math.floor((balance - creditFloor) / reserve) : null;
+  return { available: true, five_hour: null, weekly: { remaining_percentage: fb(c).creditBackedPercent ?? 50, resets_at: usage.weekly.resets_at },
+    limited: false, credits: true, creditCap };
+}
+
+// Appends one credit reading per tick and returns the burn rate over the last 24 hours as text for a log line.
+function recordCredits(c, engine, balance) {
+  if (typeof balance !== 'number' || c.DRY) return '';
+  const file = path.join(c.LOCAL, 'engine-credits.jsonl');
+  const now = Date.now();
+  try {
+    fs.appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), engine, balance })}\n`);
+  } catch {
+    return '';
+  }
+  let first = null;
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const r = JSON.parse(line);
+      if (r.engine === engine && now - Date.parse(r.at) <= 24 * 3600_000) {
+        first = r;
+        break;
+      }
+    }
+  } catch {
+    return '';
+  }
+  if (!first) return '';
+  const hours = (now - Date.parse(first.at)) / 3600_000;
+  if (hours < 0.5) return '';
+  return `; burning about ${Math.round((first.balance - balance) / hours)} credits an hour over the last ${Math.round(hours)}h`;
 }
 
 // The engines this machine can run now, as rows shaped like `fleet.sh usage --json` rows, so the dispatcher ranks them
@@ -154,7 +215,7 @@ function usageOf(c, engine) {
 // limitCooldownMinutes. `working` counts its running tickets on this machine. The usage figures decide the rest.
 export function accounts(c, st) {
   const here = ENGINES.filter((e) => engineAllowedHere(c, e) && available(c, st, e));
-  return here.map((e) => ({ label: e, engine: e, signed_in: true, usage: usageOf(c, e),
+  return here.map((e) => ({ label: e, engine: e, signed_in: true, usage: usageOf(c, e, st),
     working: Object.values(st.tickets).filter((t) => t.driver === 'engine' && t.engine === e && ['claiming', 'building'].includes(t.status)).length }));
 }
 
