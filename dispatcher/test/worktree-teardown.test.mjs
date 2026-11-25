@@ -453,3 +453,26 @@ test("a clone that does not borrow this repo's objects is another repo's: report
   assert.equal(r.foreign, true);
   assert.ok(fs.existsSync(dir));
 });
+
+test('a rebuildable pattern with a slash names a path from the root: that file, or anything under that folder', () => {
+  const make = (name) => {
+    const { repo } = setup();
+    const { wt } = worktree(repo, name);
+    fs.writeFileSync(path.join(wt, '.gitignore'), 'generated.ts\n.husky/_/\ntest-results.*\n');
+    git(wt, 'add', '.gitignore');
+    git(wt, 'commit', '-q', '-m', 'ignore');
+    git(wt, 'push', '-q', 'origin', `HEAD:refs/heads/${name}`);
+    for (const f of ['packages/db/generated.ts', '.husky/_/commit-msg', 'packages/api/test-results.load-times.json']) {
+      fs.mkdirSync(path.dirname(path.join(wt, f)), { recursive: true });
+      fs.writeFileSync(path.join(wt, f), 'x');
+    }
+    return { repo, wt, pr: merged(git(wt, 'rev-parse', 'HEAD')) };
+  };
+  const list = ['packages/db/generated.ts', '.husky/_', '*.load-times.json'];
+  const a = make('paths');
+  assert.equal(teardownWorktree({ path: a.wt, repo: a.repo, pr: a.pr, dirs: [], rebuildable: list }).action, 'removed');
+  const b = make('nopaths');
+  const kept = teardownWorktree({ path: b.wt, repo: b.repo, pr: b.pr, dirs: [], rebuildable: ['packages/other/generated.ts', '.husky/_', '*.load-times.json'] });
+  assert.equal(kept.rule, 'ignored', 'a path pattern matches only that path');
+  assert.match(kept.reason, /packages\/db\/generated\.ts/);
+});
