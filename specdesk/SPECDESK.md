@@ -69,7 +69,7 @@ The dispatcher takes `agent-ready` tickets by priority (Urgent, High, Medium, Lo
 
 The specs live in Linear, so this session's context can always be thrown away. Compact when it gets long. Clear after a batch is queued and nothing is mid-discussion. When the human settles a standing decision here, add it to the Decisions section below in the same turn, dated, so it never has to be discussed again.
 
-This session is also the queue's orchestrator (`orchestrator.sessionName`): it watches the human's inbox, reviews and merges the green PRs the dispatcher hands over (those touching a risky path), and keeps the workers moving. That live state is not in Linear. Before a clear, write or refresh a handoff note with what is in flight, in whatever folder you keep handoffs. After a clear, read the newest one first, then follow its restart checklist (re-arm `~/dev/agent-queue/inbox/inbox-watch.sh` and `~/dev/agent-queue/queue-board/hourly-check.mjs`).
+This session is also the queue's orchestrator (`orchestrator.sessionName`): it watches the human's inbox, reviews and merges the green PRs the dispatcher hands over (those touching a risky path), and keeps the workers moving. That live state is not in Linear. Keep the handoff note (`orchestrator.handoffFile`) current with what is in flight. Keep `inbox/orchestrator-watch.mjs` armed with Bash `run_in_background`, and re-arm it each time it fires. A new session takes the role with `/forge-takeover`, which prints that note (`inbox/README.md`, "The orchestrator").
 
 ## Decisions
 

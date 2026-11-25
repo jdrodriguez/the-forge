@@ -10,9 +10,30 @@
     "sessionName": "Specdesk",
     "sessionNameNote": "The pinned Claude Code session that writes specs and watches the queue. Emergency responders message it by this name.",
     "lockFile": null,
-    "lockFileNote": "The driver lock: the session ID of the one session allowed to approve and merge. merge-approved.sh refuses any other Claude Code session, and reads the lock again right before each merge. A shell outside Claude Code counts as the human and passes. null means <paths.sharedDir>/orchestrator-session, so a takeover on one machine stops the driver on every other.",
+    "lockFileNote": "The driver lock: the session ID of the one session allowed to approve and merge. merge-approved.sh refuses any other Claude Code session, and reads the lock again right before each merge. A shell outside Claude Code counts as the human and passes. null means <paths.sharedDir>/orchestrator-session, so a takeover on one machine stops the driver on every other. The lease sits beside it.",
     "approvalsFile": null,
-    "approvalsFileNote": "The approvals ledger merge-approved.sh writes: one JSON line per approved PR head, closed by a merged line. An approval covers only the exact head it names. null means <paths.sharedDir>/approvals.jsonl, so a session on another machine sees the same approvals."
+    "approvalsFileNote": "The approvals ledger merge-approved.sh writes: one JSON line per approved PR head, closed by a merged line. An approval covers only the exact head it names. null means <paths.sharedDir>/approvals.jsonl, so a session on another machine sees the same approvals.",
+    "leaseMinutes": 30,
+    "leaseMinutesNote": "The lease is the driver's heartbeat, renewed when it takes over, ends a turn, runs a merge or its watcher fires. Older than this, the supervisor counts the driver as idle. It never stops the driver from acting.",
+    "handoffFile": null,
+    "handoffFileNote": "The note the orchestrator keeps of what is in flight, which takeover.sh prints for the next driver. null means <paths.sharedDir>/ORCHESTRATOR.md.",
+    "eventsDir": null,
+    "eventsDirNote": "Where dispatchers leave notices for the orchestrator, one JSON file each ({id, host, subtitle, text, link, at}), which dispatcher-events-watch.mjs reports. null means <paths.sharedDir>/orchestrator-events.",
+    "supervisor": {
+      "everyMinutes": 5,
+      "waitMinutes": 30,
+      "repageMinutes": [60, 240]
+    },
+    "supervisorNote": "orchestrator-supervisor.mjs, installed by inbox/install-supervisor.sh on the orchestrator's machine, runs every everyMinutes. When the lease has expired and work has waited waitMinutes on the orchestrator, it pages slack.channel: once, then again at each of repageMinutes after the first page, then not again until a driver renews the lease. A page Slack refuses is retried after 5 minutes, doubling to an hour. It never starts a session or moves the lock. Touch <paths.stateDir>/supervisor.off to silence it.",
+    "prSweep": {
+      "everyHours": 6,
+      "ownerTtlHours": 12,
+      "approvedIdleHours": 2,
+      "staleHours": 6,
+      "reportOnlyAuthors": ["app/dependabot"],
+      "ignoreActivityChecks": []
+    },
+    "prSweepNote": "pr-sweep.mjs reports open PRs every everyHours: approved at their current head but idle approvedIdleHours, with no owner, or owned with nothing moving for staleHours. A claim (pr-sweep.mjs own) lasts ownerTtlHours. PRs by reportOnlyAuthors (gh logins) are listed apart. ignoreActivityChecks are regex sources for checks a workflow re-sets on every PR, which are not activity."
   },
 
   "repoPath": "~/dev/your-app",
