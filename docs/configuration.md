@@ -36,7 +36,7 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | Key | Example | What it does |
 |---|---|---|
 | `paths.stateDir` | `"~/.agent-queue"` | Per machine: state.json, logs, the PAUSED flag, the tick lock, and the secret files (slack-webhook, slack-bot-token, linear-api-key). |
-| `paths.sharedDir` | `"~/.agent-queue/shared"` | Shared across machines: merge-requests/, heartbeats/, bundles/ and main-state.json. With more than one machine, point it at a folder Syncthing or Dropbox keeps in sync. |
+| `paths.sharedDir` | `"~/.agent-queue/shared"` | Shared across machines: merge-requests/, heartbeats/, bundles/, wake-requests/, orchestrator-events/ and main-state.json. With more than one machine, point it at a folder Syncthing or Dropbox keeps in sync. |
 
 ## `github`
 
@@ -118,7 +118,7 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | `dispatcher.spinHours` | `6` | Hours a worker may stay busy without a commit or PR change before it counts as stalled. |
 | `dispatcher.longRunNoticeHours` | `8` | An informational "still going" Slack line every this many hours of a ticket's build. |
 | `dispatcher.stuckInARowTrips` | `2` | This many stuck tickets in a row pause the dispatcher. |
-| `dispatcher.maxRedispatches` | `1` | Replacement workers a ticket gets when its worker's session dies, a reboot say, before it can go stuck. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once. |
+| `dispatcher.maxRedispatches` | `1` | Replacement workers a ticket gets before it can go stuck: when its worker's session dies (a reboot, say), and when its worker ends on a PR that conflicts with the base branch or holds unresolved review threads (seen on two ticks). The old session is stopped first; a replacement never starts while it could not be. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once. |
 | `dispatcher.flakeWaitMinutes` | `90` | How long a failure on a merge commit waits for a later main commit to pass the same workflow before it pauses the queue. |
 | `dispatcher.model` | `"opus"` | The model queue workers run (fleet.sh dispatch --model). "fable" runs Fable while the account may (fableMinWeeklyLeftPercent, fableFloorPercent) and modelFallback once it may not. |
 | `dispatcher.modelBySize` | `{}` | A model per Size label for a single ticket, e.g. {"S": "sonnet"}. A bundle and a replacement worker run the regular model. |
@@ -139,6 +139,15 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | `dispatcher.sentryHeartbeatMinutes` | `45` | While a host with sentryWorkers is unpaused and wrote its heartbeat (sharedDir/heartbeats) less than this many minutes ago, other machines leave Sentry tickets to it. |
 | `dispatcher.sentryTriage` | `{"enabled":false,"host":"main-mac","module":"sentry-triage.mjs"}` | An optional triage module you write; this repo ships none. It loads from dispatcher/ on host only, when enabled. It exports kickFromTick({ cfg, dry, log }), which should start its run in a detached process, and statusLine(cfg). It labels the tickets it queues with linear.labels.sentry plus mechanical or judgment. A throw or syntax error in it costs one log line and never stops a tick. |
 | `dispatcher.externalBuilders` | `{"fallback":{"enabled":false,"engines":["codex","grok"],"sizes":["S...` | Codex and Grok as queue workers (dispatcher/README.md, "Codex and Grok as queue workers"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push. |
+| `dispatcher.worktreeCleanup` | | When a ticket's PR merges or closes, the next tick stops its worker, removes its worktree and then its session (claude rm); a session whose worktree can't be told apart is left, and asked about. The sweep moves former worktrees of this repo that git no longer tracks to the trash, and reports any other folder there once. Only worktrees inside the worktrees folder are touched, compared by real path. A worktree goes only when it is clean (untracked files included, nothing in progress), holds no ignored file beyond rebuildableIgnored, its PR merged or closed, HEAD is in the PR's head or on origin/<base>, and no live process holds it; anything else is kept, and kept work asks the human (at teardown at once, in the sweep after atRiskAskDays). Codex and Grok clones are never touched. |
+| `dispatcher.worktreeCleanup.enabled` | `true` | false turns both the teardown at merge and the sweep off. |
+| `dispatcher.worktreeCleanup.dryRun` | `true` | true logs what it would do and changes nothing. Set it false to act. |
+| `dispatcher.worktreeCleanup.sweepHours` | `24` | How often each machine sweeps every worktree of repoPath and of each repos entry. |
+| `dispatcher.worktreeCleanup.atRiskAskDays` | `7` | A worktree the sweep keeps because it holds work GitHub lacks is asked about once it has been kept this many days. |
+| `dispatcher.worktreeCleanup.trashDir` | `null` | Where orphan folders go. null means the system trash. |
+| `dispatcher.worktreeCleanup.repos` | `[]` | Other checkouts to sweep, each {"path", "github", "base"}; base defaults to github.baseBranch. |
+| `dispatcher.worktreeCleanup.rebuildableIgnored` | `null` | Ignored files and folders a build or an install makes again (glob names matched against each path part). Any other ignored file keeps a worktree, except an unchanged copy of the main checkout's file at the same path. null, an empty list or an invalid one means the built-in list: node_modules, dist, build, out, .turbo, .next, .nuxt, .svelte-kit, .output, coverage, .nyc_output, .cache, .parcel-cache, .vite, .eslintcache, *.tsbuildinfo, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .venv, target, .gradle, .DS_Store. |
+| `dispatcher.worktreeCleanup.clones` | `"dry-run"` | The standalone clones ext-worker.sh makes for Codex and Grok in the worktrees folder. "dry-run" (the default) logs what would happen and counts them by rule, whatever dryRun says; "on" moves one to the trash once its PR merged or closed, it holds no changes, no operation in progress and no ignored file beyond the rebuildable ones, its HEAD is in the PR's head or on origin/<base>, no process is inside, and no live ticket names its branch; "off" leaves them alone. |
 
 ## `merge`
 
@@ -163,6 +172,7 @@ The gate merge-approved.sh applies to github.repo: not a draft, no approval on f
 |---|---|---|
 | `push.gates` | `[["pnpm","format:check"],["pnpm","type-check"]]` | Commands gated-push.mjs runs in the worktree before pushing, each an argv array. A failing gate fails the push. |
 | `push.env` | `{}` | Extra environment for the git push itself, e.g. {"SKIP_PREPUSH": "1"} when the gates replace a slow pre-push hook. |
+| `push.protectedBranches` | `null` | Branches gated-push.mjs never pushes to. Before any gate it asks git where the push lands (a dry run) and refuses a protected branch, or a dry run that fails. null means github.baseBranch, main and master. |
 
 ## `premerge`
 
@@ -173,7 +183,7 @@ The gate merge-approved.sh applies to github.repo: not a draft, no approval on f
 | `premerge.errorPattern` | `"error TS\\d+"` | A failing check counts as a real failure only when its output matches this. Anything else, such as a killed or timed-out run, holds the merge a tick. |
 | `premerge.copyFiles` | `[".env"]` | Gitignored files the check needs, copied from repoPath into the scratch worktree when it is first made. |
 | `premerge.buildOutputRoots` | `["packages"]` | Each package under these folders has its dist/ and *.tsbuildinfo cleared before the check, so old output never shadows this tree. |
-| `premerge.migrations` | `{"dir":"migrations","pattern":"^\\d{14}_.*\\.sql$","prefixLength":14}` | Catches two PRs that each pick the same migration prefix, which pass alone and clash once merged. null if your migrations have no ordered prefix. |
+| `premerge.migrations` | `{"dir":"migrations","pattern":"^\\d{14}_.*\\.sql$","prefixLength":1...` | Catches two PRs that each pick the same migration prefix, which pass alone and clash once merged. policy "prefix" fails a new file whose prefix the base branch already uses; "filename", for a migrator that applies any unapplied file whatever its prefix, fails only a file name the base branch already has. A green PR whose new migration clashes goes back to its worker to rename it before it merges. null if your migrations have no ordered prefix. |
 | `premerge.actionlint` | `true` | When the merged workflows differ from main's, lint both with actionlint (if installed) and fail on findings main does not have. false skips it. |
 
 ## `mainWatch`

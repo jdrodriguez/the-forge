@@ -1,6 +1,7 @@
 // The capacity tests' shared sandbox, built on sandbox.mjs: the real dispatcher.mjs in a throwaway HOME, with stub
-// fleet.sh, gh and ask-human.sh, and a stub Linear behind fetch. The machine reads as Linux with its load, cores and
-// free memory taken from FAKE_LOAD, FAKE_CORES and FAKE_FREE, so the burst tests can set them per run.
+// fleet.sh, gh, sysctl and ask-human.sh, and a stub Linear behind fetch. The machine's load, cores and free memory come
+// from FAKE_LOAD, FAKE_CORES and FAKE_FREE (a stub sysctl on macOS, a patched /proc/meminfo read on Linux), so the
+// burst tests can set them per run.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,7 +19,6 @@ import fs from 'node:fs';
 os.hostname = () => 'host-a.local';
 os.loadavg = () => [0, Number(process.env.FAKE_LOAD ?? 0), 0];
 os.cpus = () => Array.from({ length: Number(process.env.FAKE_CORES ?? 4) }, () => ({}));
-Object.defineProperty(process, 'platform', { value: 'linux' });
 const realRead = fs.readFileSync;
 fs.readFileSync = (f, ...rest) => (f === '/proc/meminfo'
   ? 'MemTotal: 1000 kB\\nMemAvailable: ' + Number(process.env.FAKE_FREE ?? 80) * 10 + ' kB\\n' : realRead(f, ...rest));
@@ -51,14 +51,14 @@ globalThis.fetch = async (url, init) => {
 };
 `;
 
-// gh: $HOME/prs.json maps a PR number to { branch, merge, state, reviews, threads }. pr edit and pr merge go to $HOME/gh-log.
+// gh: $HOME/prs.json maps a PR number to { branch, merge, state, reviews, threads, threadAuthor (default a bot) }. pr edit and pr merge go to $HOME/gh-log.
 const GH = `#!/usr/bin/env node
 const fs = require('node:fs');
 const H = process.env.HOME;
 const a = process.argv.slice(2);
 const read = (f, d) => (fs.existsSync(H + '/' + f) ? fs.readFileSync(H + '/' + f, 'utf8') : d);
 const prs = JSON.parse(read('prs.json', '{}'));
-const view = (n) => { const p = prs[n]; return { number: Number(n), url: 'https://github.com/x/pull/' + n, state: p.state ?? 'OPEN', isDraft: false,
+const view = (n) => { const p = prs[n]; return { number: Number(n), url: 'https://github.com/x/pull/' + n, state: p.state ?? 'OPEN', isDraft: Boolean(p.draft),
   mergeStateStatus: p.merge ?? 'CLEAN', headRefOid: '${HEAD}', headRefName: p.branch, baseRefName: 'main', changedFiles: 1, mergeCommit: null,
   statusCheckRollup: [{ name: 'Claude Code Review', conclusion: 'SUCCESS' }], updatedAt: '2026-11-01T00:00:00Z', body: 'Fix.', mergedAt: null }; };
 if (a[0] === 'auth') console.log('fake-gh-token');
@@ -70,27 +70,36 @@ else if (a[0] === 'pr') fs.appendFileSync(H + '/gh-log', a.join(' ') + '\\n');
 else if (a[0] === 'api' && a[1] === 'graphql') {
   const q = a.find((x) => x.startsWith('query=')) ?? '';
   const open = prs[(a.find((x) => x.startsWith('n=')) ?? 'n=0').slice(2)]?.threads ?? 0;
-  console.log(q.includes('reviewThreads') ? JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { totalCount: open, nodes: Array.from({ length: open }, () => ({ isResolved: false })) } } } } }) : 'null');
+  console.log(q.includes('reviewThreads') ? JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { totalCount: open, nodes: Array.from({ length: open }, () => ({ isResolved: false, comments: { nodes: [{ author: { login: prs[(a.find((x) => x.startsWith('n=')) ?? 'n=0').slice(2)]?.threadAuthor ?? 'review-bot[bot]' } }] } })) } } } } }) : 'null');
 } else if (a[0] === 'api') {
   const p = a.find((x) => x.startsWith('repos/')) ?? '';
   const m = p.match(/pulls\\/(\\d+)\\/(files|reviews)(\\/\\d+\\/comments)?/);
-  if (m && m[2] === 'files') console.log('src/x.ts\\t');
+  if (m && m[2] === 'files') {
+    const files = prs[m[1]].files ?? ['src/x.ts'];
+    console.log(a.some((x) => x.includes('"added"')) ? files.join('\\n') : files.map((f) => f + '\\t').join('\\n'));
+  }
   else if (m && m[3]) console.log('');
   else if (m) console.log((prs[m[1]].reviews ?? []).map((x) => JSON.stringify(x)).join('\\n'));
   else if (/branches\\//.test(p)) console.log('${HEAD}');
+  else if (/git\\/trees\\//.test(p)) console.log(read('base-migrations', ''));
   else process.exit(1);
 } else console.log('[]');
 `;
 
-// fleet.sh: ps lists $HOME/ps.json, usage prints $HOME/usage.json. dispatch saves each brief to $HOME/brief-<n>,
-// appends { label, model, cap } to $HOME/dispatches, marks its ticket claimed and answers with a new worker.
+// fleet.sh: ps lists $HOME/ps.json, usage prints $HOME/usage.json, accounts $HOME/accounts.json. stop goes to
+// $HOME/stopped, or fails with $HOME/stop-fails. dispatch saves each brief to $HOME/brief-<n>, appends
+// { label, model, cap } to $HOME/dispatches, marks its ticket claimed and answers with a new worker.
 const FLEET = `#!/usr/bin/env node
 const fs = require('node:fs');
 const H = process.env.HOME;
 const a = process.argv.slice(2);
 const arg = (f) => a[a.indexOf(f) + 1];
 if (a[0] === 'ps') process.stdout.write(fs.existsSync(H + '/ps.json') ? fs.readFileSync(H + '/ps.json', 'utf8') : '[]');
-else if (a[0] === 'accounts') console.log('[{"label":"b","signed_in":true}]');
+else if (a[0] === 'accounts') process.stdout.write(fs.existsSync(H + '/accounts.json') ? fs.readFileSync(H + '/accounts.json', 'utf8') : '[{"label":"b","signed_in":true}]');
+else if (a[0] === 'stop') {
+  if (fs.existsSync(H + '/stop-fails')) { console.error('could not stop it'); process.exit(1); }
+  fs.appendFileSync(H + '/stopped', a.slice(1).join(' ') + '\\n');
+}
 else if (a[0] === 'usage') process.stdout.write(fs.readFileSync(H + '/usage.json', 'utf8'));
 else if (a[0] === 'dispatch') {
   const n = fs.readdirSync(H).filter((f) => f.startsWith('brief-')).length;
@@ -121,10 +130,23 @@ export const ready = (n, { size = 'S', labels = [] } = {}) => ({ id: `uuid-${n}`
   labels: { nodes: [{ name: 'agent-ready', parent: null }, { name: size, parent: { name: 'Size' } }, ...labels.map((name) => ({ name, parent: null }))] } });
 
 // host: keys over this machine's hosts entry; dispatcher: keys over the dispatcher section.
-export function capBox({ host = {}, dispatcher = {}, tickets = {}, wakeQueue = null, prs = {}, labels = {}, ps = [], usage = [acct()], readyList = [] } = {}) {
-  const box = makeBox('dispatcher-capacity', { preload: PRELOAD, fleet: FLEET, gh: GH,
+// The queue board's send.py: records who was told what, and says it was delivered.
+const SEND = `import json, os, sys
+msg = sys.stdin.read()
+with open(os.path.expanduser('~/told'), 'a') as f:
+    f.write(json.dumps({'to': sys.argv[1] + '/' + sys.argv[2], 'text': msg}) + '\\n')
+print(json.dumps({'ok': True}))
+`;
+
+// host: keys over this machine's hosts entry; dispatcher: keys over the dispatcher section; config: top-level sections.
+export function capBox({ host = {}, dispatcher = {}, config = {}, tickets = {}, wakeQueue = null, prs = {}, labels = {}, ps = [], usage = [acct()], readyList = [] } = {}) {
+  const box = makeBox('dispatcher-capacity', { preload: PRELOAD, fleet: FLEET, gh: GH, config,
     dispatcher: { enabledHosts: ['host-a'], bundle: { enabled: false }, maxConcurrent: 20,
       hosts: { 'host-a': { maxWorkers: 2, maxLoadPerCore: 1000, minMemoryFreePercent: 0, ...host } }, ...dispatcher } });
+  fs.mkdirSync(path.join(box.root, 'queue-board'));
+  fs.writeFileSync(path.join(box.root, 'queue-board/send.py'), SEND);
+  fs.writeFileSync(path.join(box.bin, 'sysctl'), '#!/bin/sh\necho "${FAKE_FREE:-80}"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\necho "$CLAUDE_CONFIG_DIR $@" >> "$HOME/claude-calls"\n', { mode: 0o755 });
   fs.mkdirSync(box.stateDir, { recursive: true });
   fs.writeFileSync(path.join(box.stateDir, 'state.json'), JSON.stringify({ stuckStreak: 0, dispatches: [], tickets, ...(wakeQueue ? { wakeQueue } : {}) }));
   box.put = (f, v) => fs.writeFileSync(path.join(box.home, f), typeof v === 'string' ? v : JSON.stringify(v));

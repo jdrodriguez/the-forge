@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { CLAUDE_T, ENGINE_T, HEAD, OLD, ROOM, claude, claudeBriefs, engineBox, issue, mergeRequest, merges, plans, starts, tick, ticket } from './engine-sandbox.mjs';
-import { state } from './sandbox.mjs';
+import { editConfig, state } from './sandbox.mjs';
 
 const DIRTY = { mergeStateStatus: 'DIRTY' };
 const marker = (box, id = 'ENG-9') => {
@@ -121,4 +121,22 @@ test('an earlier waiter that no longer needs a worker blocks nobody behind it in
   const out = tick(box);
   assert.match(out, /ENG-8: a slot is free \(0\/1 in use\), so it wakes/);
   assert.equal(claudeBriefs(box).length, 1);
+});
+
+test('a round never starts while the engines are off, and none starts while new work is held; the ticket stays here', () => {
+  const off = engineBox({ fallback: { enabled: false }, tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
+  assert.match(tick(off), /ENG-9: .*no engine can run its next round on host-a \(the engines are off\)/);
+  assert.equal(starts(off).length, 0);
+  const held = engineBox({ fallback: { enabled: false }, tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
+  editConfig(held, (cfg) => ({ ...cfg, dispatcher: { ...cfg.dispatcher, holdNewWork: true } }));
+  assert.match(tick(held), /ENG-9: a round is due \(resolve its conflict with main\), held while new work is held/);
+  assert.equal(starts(held).length, 0);
+  assert.equal(ticket(held).status, 'building', 'it stays on this machine');
+});
+
+test('while new work is held no round starts, even with an engine free', () => {
+  const box = engineBox({ tickets: { 'ENG-9': ENGINE_T }, registry: { status: 'done' }, pr: { mergeStateStatus: 'DIRTY' } });
+  editConfig(box, (cfg) => ({ ...cfg, dispatcher: { ...cfg.dispatcher, holdNewWork: true } }));
+  assert.match(tick(box), /ENG-9: a round is due \(resolve its conflict with main\), held while new work is held/);
+  assert.equal(starts(box).length, 0);
 });

@@ -37,6 +37,12 @@ function applyRound(c, id, t, out, { round, engine, summary, text }) {
 async function startRound(c, st, m, id, t, { note, summary, keepRound = false, exclude = [], retry = false, pr = null }) {
   const round = keepRound ? (t.round ?? 1) : (t.round ?? 1) + 1;
   // A paused queue starts no worker, a round included, and changes no labels: the ticket waits as a green PR does.
+  // While new work is held no round starts; a round already running finishes.
+  if (c.newWorkHeld?.()) {
+    t.note = `its next round is due (${summary}), held while new work is held`;
+    c.log(`${id}: a round is due (${summary}), held while new work is held`);
+    return 'held';
+  }
   if (c.isPaused()) {
     t.note = `its next round is due (${summary}), held while the queue is paused`;
     c.log(`${id}: a round is due (${summary}), held while the queue is paused`);
@@ -47,8 +53,15 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
     return 'stuck';
   }
   const text = noteFor(c, id, t, pr, { round, lead: note.lead, parts: note.parts });
-  const engine = [t.engine, other(t.engine)].find((e) => e && !exclude.includes(e) && engineAllowedHere(c, e) && available(c, st, e));
-  if (!engine) return requeue(c, st, m, id, t, `no engine can run its next round on ${c.HOST} (${exclude.length ? `${exclude.join(', ')} hit its limit` : 'ext-worker.sh available passed none'})`);
+  // A round runs only while the engines are switched on, on an engine allowed here (engineAllowedHere), the same rule
+  // a new ticket meets.
+  const fb = c.cfg.externalBuilders?.fallback ?? {};
+  const on = (e) => Boolean(fb.enabled) && engineAllowedHere(c, e);
+  const engine = [t.engine, other(t.engine)].find((e) => e && on(e) && !exclude.includes(e) && available(c, st, e));
+  if (!engine) {
+    const why = `no engine can run its next round on ${c.HOST} (${!fb.enabled ? 'the engines are off' : exclude.length ? `${exclude.join(', ')} hit its limit` : 'ext-worker.sh available passed none'})`;
+    return requeue(c, st, m, id, t, why);
+  }
   const { issue } = await c.gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id });
   if (piiKinds(c, `${issue.title ?? ''}\n${issue.description ?? ''}`).length) {
     await c.markStuck(st, m, id, t, 'its title or description now holds personal data, which must not go to a third-party model');
@@ -211,9 +224,10 @@ function reconcileStart(c, st, id, t, row) {
   } else delete t.roundStarting;
 }
 
-// Called for an engine ticket whose PR is not green. Returns true when it handled the ticket this tick, false to let the
-// existing stall rules judge it.
-export async function advanceTicket(c, st, m, id, t, { pr }) {
+// Called for an engine ticket whose PR is not green, or a green one whose migration clashes with the base branch
+// (renumber is the note for that). Returns true when it handled the ticket this tick, false to let the existing stall
+// rules judge it.
+export async function advanceTicket(c, st, m, id, t, { pr, renumber = null }) {
   const row = readRow(c, id);
   if (row?.unreadable) {
     t.note = `its engine registry row is unreadable; ${t.note ?? ''}`;
@@ -245,7 +259,7 @@ export async function advanceTicket(c, st, m, id, t, { pr }) {
     c.log(`${id}: its engine registry says ${status}, which the dispatcher does not know; leaving it`);
     return true;
   }
-  const work = roundWork(c, id, t, pr);
+  const work = roundWork(c, id, t, pr, { renumber });
   if (!work) return false;
   if (work.rerun) return askRerun(c, st, id, t, pr);
   await startRound(c, st, m, id, t, { pr, summary: work.why.join('; '), note: { lead: `Your last round ended and the PR is not ready to merge yet.`, parts: work.parts } });

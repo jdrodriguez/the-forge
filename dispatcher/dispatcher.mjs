@@ -129,8 +129,10 @@ function askHuman(ticket, type, ask, recommend, fallback) {
 // to show one on and relies on Slack. Progress events (started, PR opened, merged) also post to the queue's private
 // Slack channel through the webhook in slack.webhookFile; questions reach that channel through ask-human.sh.
 // Best effort: never throws.
-async function notify(subtitle, text, { id = null, link = null, progress = false } = {}) {
-  if (DRY || cfg.notify === false) return;
+async function notify(subtitle, text, { id = null, link = null, progress = false, orchestrator = false } = {}) {
+  if (DRY) return;
+  if (orchestrator) tellOrchestrator(subtitle, text, id, link);
+  if (cfg.notify === false) return;
   if (process.platform === 'darwin') {
     try {
       run('osascript', ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title "Agent queue" subtitle (item 1 of argv)',
@@ -151,6 +153,21 @@ async function notify(subtitle, text, { id = null, link = null, progress = false
     if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 100)}`);
   } catch (e) {
     log(`could not post to Slack (${errText(e)})`);
+  }
+}
+
+// Notices the orchestrator must act on (a ticket still going, an account signed out, an engine PR merged without
+// review) also go to orchestrator.eventsDir (default <sharedDir>/orchestrator-events), one JSON file each, for the
+// orchestrator's events watcher. Best effort: never throws.
+const ORCH_EVENTS = conf.orchestrator?.eventsDir || path.join(SHARED, 'orchestrator-events');
+function tellOrchestrator(subtitle, text, id, link) {
+  try {
+    fs.mkdirSync(ORCH_EVENTS, { recursive: true });
+    const at = iso();
+    const name = `${at.replace(/[:.]/g, '-')}-${HOST}-${(id ?? 'host').replace(/[^A-Za-z0-9-]/g, '')}.json`;
+    fs.writeFileSync(path.join(ORCH_EVENTS, name), `${JSON.stringify({ at, host: HOST, id, subtitle, text, link })}\n`);
+  } catch (e) {
+    log(`could not write an orchestrator event (${errText(e)})`);
   }
 }
 
@@ -221,6 +238,11 @@ function branchSha(t) {
 
 const fleetWorkers = () => JSON.parse(run(FLEET, ['ps', '--json', '--all'], { timeout: 60_000 }));
 const fleetWorker = (name) => fleetWorkers().find((w) => w.name === name) ?? null;
+// Stops a Claude worker's session and remembers it, so this run's slot count stops reading it as working.
+function stopWorker(t) {
+  run(FLEET, ['stop', t.account, t.workerId], { timeout: 60_000 });
+  wakeRun.stopped.add(`${t.account}/${t.workerId}`);
+}
 
 // --- the hard limit and the wake queue ----------------------------------------------------------------
 // Nothing automatic starts, respawns or wakes a worker session when that would put more working sessions on this
@@ -234,9 +256,9 @@ const WAKE_REQUESTS = path.join(SHARED, 'wake-requests');
 // This run's decisions: tickets granted a wake (each holds a slot for the rest of the run), the tickets that held a slot
 // when the run reached them, the session list the count reads, and the override requests for tickets held here.
 // attempted and started record the sessions this run tried to start and did start, so an override is spent only on a
-// start it let through. reached holds the tickets whose PR was read this run.
+// start it let through. reached holds the tickets whose PR was read this run; stopped the sessions this run stopped.
 const wakeRun = { woken: new Set(), held: new Set(), asked: new Set(), reached: new Set(), attempted: new Set(), started: new Set(),
-  workers: null, overrides: new Map() };
+  stopped: new Set(), workers: null, overrides: new Map() };
 const noteStart = (id, ok) => {
   wakeRun.attempted.add(id);
   if (ok) wakeRun.started.add(id);
@@ -286,7 +308,7 @@ function poolUse(st, workers, pool, { except = null, queued = false } = {}) {
   const owner = workerOwners(st);
   for (const w of workers ?? []) {
     const key = `${w.label}/${w.id}`;
-    if (!workingRow(w) || counted.has(key)) continue;
+    if (!workingRow(w) || counted.has(key) || wakeRun.stopped.has(key)) continue;
     counted.add(key);
     const id = owner.get(key);
     if (poolOf(id ? st.tickets[id] : null) === pool) used += 1;
@@ -300,7 +322,7 @@ function sessionsWithoutSlot(st, workers) {
   let outside = 0;
   let slotless = 0;
   for (const w of workers ?? []) {
-    if (!workingRow(w)) continue;
+    if (!workingRow(w) || wakeRun.stopped.has(`${w.label}/${w.id}`)) continue;
     const id = owner.get(`${w.label}/${w.id}`);
     if (!id) outside += 1;
     else if (!holdsSlot(st, id, st.tickets[id]) && !wakeRun.woken.has(id)) slotless += 1;
@@ -590,6 +612,17 @@ function greenReason(pr) {
     const review = (pr.statusCheckRollup ?? []).find((c) => (c.name ?? c.context) === REVIEW_CHECK);
     if (!review || (review.conclusion ?? review.state) !== 'SUCCESS') return `${REVIEW_CHECK} not passed`;
   }
+  return openThreads(pr);
+}
+// The logins that opened the PR's unresolved review threads. A bot login ends in [bot] or is learning.reviewBotLogin.
+const isBot = (login) => /\[bot\]$/.test(login ?? '') || login === conf.learning?.reviewBotLogin;
+function threadAuthors(pr) {
+  const [owner, name] = REPO.split('/');
+  const d = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
+    'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ nodes{ isResolved comments(first:1){ nodes{ author{ login } } } } } } } }']));
+  return d.data.repository.pullRequest.reviewThreads.nodes.filter((n) => !n.isResolved).map((n) => n.comments?.nodes?.[0]?.author?.login ?? null);
+}
+function openThreads(pr) {
   const [owner, name] = REPO.split('/');
   const threads = JSON.parse(gh(['api', 'graphql', '-F', `owner=${owner}`, '-F', `name=${name}`, '-F', `n=${pr.number}`, '-f',
     'query=query($owner:String!,$name:String!,$n:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$n){ reviewThreads(first:100){ totalCount nodes{ isResolved } } } } }']));
@@ -638,13 +671,14 @@ const clearMergeRequest = (id) => fs.rmSync(path.join(MERGE_REQUESTS, `${id}.jso
 // tickets to it; when it is offline or paused, they build them as usual, so a fix never waits on one machine.
 const HEARTBEATS = path.join(SHARED, 'heartbeats');
 const isSentry = (issue) => issue.labels.nodes.some((l) => l.name === L.sentry);
-// The heartbeat also carries this machine's wake queue, so `wake` on any machine can say where a ticket waits, and,
-// while workerReservePercent is set, its working sessions per Claude account, for the other machines' reserve.
-function writeHeartbeat(st) {
+// The heartbeat also carries this machine's wake queue, so `wake` on any machine can say where a ticket waits, its
+// worktree count (the folders in the worktrees folder of every repo the sweep covers), and, while workerReservePercent
+// is set, its working sessions per Claude account, for the other machines' reserve.
+async function writeHeartbeat(st) {
   if (DRY) return;
   fs.mkdirSync(HEARTBEATS, { recursive: true });
   const wakeQueue = (st.wakeQueue ?? []).map(({ id, since, reason, pool }) => ({ id, since, reason, pool }));
-  const beat = { host: HOST, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue,
+  const beat = { host: HOST, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue, worktrees: await worktreeCount(),
     ...(reserving() ? { accountsWorking: accountsWorkingHere() } : {}) };
   fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify(beat)}\n`);
 }
@@ -1341,10 +1375,48 @@ async function advance(st, m, workers) {
     t.note = notGreen ? `not green: ${notGreen}` : 'green';
     wakeRun.reached.add(id);
     // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
-    if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
     // its round has ended, it goes to the orchestrator the way a risky-path PR does. That includes a PR an engine built
     // and a Claude worker finished, since the engine's code has had no review.
+    if (!notGreen && pr) {
+      let clash = { stale: [] };
+      try {
+        clash = await migrationClash(id, pr);
+      } catch (e) {
+        if (t.migrationCheckFailedSha !== pr.headRefOid) {
+          t.migrationCheckFailedSha = pr.headRefOid;
+          log(`${id}: could not check the PR's migrations (${errText(e)})`);
+        }
+      }
+      // An engine has no session to type into: its next round carries the note, once its current round has ended.
+      if (clash.stale.length && engineDriven(t)) {
+        t.note = `green, its new migration clashes with ${BASE}, so its next round renames it`;
+        await engines.call(`renaming ${id}'s migration`, true, (e, c) => e.advanceTicket(c, st, m, id, t, { pr, renumber: clash.note }));
+        saveState(st);
+        continue;
+      }
+      if (clash.stale.length) {
+        const sent = t.renumberSha === pr.headRefOid;
+        // Typing the note wakes the worker's session, which takes a slot even while the ticket waits on a merge.
+        if (!sent && !mayWake(st, id, t, `rename its migration that clashes with ${BASE}`)) continue;
+        const why = sent ? null : tellWorker(t, clash.note);
+        if (!why) {
+          t.note = `green, sent back to rename its migration that clashes with ${BASE}`;
+          if (!sent) {
+            t.renumberSha = pr.headRefOid;
+            log(`${id}: ${clash.stale.join(', ')} clashes with ${BASE}, sent worker ${t.account}/${t.workerId} back to rename it`);
+            saveState(st);
+          } else if (t.status === 'building') {
+            // The note went out on an earlier tick; a worker that has since ended gets the usual stall rules.
+            await checkStall(st, m, id, t, pr, `its new migration clashes with ${BASE} and waits on its worker to rename it`, workerState(workers, t));
+          }
+          continue;
+        }
+        log(`${id}: ${clash.stale.join(', ')} clashes with ${BASE}, and worker ${t.account}/${t.workerId} could not be told (${why})`);
+      }
+    }
+    // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
+    if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     if (!notGreen && engineDriven(t)) {
       const ready = await engines.call(`checking ${id}'s engine run`, 'hold', (e, c) => e.greenState(c, st, m, id, t, pr));
       if (ready === 'ready' && t.status !== 'stuck') await engines.toOrchestrator(st, id, t, pr);
@@ -1360,6 +1432,26 @@ async function advance(st, m, workers) {
     // A ticket that held no slot as this tick began (parked on the reviewer, or waiting in the wake queue) and now has
     // work to do takes a slot back only when one is free; until then it waits in the wake queue, and the stall rules
     // leave it alone: no replacement, no round, no stall note, never stuck for the wait.
+    // A ticket sent to the orchestrator whose PR then needs a worker again (a conflict, a review thread, a draft) goes
+    // back to building with its merge request withdrawn, so the stall rules give the fix to its worker or a new one.
+    // Pending checks or a merge-queue run leave it merge-asked; once green again it is sent to the orchestrator afresh.
+    // greenReason stops at a BLOCKED merge state without reading the threads, so those are read here.
+    let blockedThreads = null;
+    if (notGreen === 'merge state BLOCKED' && t.status === 'merge-asked' && !engineDriven(t)) {
+      try {
+        blockedThreads = openThreads(pr);
+      } catch (e) {
+        log(`${id}: could not read PR #${pr.number}'s review threads (${errText(e)})`);
+      }
+      if (blockedThreads) notGreen = `${notGreen}, ${blockedThreads}`;
+    }
+    if (notGreen && t.status === 'merge-asked' && !engineDriven(t) && (notGreen === 'draft' || /^merge state (DIRTY|CONFLICTING)$/.test(notGreen) || /unresolved review thread/.test(notGreen))) {
+      log(`${id}: its PR needs work again (${notGreen}), so its merge request is withdrawn and it is building again`);
+      t.status = 'building';
+      for (const k of ['riskySha', 'mergeAskedAt']) delete t[k];
+      if (!DRY) clearMergeRequest(id);
+      saveState(st);
+    }
     if (notGreen && t.status === 'building' && !wakeRun.held.has(id) && !mayWake(st, id, t, notGreen)) continue;
     if (notGreen && engineDriven(t)) {
       // An engine's next round, question, limit or failure (engine-rounds.mjs). A module that fails to load holds the
@@ -1479,6 +1571,35 @@ async function advance(st, m, workers) {
   }
 }
 
+// What an ended Claude worker's PR still needs from a worker: a conflict with the base branch, unresolved review
+// threads, or both; null for anything else (checks still running, a failing check, no PR), which keeps the stall
+// rules. greenReason stops at a BLOCKED merge state without reading the threads, so a BLOCKED or conflicting PR is asked.
+function prNeedsWorker(id, pr, notGreen) {
+  if (!pr) return null;
+  const dirty = ['DIRTY', 'CONFLICTING'].includes(pr.mergeStateStatus);
+  let threads = /review thread/.test(notGreen ?? '') ? notGreen : null;
+  if (!threads && (dirty || pr.mergeStateStatus === 'BLOCKED')) {
+    try {
+      threads = openThreads(pr);
+    } catch (e) {
+      log(`${id}: could not read PR #${pr.number}'s review threads (${errText(e)})`);
+    }
+  }
+  if (!dirty && !threads) return null;
+  // A worker that ended its turn on threads only people opened is waiting on them: it is asked about, never replaced.
+  if (!dirty && threads) {
+    let authors = null;
+    try {
+      authors = threadAuthors(pr);
+    } catch (e) {
+      log(`${id}: could not read who opened PR #${pr.number}'s review threads (${errText(e)})`);
+    }
+    if (!authors || (authors.length && authors.every((a) => !isBot(a)))) return { ask: true, threads, what: `${threads} opened by people` };
+  }
+  return { dirty, threads, what: [dirty ? `PR #${pr.number} conflicting with ${BASE}` : null, threads].filter(Boolean).join(' and ') };
+}
+const fixNote = (id, t, pr, fix) => `Your previous worker on ${id} ended, but its PR ${pr.url} cannot merge yet: ${fix.what}. Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them.${fix.dirty ? ` Merge origin/${BASE} into the branch (no rebase, no force-push) and resolve every conflict keeping both sides: what ${BASE} changed and what this ticket adds. Run the checks the conflicted files touch before you push.` : ''}${fix.threads ? ' Read every unresolved review thread on the PR, fix the code where the finding is right, reply on each thread saying what changed or why it stays, and resolve it.' : ''} Push once through ${GATED_PUSH} and drive the PR to green. Then carry on with the brief below.\n\n`;
+
 // Never fails a ticket for taking long. A long run gets an informational post every longRunNoticeHours; a ticket
 // that stops moving gets one note to the human and stays in the queue; only a worker that is gone, with nothing
 // moving for stallHours, makes the ticket stuck. Waiting on the human's answer is never a stall.
@@ -1494,7 +1615,8 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
   const deadEnd = !pr || ['DIRTY', 'CONFLICTING'].includes(pr.mergeStateStatus);
   // "failed" means the session itself died (a reboot or a killed daemon), not that the worker gave up, so its ticket
   // gets one replacement worker before it can go stuck. "done" and "gone" keep going straight to stuck.
-  if (t.goneTicks >= 2 && state === 'failed' && (t.redispatches ?? 0) < (cfg.maxRedispatches ?? 1)) {
+  const budget = (t.redispatches ?? 0) < (cfg.maxRedispatches ?? 1);
+  if (t.goneTicks >= 2 && state === 'failed' && budget) {
     // On a full machine the replacement waits in the wake queue, and the ticket is never made stuck for it.
     if (!mayWake(st, id, t, `its worker ${t.account}/${t.workerId} failed`)) return;
     try {
@@ -1502,6 +1624,38 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
       log(`${id}: its worker failed and no account has room for a replacement`);
     } catch (e) {
       log(`${id}: could not replace its failed worker (${errText(e)})`);
+    }
+  }
+  // A Claude worker that ended ("done" or "gone") with its PR conflicting with the base branch or holding unresolved
+  // review threads gets a replacement from the same maxRedispatches budget, told to merge the base branch and fix the
+  // threads. Engine tickets get rounds for this instead (engine-rounds.mjs).
+  if (t.goneTicks >= 2 && state !== 'failed' && budget && !engineDriven(t)) {
+    const fix = prNeedsWorker(id, pr, notGreen);
+    if (fix?.ask) {
+      if (t.humanThreadsAsked !== pr.headRefOid) {
+        t.humanThreadsAsked = pr.headRefOid;
+        saveState(st);
+        log(`${id}: its worker ended its turn with ${fix.what}, so ${HUMAN} is asked instead of a replacement`);
+        await effects(t, id, [[`ask ${HUMAN} about ${id}'s open review threads`, () => askHuman(id, 'blocked',
+          `${id}'s worker ${t.account}/${t.workerId} ended its turn with ${fix.what} on ${pr.url}.`,
+          `Answer the threads, then wake the worker: ${attachCmd(t)}`, 'the ticket waits; it is not replaced')]]);
+        saveState(st);
+      }
+      t.note = `waiting on ${fix.what}`;
+      return;
+    }
+    if (fix) {
+      const why = `its worker ${t.account}/${t.workerId} ended with ${fix.what}`;
+      if (!mayWake(st, id, t, why)) return;
+      try {
+        if (await replaceWorker(st, id, t, { note: fixNote(id, t, pr, fix), say: `the previous worker ended with ${fix.what} on ${pr.url}`, charge: true })) return;
+        log(`${id}: ${why} and no account has room for a replacement, trying next tick`);
+      } catch (e) {
+        log(`${id}: could not replace its ended worker, trying next tick (${errText(e)})`);
+      }
+      // The budget still holds a replacement, so a start that failed this tick is retried, never made stuck.
+      t.note = `${why}; waiting to start its replacement`;
+      return;
     }
   }
   if (t.goneTicks >= 2 && (deadEnd || idle > cfg.stallHours)) {
@@ -1512,7 +1666,7 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
   if (runs > (t.longRunNotices ?? 0)) {
     t.longRunNotices = runs;
     saveState(st);
-    await notify(`${id} still going`, `${Math.round(elapsed)}h in, worker ${state}, ${notGreen}`, { id, link: pr?.url, progress: true });
+    await notify(`${id} still going`, `${Math.round(elapsed)}h in, worker ${state}, ${notGreen}`, { id, link: pr?.url, progress: true, orchestrator: true });
   }
   if (t.waiting) return;
   const quiet = hoursSince(t.lastOutputAt);
@@ -1535,6 +1689,289 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
   await effects(t, id, [[`tell ${HUMAN} ${id} stalled`, () => askHuman(id, 'blocked', `${id} has stalled: ${stalled}. ${where}: ${notGreen}.`,
     `Open the worker's session and nudge it: ${attachCmd(t)}`, 'the ticket stays in the queue and the dispatcher keeps watching it')]]);
   saveState(st);
+}
+
+// --- worktree teardown -------------------------------------------------------------------------------------------
+// When a ticket's PR merges or closes, the next tick stops its worker, removes its worktree through
+// worktree-teardown.mjs (which removes only what holds nothing GitHub lacks) and then the session with `claude rm`.
+// Every worktreeCleanup.sweepHours the same module sweeps every worktree of the repos the queue builds. Kept work asks
+// the human: at teardown at once, in the sweep after atRiskAskDays. dryRun logs what it would do and changes nothing.
+// Neither runs while the dispatcher is paused, and both catch their own errors so a failure never stops the tick.
+const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], rebuildableIgnored: null, clones: 'dry-run',
+  ...(cfg.worktreeCleanup ?? {}) };
+// worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one.
+const SWEEP_STATE = path.join(LOCAL, 'worktree-sweep.json');
+const TEARDOWN_TRIES = 3; // ticks a live process may hold the worktree after its worker stops, before the human is asked
+let wtModule = null;
+const wtMod = async () => (wtModule ??= await import('./worktree-teardown.mjs'));
+const wtDry = () => DRY || WT_CFG.dryRun;
+const trashDir = async () => (await wtMod()).trashDirFor(WT_CFG.trashDir);
+// The checkouts the sweep covers: repoPath, then each worktreeCleanup.repos entry ({ path, github, base }).
+const cleanupRepos = () => [{ path: conf.repoPath, github: REPO, base: BASE }, ...WT_CFG.repos.map((r) => ({ base: BASE, ...r }))]
+  .filter((r) => r.path && fs.existsSync(r.path));
+const claudeEnv = (label) => {
+  const env = { ...process.env };
+  if (label === PRIMARY) delete env.CLAUDE_CONFIG_DIR;
+  else env.CLAUDE_CONFIG_DIR = path.join(HOME, `.claude-${label}`);
+  return env;
+};
+
+async function teardownFinished(st, workers) {
+  if (!WT_CFG.enabled || isPaused() || !conf.repoPath) return;
+  // A record from a dry run is done again once dryRun is off. Tickets finished over two weeks ago are left to the sweep.
+  const due = Object.entries(st.tickets).filter(([, t]) => ['merged', 'closed'].includes(t.status) && !t.bundledInto
+    && (!t.teardown || t.teardown.retry || (t.teardown.dryRun && !wtDry())) && hoursSince(t.mergedAt ?? t.closedAt) < 14 * 24).slice(0, 10);
+  if (!due.length) return;
+  // Unknown worker states could mean stopping or removing a session still at work, so wait for a tick that has them.
+  if (!workers) return log('worktree teardown waits: the fleet list did not come back this tick');
+  let wt;
+  let dirs;
+  try {
+    wt = await wtMod();
+    dirs = wt.processDirs();
+  } catch (e) {
+    return log(`worktree teardown skipped this tick (${errText(e)})`);
+  }
+  for (const [id, t] of due) {
+    try {
+      await teardownTicket(wt, id, t, workers, dirs, st);
+    } catch (e) {
+      log(`${id}: worktree teardown failed, trying next tick (${errText(e)})`);
+    }
+    saveState(st);
+  }
+}
+
+async function teardownTicket(wt, id, t, workers, dirs, st) {
+  const dry = wtDry();
+  const rec = { at: iso(), ...(dry ? { dryRun: true } : {}) };
+  // Codex and Grok build in a standalone clone that ext-worker.sh made and owns, with no fleet session.
+  if (engineDriven(t)) {
+    t.teardown = { ...rec, skipped: `${t.engine ?? 'engine'} run, its clone belongs to ext-worker.sh` };
+    return;
+  }
+  const state = workerState(workers, t);
+  const w = workers.find((x) => x.label === t.account && x.id === t.workerId);
+  // A worker still at work with a live process is never stopped under it: its teardown waits, and after
+  // TEARDOWN_TRIES ticks the human is asked. A row with no process is a leftover session, so `claude rm` clears it below.
+  if (w?.pid && ACTIVE.includes(state)) {
+    const tries = (t.teardown?.tries ?? 0) + 1;
+    const reason = `its worker ${t.account}/${t.workerId} is still ${state}`;
+    t.teardown = { ...rec, tries, retry: tries < TEARDOWN_TRIES, reason };
+    if (tries < TEARDOWN_TRIES) return;
+    log(`${id}: worktree teardown: kept, ${reason} after ${tries} ticks`);
+    if (dry) return log(`${id}: would ask ${HUMAN} about its worker still at work after its PR ${t.status}`);
+    try {
+      askHuman(id, 'blocked', `${id}'s PR ${t.status}, but ${reason}, so its worktree and session on ${HOST} were left alone.`,
+        `Attach (${attachCmd(t)}) and see what it is doing; stop it when it is done, then remove its worktree`, 'keep it');
+      t.teardown.asked = iso();
+    } catch (e) {
+      log(`${id}: could not ask about its worker (${errText(e)})`);
+    }
+    return;
+  }
+  if (w?.pid && !['gone', 'done', 'failed'].includes(state)) {
+    if (dry) log(`${id}: would stop worker ${t.account}/${t.workerId} (${state})`);
+    else {
+      try {
+        run(FLEET, ['stop', t.account, t.workerId], { timeout: 60_000 });
+        log(`${id}: stopped worker ${t.account}/${t.workerId} after its PR ${t.status}`);
+      } catch (e) {
+        log(`${id}: could not stop worker ${t.account}/${t.workerId} (${errText(e)})`);
+      }
+    }
+  }
+  const pr = t.prNumber ? JSON.parse(gh(['pr', 'view', String(t.prNumber), '--repo', REPO, '--json', 'number,state,headRefOid'])) : null;
+  // A worktree on a live ticket's branch, or naming a live ticket, is never this ticket's to remove.
+  const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
+  const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
+  const liveRx = live.map(([x]) => new RegExp(`${x}(?!\\d)`, 'i'));
+  // A worker often names its local branch unlike the one it pushes, so the worktree is the one on the ticket's branch,
+  // else the one at the PR's head, else the only one naming the ticket.
+  const idRx = new RegExp(`${id}(?!\\d)`, 'i');
+  const mine = (x) => (t.branch && x.branch === t.branch) || (pr?.headRefOid && x.head === pr.headRefOid) || idRx.test(`${path.basename(x.path)} ${x.branch ?? ''}`);
+  const all = wt.listWorktrees(conf.repoPath);
+  // Only worktrees in the worktrees folder, compared by real path as git reports them: one a person made elsewhere is
+  // theirs. One of this ticket's found outside it makes the ticket's worktree unknown.
+  const folder = wt.key(WORKTREES);
+  const inFolder = (x) => wt.key(x.path).startsWith(`${folder}/`);
+  const outside = all.filter((x) => !inFolder(x) && mine(x));
+  const listed = all.filter((x) => inFolder(x) && !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
+    && !liveRx.some((rx) => rx.test(`${path.basename(x.path)} ${x.branch ?? ''}`)));
+  const named = listed.filter((x) => idRx.test(`${path.basename(x.path)} ${x.branch ?? ''}`));
+  const entry = (t.branch && listed.find((x) => x.branch === t.branch)) || (pr?.headRefOid && listed.find((x) => x.head === pr.headRefOid))
+    || (named.length === 1 ? named[0] : null);
+  // No worktree found is proven only when the ticket has a branch and nothing anywhere names the ticket; anything less
+  // (several worktrees naming it, one outside the worktrees folder, no branch on record) is unknown, and its session is
+  // left alone.
+  const absent = !entry && Boolean(t.branch) && !named.length && !outside.length;
+  if (!entry) named.push(...outside);
+  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: conf.repoPath, base: BASE, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
+    rebuildable: WT_CFG.rebuildableIgnored })
+    : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
+      : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
+  const tries = (t.teardown?.tries ?? 0) + 1;
+  log(`${id}: worktree teardown: ${res.would ? `would be ${res.would}` : res.action}${entry ? ` ${entry.path}` : ''} (${res.reason})`);
+  if (res.action === 'kept' && res.transient && tries < TEARDOWN_TRIES) {
+    t.teardown = { ...rec, tries, retry: true, worktree: entry?.path ?? null, reason: res.reason };
+    return;
+  }
+  let session = null;
+  if (['removed', 'gone'].includes(res.would ?? res.action) && w) {
+    if (dry) session = 'would remove';
+    else {
+      try {
+        run('claude', ['rm', t.workerId], { env: claudeEnv(t.account), timeout: 60_000 });
+        session = 'removed';
+      } catch (e) {
+        session = `not removed (${errText(e)})`;
+      }
+      log(`${id}: session ${t.account}/${t.workerId} ${session}`);
+    }
+  }
+  t.teardown = { ...rec, tries, worktree: entry?.path ?? null, action: res.action, ...(res.would ? { would: res.would } : {}), reason: res.reason, ...(session ? { session } : {}) };
+  if (res.action !== 'kept' || res.would) return;
+  const where = entry?.path ?? named.map((x) => x.path).join(', ');
+  const ask = `${id}'s PR ${t.status}, but its worktree ${where} on ${HOST} was kept, and its session too: ${res.reason}.`;
+  const recommend = `Look at it (git -C <path> status; git -C <path> log --oneline origin/${BASE}..HEAD), save anything worth keeping, then git worktree remove it and claude rm ${t.workerId}`;
+  if (dry) return log(`${id}: would ask ${HUMAN}: ${ask}`);
+  try {
+    askHuman(id, 'blocked', ask, recommend, 'keep it');
+    t.teardown.asked = iso();
+  } catch (e) {
+    log(`${id}: could not ask about its kept worktree (${errText(e)})`);
+  }
+}
+
+// The sweep, at most once per sweepHours on each machine (the timestamp is local, in worktree-sweep.json). A worktree
+// whose ticket is live here, or that a process holds, is left alone; one holding work GitHub lacks is at risk and kept,
+// and when one has been at risk over atRiskAskDays, one ask names them all. When every repo's sweep fails, the next
+// tick tries again; when only some fail, those wait for the next sweep.
+async function worktreeSweep(st) {
+  const repos = cleanupRepos();
+  if (!WT_CFG.enabled || isPaused() || !repos.length) return;
+  let mem = {};
+  try {
+    mem = JSON.parse(fs.readFileSync(SWEEP_STATE, 'utf8'));
+  } catch { /* first sweep on this machine */ }
+  const dry = wtDry();
+  // A dry sweep's time never delays the first live one.
+  if (mem.lastRun && hoursSince(mem.lastRun) < WT_CFG.sweepHours && !(mem.dryRun && !dry)) return;
+  const atRisk = {};
+  const foreign = [];
+  let failed = 0;
+  let wt;
+  try {
+    wt = await wtMod();
+  } catch (e) {
+    return log(`worktree sweep failed, trying next tick (${errText(e)})`);
+  }
+  const live = Object.entries(st.tickets).filter(([, t]) => ['claiming', 'bundled', ...LIVE].includes(t.status));
+  for (const repo of repos) {
+    const label = `worktree sweep (${path.basename(repo.path)})`;
+    try {
+      const prs = {};
+      const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid']));
+      for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
+      const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry,
+        rebuildable: WT_CFG.rebuildableIgnored, clones: WT_CFG.clones,
+        trashDir: await trashDir(), liveBranches: new Set(live.map(([, t]) => t.branch).filter(Boolean)), liveIds: live.map(([id]) => id) });
+      if (out.error) {
+        failed += 1;
+        log(`${label}: ${out.error}`);
+        continue;
+      }
+      const n = (what) => out.results.filter((r) => (r.would ?? r.action) === what).length;
+      const atRiskNow = out.results.filter((r) => r.atRisk);
+      log(`${label}${dry ? ' (dry run, nothing changed)' : ''}: ${n('removed')} ${dry ? 'would be ' : ''}removed, ${n('trashed')} orphan(s) ${dry ? 'would be ' : ''}trashed, ${atRiskNow.length} at risk, ${n('kept') - atRiskNow.length} kept, of ${out.results.length}`);
+      for (const r of out.results) if (r.would || r.action !== 'kept' || r.atRisk) log(`  ${r.would ? `would be ${r.would}` : r.action}${r.atRisk ? ' AT RISK' : ''}: ${r.name} [${r.branch ?? '-'}] ${r.reason}`);
+      for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason };
+      // A folder in the worktrees folder that is not this repo's (a scratch folder, another repo's worktree) is reported
+      // once and left alone. Clones are counted by rule, for the dry run.
+      for (const r of out.results.filter((x) => x.foreign)) {
+        if (!(mem.foreign ?? []).includes(r.path)) log(`  left alone: ${r.name}, ${r.reason}`);
+        foreign.push(r.path);
+      }
+      const clones = out.results.filter((x) => x.clone);
+      if (clones.length) {
+        const by = {};
+        for (const r of clones) by[r.would ?? (r.action === 'kept' ? r.rule : r.action)] = (by[r.would ?? (r.action === 'kept' ? r.rule : r.action)] ?? 0) + 1;
+        log(`  engine clones (${WT_CFG.clones}): ${Object.entries(by).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+      }
+    } catch (e) {
+      failed += 1;
+      log(`${label} failed, trying next tick (${errText(e)})`);
+      // Its at-risk record carries over, so a worktree already asked about is not asked about again.
+      for (const [p, a] of Object.entries(mem.atRisk ?? {})) if (p.startsWith(`${repo.path}/`)) atRisk[p] = a;
+    }
+  }
+  if (failed === repos.length) return;
+  const overdue = Object.entries(atRisk).filter(([, a]) => !a.asked && hoursSince(a.since) > WT_CFG.atRiskAskDays * 24);
+  if (overdue.length) {
+    const ask = `${overdue.length} worktree(s) on ${HOST} have held work GitHub lacks for over ${WT_CFG.atRiskAskDays} days, with no live ticket or process: ${overdue.map(([p, a]) => `${p} (${a.reason})`).join('; ')}`.slice(0, 1500);
+    if (dry) log(`would ask ${HUMAN}: ${ask}`);
+    else {
+      try {
+        askHuman(null, 'blocked', ask, `Look at each (git -C <path> status; git -C <path> log --oneline origin/${BASE}..HEAD), save what matters, then remove it`, 'keep it');
+        for (const [, a] of overdue) a.asked = iso();
+      } catch (e) {
+        log(`worktree sweep: could not ask about the at-risk worktrees (${errText(e)})`);
+      }
+    }
+  }
+  if (!DRY) {
+    try {
+      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk, foreign }, null, 2)}\n`);
+    } catch (e) {
+      log(`worktree sweep: could not save its state (${errText(e)})`);
+    }
+  }
+}
+
+// The folders in the worktrees folder of every repo the sweep covers, for the heartbeat. null when none can be counted.
+async function worktreeCount() {
+  let total = null;
+  for (const r of cleanupRepos()) {
+    try {
+      total = (total ?? 0) + (await wtMod()).countWorktrees(r.path, conf.worktreesDir ?? '.claude/worktrees');
+    } catch {
+      // One repo that cannot be counted leaves the others' count.
+    }
+  }
+  return total;
+}
+
+// --- migration clashes ---------------------------------------------------------------------------------------------
+// A green PR whose new migration clashes with the base branch (migration-order.mjs, premerge.migrations.policy) goes
+// back to its worker to rename the file before it merges or goes to the orchestrator. One note per PR head; the
+// worker's push brings a new head and a new check. A check that cannot run leaves the PR on its old path, where the
+// pre-merge check stops it.
+async function migrationClash(id, pr) {
+  const mig = conf.premerge?.migrations;
+  if (!mig?.dir) return { stale: [] };
+  const added = gh(['api', `repos/${REPO}/pulls/${pr.number}/files`, '--paginate', '--jq', '.[] | select(.status == "added") | .filename']);
+  const mine = added ? added.split('\n').filter(Boolean) : [];
+  if (!mine.some((f) => f.startsWith(`${mig.dir}/`))) return { stale: [] };
+  const { migrationClashes, renameNote } = await import('./migration-order.mjs');
+  const onBase = gh(['api', `repos/${REPO}/git/trees/${BASE}:${mig.dir}`, '--jq', '.tree[].path']);
+  const r = migrationClashes(mine, onBase ? onBase.split('\n').filter(Boolean) : [], mig);
+  return r.stale.length ? { ...r, note: renameNote(id, r.stale, r.newest, { ...mig, push: GATED_PUSH, baseBranch: BASE }) } : r;
+}
+
+// Types a note into a live worker's session on this machine, the way the queue board does (queue-board/send.py).
+// Returns why it could not, or null once it is delivered.
+const SEND_PY = path.join(ROOT, 'queue-board/send.py');
+function tellWorker(t, text) {
+  if (DRY) {
+    log(`would tell worker ${t.account}/${t.workerId}: ${text.slice(0, 120)}`);
+    return null;
+  }
+  try {
+    const out = JSON.parse(run('python3', [SEND_PY, t.account, t.workerId], { input: text, stdio: ['pipe', 'pipe', 'pipe'], timeout: 90_000 }));
+    return out.ok ? null : (out.error || 'not delivered');
+  } catch (e) {
+    return errText(e);
+  }
 }
 
 // --- 3. watch the workers ---------------------------------------------------------------------------
@@ -1600,7 +2037,7 @@ async function watchSignIns(st) {
     st.signedOut[a.label] = iso();
     saveState(st);
     log(`account ${a.label} (${a.email ?? 'unknown'}) on ${HOST} is signed out, so it gets no work`);
-    await notify(`Account ${a.label} signed out`, `${a.email ?? 'unknown'} on ${HOST} gets no work until it signs back in`, { progress: true });
+    await notify(`Account ${a.label} signed out`, `${a.email ?? 'unknown'} on ${HOST} gets no work until it signs back in`, { progress: true, orchestrator: true });
     if (DRY) continue;
     try {
       askHuman(null, 'blocked', `Fleet account ${a.label} (${a.email ?? 'unknown'}) on ${HOST} is signed out, so it gets no queue work.`,
@@ -2091,13 +2528,33 @@ async function dispatch(st, m) {
 
 // Starts a new worker on a ticket whose worker ended before finishing (a reboot ends every fleet worker). The new worker continues from the old one's worktree and PR instead of
 // starting over, and a ticket already marked stuck for it goes back to building. Returns null when no account has room.
-async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) {
+// `say` is the reason in the ticket comment for a replacement that is neither a review round nor a plain failed
+// worker. `charge` says whether it uses up the maxRedispatches budget; by default only the plain failed-worker
+// replacement and a redispatch by hand do.
+async function replaceWorker(st, id, t, { note: lead = null, why = null, say = null, charge = null } = {}) {
   if (DRY) {
     log(`${id}: would start a replacement worker on ${t.branch}`);
     return { dry: true };
   }
   // Every caller asks first; this holds the line for one that doesn't. A ticket with no room waits in the wake queue.
-  if (!mayWake(st, id, t, why ?? 'a replacement worker')) return null;
+  // A start an earlier run began and never recorded (it crashed between the dispatch and the save): adopt the worker
+  // it started, or wait for it a while, so a crash never brings a second worker.
+  if (t.replacing) {
+    const started = fleetWorkers().find((w) => w.name === workerName(id) && !(w.label === t.replacing.fromAccount && w.id === t.replacing.fromWorker)) ?? null;
+    if (started) {
+      Object.assign(t, { status: 'building', account: started.label, workerId: started.id, workerName: started.name, goneTicks: 0, lastProgressAt: iso(), lastOutputAt: iso() });
+      delete t.replacing;
+      saveState(st);
+      log(`${id}: adopted worker ${started.label}/${started.id}, which an earlier run started`);
+      return started;
+    }
+    if (hoursSince(t.replacing.at) * 60 < 15) {
+      log(`${id}: a replacement an earlier run began is not listed yet, waiting for it`);
+      return null;
+    }
+    delete t.replacing;
+  }
+  if (!mayWake(st, id, t, why ?? say ?? 'a replacement worker')) return null;
   noteStart(id, false);
   const members = [];
   for (const x of [id, ...(t.bundle ?? [])]) members.push((await gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id: x })).issue);
@@ -2105,15 +2562,30 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   const acct = pickAccount(JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 })));
   if (!acct) return null;
   const model = modelFor(acct);
+  // The old session goes before the new one starts, unless it has already ended: a replaced worker left in its session
+  // could wake again later, on the same branch as its replacement and in no slot. One that could not be stopped may
+  // still be running, so nothing starts on its branch; the caller logs it and the next tick tries again.
+  const old = !engineDriven(t) && t.workerId ? (wakeRun.workers ?? []).find((w) => w.label === t.account && w.id === t.workerId && w.pid) : null;
+  if (old && !wakeRun.stopped.has(workerKey(t))) {
+    try {
+      stopWorker(t);
+    } catch (e) {
+      throw new Error(`could not stop its old worker ${t.account}/${t.workerId} before replacing it (${errText(e)})`);
+    }
+  }
   // An engine ticket a Claude worker takes over (a redispatch by hand, or the round cap that made it stuck): the engine's
   // clone is engine-written throughout, so the worker is told to cut its own worktree from the branch instead.
   const fromEngine = engineDriven(t);
   const note = fromEngine
     ? `${engines.guard(id, t)}Continue the work on ${id} from origin/${t.branch} instead of starting over. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`
     : `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
+  t.replacing = { at: iso(), fromAccount: t.account ?? null, fromWorker: t.workerId ?? null };
+  saveState(st);
+  // A dispatch that throws may still have started the session, so the marker stays for the next run to adopt.
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
     '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
     ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
+  delete t.replacing;
   noteStart(id, true);
   if (fromEngine) {
     engines.leave(t);
@@ -2123,7 +2595,7 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   // lastOutputAt too: the spin check measures a busy worker's quiet time from it, and the old worker's last commit
   // made every replacement read as stalled on its first tick.
   Object.assign(t, { status: 'building', account: out.label, workerId: out.id, workerName: out.name, model, goneTicks: 0,
-    lastProgressAt: iso(), lastOutputAt: iso(), redispatchedAt: iso(), redispatches: (t.redispatches ?? 0) + (why ? 0 : 1) });
+    lastProgressAt: iso(), lastOutputAt: iso(), redispatchedAt: iso(), redispatches: (t.redispatches ?? 0) + ((charge ?? !(why || say)) ? 1 : 0) });
   for (const k of ['stalledSince', 'stuckAt', 'reason']) delete t[k];
   saveState(st);
   log(`${id}: redispatched to ${out.label}/${out.id}${wasStuck ? ' (was stuck)' : ''}`);
@@ -2148,7 +2620,9 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   }
   if (t.bundle?.length) writeBundle(id, t.bundle);
   saveState(st);
-  await comment(issue.id, why
+  await comment(issue.id, say
+    ? `Agent dispatcher on ${HOST}: ${say}, so fleet worker ${out.label}/${out.id} continues on \`${t.branch}\` from its worktree and PR.`
+    : why
     ? `Agent dispatcher on ${HOST}: ${why}, so fleet worker ${out.label}/${out.id} addresses them on \`${t.branch}\` and pushes to the same PR.`
     : `Agent dispatcher on ${HOST}: the previous worker ended before finishing, so fleet worker ${out.label}/${out.id} continues on \`${t.branch}\` from its worktree and PR.`);
   return out;
@@ -2166,7 +2640,12 @@ async function redispatch(id) {
     const w = fleetWorkers().find((x) => x.label === t.account && x.id === t.workerId);
     if (w && ACTIVE.includes(w.status || w.state)) return console.log(`${id}: its worker ${t.account}/${t.workerId} is still ${w.status || w.state}`);
     if (!(await roomByHand(st, id, t, 'a redispatch by hand'))) return;
-    const out = await replaceWorker(st, id, t);
+    let out;
+    try {
+      out = await replaceWorker(st, id, t);
+    } catch (e) {
+      return console.log(`${id}: nothing started: ${errText(e)}`);
+    }
     console.log(out ? `${id}: redispatched to ${out.label}/${out.id}` : `no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom`);
     // An override is spent only by a start: one that started nothing stands for the next try.
     const o = wakeRun.overrides.get(id);
@@ -2295,11 +2774,13 @@ async function tick() {
     pruneWakeQueue(st);
     await advance(st, m, workers);
     pruneWakeQueue(st);
+    await teardownFinished(st, workers);
     await watchWorkers(st, workers);
     await watchSignIns(st);
     await dispatch(st, m);
     await sentryTriage();
-    writeHeartbeat(st);
+    await worktreeSweep(st);
+    await writeHeartbeat(st);
     st.lastTick = iso();
     delete st.lastError;
   } catch (e) {

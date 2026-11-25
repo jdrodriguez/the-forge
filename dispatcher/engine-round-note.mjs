@@ -70,9 +70,13 @@ function openThreads(c, pr) {
 
 // What the next round has to fix, or null when nothing a round can fix is known yet (checks still running, or a reason
 // a push cannot change). The existing stall timings apply while it is null.
-export function roundWork(c, id, t, pr) {
+export function roundWork(c, id, t, pr, { renumber = null } = {}) {
   const parts = [];
   const why = [];
+  if (renumber) {
+    parts.push(`## Rename the new migration\n\n${renumber.trim()}`);
+    why.push('rename its migration');
+  }
   if (!pr) {
     parts.push(`## Open the PR\n\nThe last round ended without a pull request on \`${t.branch}\`. Commit and push your work, then open the PR against ${c.BASE} with a title starting "${id}: " and the sections of the repo's pull request template, if it has one.`);
     return { parts, why: ['open the PR'] };

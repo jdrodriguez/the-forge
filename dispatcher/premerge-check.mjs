@@ -83,6 +83,23 @@ function withScratchLock(fn) {
   }
 }
 
+// Build output is gitignored, so `git clean` keeps it, and a previous check's stale dist can shadow this tree's modules
+// (a leftover dist/x.d.ts once hid x/index.d.ts). Clears every package's dist and tsbuildinfo under each root; a build
+// cache restores what still matches. Only package folders: a stray file in a root (Finder's .DS_Store, say) made rmSync
+// of <file>/dist throw ENOTDIR and held every merge.
+export function clearBuildOutput(scratch, roots) {
+  for (const root of roots) {
+    const dir = path.join(scratch, root);
+    if (!fs.existsSync(dir)) continue;
+    for (const pkg of fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)) {
+      fs.rmSync(path.join(dir, pkg, 'dist'), { recursive: true, force: true });
+      for (const f of fs.readdirSync(path.join(dir, pkg))) {
+        if (f.endsWith('.tsbuildinfo')) fs.rmSync(path.join(dir, pkg, f), { force: true });
+      }
+    }
+  }
+}
+
 // Returns { stale: false } when main has not moved since the PR's CI ran, else { stale: true, ok, reason, output }.
 export function premergeCheck(prNumber, headSha, opts = {}) {
   return withScratchLock(() => runCheck(prNumber, headSha, opts));
@@ -98,19 +115,7 @@ function runCheck(prNumber, headSha, { log = () => {} } = {}) {
   git(['checkout', '-q', '--detach', '--force', headSha]);
   git(['reset', '-q', '--hard', headSha]);
   git(['clean', '-fdq']);
-  // Build output is gitignored, so `git clean` keeps it, and a previous check's stale dist can shadow this tree's
-  // modules (a leftover dist/x.d.ts once hid x/index.d.ts). Clear every package's dist and tsbuildinfo under
-  // premerge.buildOutputRoots; a build cache restores what still matches.
-  for (const root of P.buildOutputRoots ?? []) {
-    const dir = path.join(SCRATCH, root);
-    if (!fs.existsSync(dir)) continue;
-    for (const pkg of fs.readdirSync(dir)) {
-      fs.rmSync(path.join(dir, pkg, 'dist'), { recursive: true, force: true });
-      for (const f of fs.existsSync(path.join(dir, pkg)) ? fs.readdirSync(path.join(dir, pkg)) : []) {
-        if (f.endsWith('.tsbuildinfo')) fs.rmSync(path.join(dir, pkg, f), { force: true });
-      }
-    }
-  }
+  clearBuildOutput(SCRATCH, P.buildOutputRoots ?? []);
   try {
     git(['-c', 'user.name=premerge-check', '-c', 'user.email=premerge@localhost', 'merge', '-q', '--no-edit', '--no-ff', `origin/${BASE}`]);
   } catch (e) {
@@ -119,9 +124,11 @@ function runCheck(prNumber, headSha, { log = () => {} } = {}) {
   }
   // Two PRs can each pick the same migration prefix and pass alone (two once took the same timestamp on the same
   // day). Merged, the apply order between them is undefined, so a shared prefix fails the check.
-  // Main already carries older shared prefixes, so only a prefix shared by more files than on main counts.
+  // Main already carries older shared prefixes, so only a prefix shared by more files than on main counts. With
+  // migrations.policy "filename" the migrator applies any unapplied file whatever its prefix, so only a file name main
+  // already has clashes, and that shows as a merge conflict above.
   const mig = P.migrations;
-  if (mig?.dir && fs.existsSync(path.join(SCRATCH, mig.dir))) {
+  if (mig?.dir && mig.policy !== 'filename' && fs.existsSync(path.join(SCRATCH, mig.dir))) {
     const rx = new RegExp(mig.pattern ?? '^\\d{14}_.*\\.sql$');
     const n = mig.prefixLength ?? 14;
     const isMigration = (f) => rx.test(f);

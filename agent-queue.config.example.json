@@ -47,7 +47,7 @@
     "stateDir": "~/.agent-queue",
     "stateDirNote": "Per machine: state.json, logs, the PAUSED flag, the tick lock, and the secret files (slack-webhook, slack-bot-token, linear-api-key).",
     "sharedDir": "~/.agent-queue/shared",
-    "sharedDirNote": "Shared across machines: merge-requests/, heartbeats/, bundles/ and main-state.json. With more than one machine, point it at a folder Syncthing or Dropbox keeps in sync."
+    "sharedDirNote": "Shared across machines: merge-requests/, heartbeats/, bundles/, wake-requests/, orchestrator-events/ and main-state.json. With more than one machine, point it at a folder Syncthing or Dropbox keeps in sync."
   },
 
   "github": {
@@ -194,7 +194,7 @@
     "stuckInARowTrips": 2,
     "stuckInARowTripsNote": "This many stuck tickets in a row pause the dispatcher.",
     "maxRedispatches": 1,
-    "maxRedispatchesNote": "Replacement workers a ticket gets when its worker's session dies, a reboot say, before it can go stuck. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once.",
+    "maxRedispatchesNote": "Replacement workers a ticket gets before it can go stuck: when its worker's session dies (a reboot, say), and when its worker ends on a PR that conflicts with the base branch or holds unresolved review threads (seen on two ticks). The old session is stopped first; a replacement never starts while it could not be. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once.",
     "flakeWaitMinutes": 90,
     "flakeWaitMinutesNote": "How long a failure on a merge commit waits for a later main commit to pass the same workflow before it pauses the queue.",
     "model": "opus",
@@ -285,6 +285,25 @@
         "briefNote": "Path to your own engine brief template, relative to the repo root. null uses dispatcher/engine-worker-brief.md."
       }
     },
+    "worktreeCleanup": {
+      "enabled": true,
+      "enabledNote": "false turns both the teardown at merge and the sweep off.",
+      "dryRun": true,
+      "dryRunNote": "true logs what it would do and changes nothing. Set it false to act.",
+      "sweepHours": 24,
+      "sweepHoursNote": "How often each machine sweeps every worktree of repoPath and of each repos entry.",
+      "atRiskAskDays": 7,
+      "atRiskAskDaysNote": "A worktree the sweep keeps because it holds work GitHub lacks is asked about once it has been kept this many days.",
+      "trashDir": null,
+      "trashDirNote": "Where orphan folders go. null means the system trash.",
+      "repos": [],
+      "reposNote": "Other checkouts to sweep, each {\"path\", \"github\", \"base\"}; base defaults to github.baseBranch.",
+      "rebuildableIgnored": null,
+      "rebuildableIgnoredNote": "Ignored files and folders a build or an install makes again (glob names matched against each path part). Any other ignored file keeps a worktree, except an unchanged copy of the main checkout's file at the same path. null, an empty list or an invalid one means the built-in list: node_modules, dist, build, out, .turbo, .next, .nuxt, .svelte-kit, .output, coverage, .nyc_output, .cache, .parcel-cache, .vite, .eslintcache, *.tsbuildinfo, __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .venv, target, .gradle, .DS_Store.",
+      "clones": "dry-run",
+      "clonesNote": "The standalone clones ext-worker.sh makes for Codex and Grok in the worktrees folder. \"dry-run\" (the default) logs what would happen and counts them by rule, whatever dryRun says; \"on\" moves one to the trash once its PR merged or closed, it holds no changes, no operation in progress and no ignored file beyond the rebuildable ones, its HEAD is in the PR's head or on origin/<base>, no process is inside, and no live ticket names its branch; \"off\" leaves them alone."
+    },
+    "worktreeCleanupNote": "When a ticket's PR merges or closes, the next tick stops its worker, removes its worktree and then its session (claude rm); a session whose worktree can't be told apart is left, and asked about. The sweep moves former worktrees of this repo that git no longer tracks to the trash, and reports any other folder there once. Only worktrees inside the worktrees folder are touched, compared by real path. A worktree goes only when it is clean (untracked files included, nothing in progress), holds no ignored file beyond rebuildableIgnored, its PR merged or closed, HEAD is in the PR's head or on origin/<base>, and no live process holds it; anything else is kept, and kept work asks the human (at teardown at once, in the sweep after atRiskAskDays). Codex and Grok clones are never touched.",
     "externalBuildersNote": "Codex and Grok as queue workers (dispatcher/README.md, \"Codex and Grok as queue workers\"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push."
   },
 
@@ -331,7 +350,9 @@
     ],
     "gatesNote": "Commands gated-push.mjs runs in the worktree before pushing, each an argv array. A failing gate fails the push.",
     "env": {},
-    "envNote": "Extra environment for the git push itself, e.g. {\"SKIP_PREPUSH\": \"1\"} when the gates replace a slow pre-push hook."
+    "envNote": "Extra environment for the git push itself, e.g. {\"SKIP_PREPUSH\": \"1\"} when the gates replace a slow pre-push hook.",
+    "protectedBranches": null,
+    "protectedBranchesNote": "Branches gated-push.mjs never pushes to. Before any gate it asks git where the push lands (a dry run) and refuses a protected branch, or a dry run that fails. null means github.baseBranch, main and master."
   },
 
   "premerge": {
@@ -348,9 +369,10 @@
     "migrations": {
       "dir": "migrations",
       "pattern": "^\\d{14}_.*\\.sql$",
-      "prefixLength": 14
+      "prefixLength": 14,
+      "policy": "prefix"
     },
-    "migrationsNote": "Catches two PRs that each pick the same migration prefix, which pass alone and clash once merged. null if your migrations have no ordered prefix.",
+    "migrationsNote": "Catches two PRs that each pick the same migration prefix, which pass alone and clash once merged. policy \"prefix\" fails a new file whose prefix the base branch already uses; \"filename\", for a migrator that applies any unapplied file whatever its prefix, fails only a file name the base branch already has. A green PR whose new migration clashes goes back to its worker to rename it before it merges. null if your migrations have no ordered prefix.",
     "actionlint": true,
     "actionlintNote": "When the merged workflows differ from main's, lint both with actionlint (if installed) and fail on findings main does not have. false skips it."
   },
