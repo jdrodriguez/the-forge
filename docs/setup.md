@@ -6,9 +6,9 @@ This guide takes you from nothing to a running queue on one to four computers. T
 npx the-forge setup
 ```
 
-`npm install -g the-forge` then `the-forge setup` also works. For the newest code on GitHub instead of the newest release, use `npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone.
+`npm install -g the-forge` then `the-forge setup` also works. Either way, `setup` copies The Forge to `~/the-forge` and runs everything from there, because npm replaces its own folders. For the newest code on GitHub instead of the newest release, use `npx github:jdrodriguez/the-forge setup`, or clone the repository and run `node bin/the-forge.mjs setup --here` in the clone, which makes the clone the lasting copy.
 
-`setup` copies The Forge to `~/the-forge` and runs everything from there, then starts Claude Code on the `forge-setup` skill. The skill asks one question at a time and walks you through this guide, or you can follow it by hand. You do every sign-in yourself. `README.md` explains what The Forge does and lists the `the-forge` commands.
+`setup` then starts Claude Code on the `forge-setup` skill. The skill asks one question at a time and walks you through this guide, or you can follow it by hand. You do every sign-in yourself. `README.md` explains what The Forge does and lists the `the-forge` commands.
 
 ## What you need
 

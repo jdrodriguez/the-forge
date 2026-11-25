@@ -8,7 +8,7 @@ A worker builds from the ticket alone, so anything the ticket leaves open is a g
 
 Name these once, in your own docs or the worker brief, so every scenario and evidence comment uses the same words:
 
-- **Personas.** The roles a scenario can name, and how a verifier signs in as each one on each environment. A persona nobody can sign in as makes its scenarios unverifiable.
+- **Personas.** The roles a scenario can name, and how a verifier signs in as each one on the environment it walks. A persona nobody can sign in as makes its scenarios unverifiable.
 - **Environments.** The names of the environments a ticket is verified on, for example `staging` and `production`. The evidence footer uses these names and no others.
 - **Health URL.** For each environment, the URL that reports the commit SHA it serves. The footer's SHA comes from it.
 - **Entry points.** The route, nav item or command a persona uses to reach the feature, written the way users meet it.
@@ -80,10 +80,10 @@ The check cannot tell a good scenario from a bad one. Reading the scenarios stay
 
 The verifier posts this comment on the ticket after walking the scenarios on a deployed environment. A walk on production posts the same comment and counts the same way.
 
-- **Header:** `## Verify evidence`, literal, on its own line. It must be followed by a newline or the end of the comment. Leading whitespace or blank lines before it are fine. A heading with more text on the same line (`## Verify evidence-gathering plan`), or the phrase mentioned mid-sentence, does not count. The queue reads the heading from `linear.verifyEvidenceHeading`, so anything that matches on it should read it from there too.
+- **Header:** `## Verify evidence`, literal, on its own line. It must be followed by a newline or the end of the comment. Leading whitespace or blank lines before it are fine. A heading with more text on the same line (`## Verify evidence-gathering plan`), or the phrase mentioned mid-sentence, does not count. The queue reads the heading from `linear.verifyEvidenceHeading`. Keep that the one owner of the string: anything that matches on it reads it from there instead of re-typing it.
 - **Table:** one row per scenario, columns in the order scenario, result, evidence. Header cell wording and casing carry no meaning: parsers read them case-insensitively and trimmed. The scenario cell carries enough of the scenario's text to read on its own, never a bare row number.
 - **Result cell:** exactly `PASS` or `FAIL`, uppercase, alone in the cell. `pass`, `PASSED` and `PASS (with caveats)` count as unreadable evidence.
-- **Evidence cell:** a link to a screenshot or recording hosted by the tracker. With Linear, upload it with Linear's `fileUpload` mutation. A cell with only prose is a malformed row. The cell may add commentary after the link.
+- **Evidence cell:** a link to a screenshot or recording hosted by the tracker. With Linear, upload it with Linear's `fileUpload` mutation. A cell with only prose is a malformed row. Commentary is allowed; only the link has to be there.
 - **Footer:** `_Verified <ISO> on <env> as <persona> against <sha>_`, literal format. `<env>` is one of your environment names, the one the scenarios were walked on. `<sha>` is the full 40-character commit SHA that environment's health URL reports. Never abbreviate it.
 
 Only the header line and the footer line are literal.
@@ -106,7 +106,7 @@ A ticket can carry several `## Verify evidence` comments. The newest by creation
 
 ## Who may author evidence
 
-Accept evidence only from the tracker identity the queue's API key authenticates as, since anyone in the workspace can type a well-formed table. Treat comments by anyone else as non-evidence, and apply "newest wins" only within that set, so a forged comment posted after a real one cannot supersede it.
+Recommendation: accept evidence only from the tracker identity the queue's API key authenticates as, since anyone in the workspace can type a well-formed table. Treat comments by anyone else as non-evidence, and apply "newest wins" only within that set, so a forged comment posted after a real one cannot supersede it.
 
 The key holder can still author evidence for their own release. A dedicated automation account nobody signs in as closes that. Moving the key to a different account invalidates every evidence comment the old account posted, which shows up as a refusal. Re-verify the affected tickets, or rotate the key within the same account.
 

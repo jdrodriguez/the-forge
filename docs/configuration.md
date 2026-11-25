@@ -2,7 +2,7 @@
 
 Generated from `agent-queue.config.example.json` by `node lib/config.mjs doc`. To change this page, edit the example's `...Note` keys and regenerate. Every string that starts with `~/` is expanded to the home folder of the machine reading it.
 
-Copy this file to agent-queue.config.json (gitignored) and fill it in, or point AGENT_QUEUE_CONFIG at another file. Keys ending in Note, and every "//" key, are documentation and are ignored on load.
+Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and fill it in, or point AGENT_QUEUE_CONFIG at another file. Keys ending in Note, and every "//" key, are documentation and are ignored on load.
 
 ## Top level
 
@@ -111,7 +111,7 @@ Copy this file to agent-queue.config.json (gitignored) and fill it in, or point 
 | `dispatcher.bundle` | `{"enabled":true,"maxTickets":3,"sizes":["S","M"]}` | Up to maxTickets linked agent-ready tickets from one project, each of a size in sizes, share one worker and one PR. A ticket whose description has a 'Ships alone: <reason>' line never bundles. |
 | `dispatcher.sentryHeartbeatMinutes` | `45` | While a host with sentryWorkers is unpaused and wrote its heartbeat (sharedDir/heartbeats) less than this many minutes ago, other machines leave Sentry tickets to it. |
 | `dispatcher.sentryTriage` | `{"enabled":false,"host":"main-mac","module":"sentry-triage.mjs"}` | An optional triage module you write; this repo ships none. It loads from dispatcher/ on host only, when enabled. It exports kickFromTick({ cfg, dry, log }), which should start its run in a detached process, and statusLine(cfg). It labels the tickets it queues with linear.labels.sentry plus mechanical or judgment. A throw or syntax error in it costs one log line and never stops a tick. |
-| `dispatcher.externalBuilders` | `{"fallback":{"enabled":false,"engines":["codex","grok"],"sizes":["S...` | Codex and Grok as queue workers (dispatcher/README.md, "Codex and Grok as queue workers"). Every setting is under fallback, with its own row below. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push. |
+| `dispatcher.externalBuilders` | `{"fallback":{"enabled":false,"engines":["codex","grok"],"sizes":["S...` | Codex and Grok as queue workers (dispatcher/README.md, "Codex and Grok as queue workers"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push. |
 
 ## `push`
 

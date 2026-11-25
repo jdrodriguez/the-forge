@@ -50,7 +50,7 @@ flowchart LR
 | `scripts/` | `ext-agent.sh` (headless, read-only Codex and Grok calls) and `cross-review.sh` (a pre-push review by both). |
 | `docs/` | Setup, configuration, the ticket spec floor, the PR review loop, the build-to-done loop, the no-stubs rule, memory hygiene and the decisions. |
 
-Each folder's README describes it in full.
+`dispatcher/`, `fleet/`, `queue-board/`, `learning/` and `scripts/` each have a README with the full behavior.
 
 ## Set up
 

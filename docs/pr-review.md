@@ -49,19 +49,22 @@ gh api graphql -F n=<pr> -f query='query($n:Int!){repository(owner:"<owner>",nam
 
 Reply to a thread with `gh api repos/<owner>/<repo>/pulls/<pr>/comments/<comment_id>/replies -f body=...`. Resolve it with the `resolveReviewThread` mutation, passing the thread `id`.
 
-**Read the threads before every merge.** The review check (`github.reviewCheck`) reading `SKIPPED`, `CANCELLED` or `COMPLETED` says nothing about whether reviewers left findings. Other reviewers, such as a second model or a human, post inline threads that do not gate the check and do not show in `statusCheckRollup`. Never let the rollup stand in for reading the comments.
+**Pull all three sources again before every merge.** The review check (`github.reviewCheck`) reading `SKIPPED`, `CANCELLED` or `COMPLETED` says nothing about whether reviewers left findings. Other reviewers, such as a second model or a human, post inline threads that do not gate the check and do not show in `statusCheckRollup`. Never let the rollup stand in for reading the comments.
 
 **Read CI against the newest run of each workflow.** A SHA collects check-runs from every superseded attempt, and `gh api .../commits/<sha>/check-runs` returns all of them, so a stale `failure` from a cancelled run looks like a live one. Judge only the newest run per workflow, or re-read once everything settles.
 
 **Count check-runs across every page.** `gh api .../check-runs?per_page=100` paginates, and past 100 check-runs one page is a silent subset. Always `--paginate` and sum the pages.
 
+## Before you start work
+
+Create the branch from a freshly fetched base: `git fetch origin && git worktree add -b <branch> <path> origin/<baseBranch>`.
+
 ## Before the first push
 
-1. Create the branch from a freshly fetched base: `git fetch origin && git worktree add -b <branch> <path> origin/<baseBranch>`.
-2. Self-review the diff as a hostile reviewer would. Look for every class of issue the CI review finds: comments, type safety, dead scaffolding, siblings the change missed, forward-looking comments.
-3. For a PR over 300 lines or one that adds a new abstraction, also get an independent review of the full diff: `scripts/cross-review.sh <worktree> [base-ref]` sends it to Codex and Grok. A Claude code-review subagent is the fallback.
-4. Run every CI-only gate script your repo has (duplicate-code, unused-export, dependency-boundary and test-quality gates, for example). A green pre-push hook does not mean a green CI job. Run each against the same base CI uses: if CI diffs against the base branch tip, a merge-base run can pass locally and fail in CI.
-5. Run the production build locally. Type-check, lint and tests do not catch deploy-time bugs. For a changed Dockerfile, `docker build` it, then `docker run --rm <image> id <user>` for every `USER` directive you added. A Dockerfile that builds can still fail to start, and the build log will not show it.
+1. Self-review the diff as a hostile reviewer would. Look for every class of issue the CI review finds: comments, type safety, dead scaffolding, siblings the change missed, forward-looking comments.
+2. For a PR over 300 lines or one that adds a new abstraction, also get an independent review of the full diff: `scripts/cross-review.sh <worktree> [base-ref]` sends it to Codex and Grok. A Claude code-review subagent is the fallback.
+3. Run every CI-only gate script your repo has (duplicate-code, unused-export, dependency-boundary and test-quality gates, for example). A green pre-push hook does not mean a green CI job. Run each against the same base CI uses: if CI diffs against the base branch tip, a merge-base run can pass locally and fail in CI.
+4. Run the production build locally. Type-check, lint and tests do not catch deploy-time bugs. For a changed Dockerfile, `docker build` it, then `docker run --rm <image> id <user>` for every `USER` directive you added. A Dockerfile that builds can still fail to start, and the build log will not show it.
 
 ## Review rounds
 
@@ -73,7 +76,7 @@ The automated review is asynchronous. It reviews commit N while you are on N+1, 
 2. For each finding, read the file at HEAD first. If it is already fixed, the thread is stale: resolve it and make no commit for it.
 3. Fix the rest together. Reply to and resolve each thread.
 4. Check for a conflict with `gh pr view <pr> --json mergeable` and rebase if needed (below), as part of this batch.
-5. Run your local quality gate once, push once, then request the next round.
+5. Run your local quality gate once, make one commit and one push, then request the next round.
 
 Never push per finding. It multiplies CI runs, and the next round re-flags what you already fixed because it read the older SHA.
 
@@ -90,7 +93,7 @@ Never push per finding. It multiplies CI runs, and the next round re-flags what 
 - **Correctness and spec findings** (a wrong behavior, a missed edge case, anything flagged against the ticket's `## Acceptance scenarios`) get fixed in this PR before merge, whatever the round.
 - **Nits and out-of-scope items** (naming preferences, a refactor bigger than this PR, "consider also doing X") become tickets scheduled into the current cycle. Name the next PR or sprint slot they go in.
 
-Post a PR comment naming the split, resolve the threads, and merge once the correctness and spec fixes are in and CI is green. Merging past a review check with admin rights is only for a stuck or pending check with the quality jobs green, never over a red one, and only after this triage.
+Post a PR comment naming the split, resolve the threads, and merge once the correctness and spec fixes are in and CI is green. Merging past a review check with admin rights is only for a stuck check with the quality jobs green, never over a red one, and only after this triage.
 
 ## Rebase only when the PR needs it
 

@@ -60,7 +60,7 @@ The standing decisions behind the workflow: each rule, then why. When you settle
 
 ## After the merge
 
-**Merging deploys staging only, and the queue stops at Verifying.** A ticket moves to Done only when every acceptance scenario passes on staging (`docs/build-process.md`). Production is a separate promote a human starts. An agent never promotes production.
+**Merging deploys staging only, and the queue stops at Verifying.** A verifier walks each ticket's acceptance scenarios on staging, and the ticket moves to Done only when every scenario passes (`docs/build-process.md`). Production is a separate promote a human starts. An agent never promotes production.
 
 ## Sentry fixes
 

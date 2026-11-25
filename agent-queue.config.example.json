@@ -1,5 +1,5 @@
 {
-  "//": "Copy this file to agent-queue.config.json (gitignored) and fill it in, or point AGENT_QUEUE_CONFIG at another file. Keys ending in Note, and every \"//\" key, are documentation and are ignored on load.",
+  "//": "Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and fill it in, or point AGENT_QUEUE_CONFIG at another file. Keys ending in Note, and every \"//\" key, are documentation and are ignored on load.",
 
   "human": {
     "name": "Alex",
@@ -220,7 +220,7 @@
         "briefNote": "Path to your own engine brief template, relative to the repo root. null uses dispatcher/engine-worker-brief.md."
       }
     },
-    "externalBuildersNote": "Codex and Grok as queue workers (dispatcher/README.md, \"Codex and Grok as queue workers\"). Every setting is under fallback, with its own row below. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push."
+    "externalBuildersNote": "Codex and Grok as queue workers (dispatcher/README.md, \"Codex and Grok as queue workers\"). Every setting is under fallback (enabled, engines, sizes, maxRounds, timeoutSeconds, limitCooldownMinutes, loopbackPorts, extraHosts, env, ghTokenFile, claudeOnlyLabel, withholdPatterns, brief), each with its own Note in the example config. An engine takes a slot in hosts.<name>.maxWorkers like a Claude worker and is ranked with the Claude accounts by weekly usage left. It never takes a Sentry ticket or a claudeOnlyLabel ticket, and its PR always goes to the orchestrator for review and merge. It uses premerge.installCommand for its dependencies and push.gates for its gated push."
   },
 
   "push": {

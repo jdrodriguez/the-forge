@@ -58,7 +58,7 @@ Score = CI minutes + estimated human minutes + 10 per distinct PR or ticket hit.
 - CI minutes for a failed job are its own duration plus an even share of its run's wall time, since the run gets repeated.
 - Human minutes: red main uses its measured red minutes. The rest are estimates: a /verify FAIL or reopen 30, a dispatcher give-up 30, a correction 15 (30 for a repeat), a review finding 10. Change them in `HUMAN` in `sweep.mjs`.
 
-"Recurring" means 2 or more distinct PRs or tickets. The same failure across one PR's reruns counts once.
+"Recurring" means 2 or more distinct PRs or tickets. The same failure across one PR's reruns counts once toward that.
 
 ## The fix ladder
 
@@ -107,7 +107,7 @@ node learning/linear.mjs create <draft.json>  # files in learning.draftState wit
 
 ## Config
 
-The `learning` section of `agent-queue.config.json`: `outDir`, `ciWorkflowFile`, `skipJobs`, `reviewBotLogin`, `reviewRulesGlob`, `correctionsGlob`, `ssh`, `catalog`, `enforcementSources`, `draftState`. `docs/configuration.md` explains each. The sweep also reads `github.repo`, `github.ciWorkflow`, `repoPath`, `paths.stateDir`, `human.name`, `linear.workspace`, `linear.team`, `linear.verifyEvidenceHeading`, `linear.sizeLabelGroup`, `linear.labels.ready` and `dispatcher.queueSizes`.
+The `learning` section of `agent-queue.config.json`: `outDir`, `ciWorkflowFile`, `skipJobs`, `reviewBotLogin`, `reviewRulesGlob`, `correctionsGlob`, `ssh`, `catalog`, `enforcementSources`, `draftState`. `docs/configuration.md` explains each. The sweep and `linear.mjs` also read `github.repo`, `github.ciWorkflow`, `repoPath`, `paths.stateDir`, `human.name`, `linear.workspace`, `linear.team`, `linear.verifyEvidenceHeading`, `linear.sizeLabelGroup`, `linear.labels.ready` and `dispatcher.queueSizes`.
 
 ## Files
 

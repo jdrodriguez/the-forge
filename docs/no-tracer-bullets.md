@@ -1,6 +1,6 @@
 # No tracer bullets: build to full spec
 
-Build a ticket's complete spec to working, verified behavior before calling it done. A thin slice, skeleton, scaffold or stub is never done. Never apply a `tracer-bullet` label to new work.
+Build a ticket's or PRD's complete spec to working, verified behavior before calling it done. Never ship a thin slice, skeleton, scaffold or stub and mark the spec done. Never apply a `tracer-bullet` label to new work.
 
 ## What a stub looks like
 
@@ -16,7 +16,7 @@ A change is not done if any spec'd behavior is represented by:
 
 ## Definition of Done
 
-A ticket is Done only when all of these hold:
+A ticket or PRD is Done only when all of these hold:
 
 1. **Every acceptance criterion is implemented.** The real behavior runs.
 2. **Every acceptance scenario has a passing test at a real boundary, committed before the implementation.** Branches the scenario implies go in that test's rows.
@@ -28,7 +28,7 @@ If you cannot meet all five, the ticket is not done. Say so and list what is mis
 
 Your repo's own docs may list concrete steps for its stack (backend works, frontend wired, buttons and forms live, error and loading states, end to end usable, a visual check at fixed widths). Meet that list too.
 
-## When a spec is too big for one ticket
+## When a PRD is too big for one ticket
 
 Split it into smaller tickets, each built to full spec for its own scope. The parent is Done only when every child is Done. Never ship a "Phase 1 tracer" that wires a thin path end to end while stubbing the rest. Scope down what a ticket covers, never how completely it covers it.
 
