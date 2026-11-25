@@ -14,7 +14,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encodi
 
 // A repo with one worktree on ENG-5's branch, its commit pushed; PR 5 merged at that head. The sweep has run recently,
 // so these ticks exercise only the teardown at merge.
-function teardownBox({ dryRun = false, dirty = false, status = 'idle' } = {}) {
+function teardownBox({ dryRun = false, dirty = false, status = 'idle', linkRepo = false, outside = false } = {}) {
   const probe = capBox();
   const root = fs.realpathSync(probe.home);
   const origin = path.join(root, 'origin.git');
@@ -26,14 +26,19 @@ function teardownBox({ dryRun = false, dirty = false, status = 'idle' } = {}) {
   git(repo, 'add', '.');
   git(repo, 'commit', '-q', '-m', 'init');
   git(repo, 'push', '-q', 'origin', 'main');
-  const wt = path.join(repo, '.claude/worktrees/eng-5');
+  const wt = outside ? path.join(root, 'elsewhere/eng-5') : path.join(repo, '.claude/worktrees/eng-5');
   git(repo, 'worktree', 'add', '-q', '-b', 'agent/eng-5', wt, 'origin/main');
   fs.writeFileSync(path.join(wt, 'fix.txt'), 'fix');
   git(wt, 'add', '.');
   git(wt, 'commit', '-q', '-m', 'fix');
   git(wt, 'push', '-q', 'origin', 'HEAD:refs/heads/agent/eng-5');
   if (dirty) fs.writeFileSync(path.join(wt, 'notes.txt'), 'unsaved');
-  const box = capBox({ config: { repoPath: repo }, dispatcher: { worktreeCleanup: { enabled: true, dryRun, sweepHours: 24, atRiskAskDays: 7 } },
+  let repoPath = repo;
+  if (linkRepo) {
+    repoPath = path.join(root, 'linked-app');
+    fs.symlinkSync(repo, repoPath);
+  }
+  const box = capBox({ config: { repoPath }, dispatcher: { worktreeCleanup: { enabled: true, dryRun, sweepHours: 24, atRiskAskDays: 7 } },
     tickets: { 'ENG-5': { status: 'merged', mergedAt: new Date().toISOString(), mergedSha: 'm', ciChecked: true, account: 'b', workerId: 'w5',
       branch: 'agent/eng-5', prNumber: 5, pr: 'https://github.com/x/pull/5' } },
     prs: { 5: { branch: 'agent/eng-5', state: 'MERGED' } },
@@ -101,4 +106,21 @@ test('a session whose worktree cannot be told apart is kept and asked about, nev
   assert.equal(lines(box, 'claude-calls').length, 0, 'no claude rm');
   assert.equal(ticket(box).teardown.action, 'kept');
   assert.equal(lines(box, 'asks').filter((l) => /and its session too: its worktree could not be told apart/.test(l)).length, 1);
+});
+
+test('a repo reached through a symlink still finds its worktree, so the session goes only with it', () => {
+  const { box, wt } = teardownBox({ linkRepo: true });
+  tick(box, GIT_ENV);
+  assert.ok(!fs.existsSync(wt), 'removed through the symlinked repoPath');
+  assert.equal(ticket(box).teardown.action, 'removed');
+  assert.equal(lines(box, 'claude-calls').length, 1);
+});
+
+test("a ticket whose worktree sits outside the worktrees folder keeps its worktree and its session, and the human is asked once", () => {
+  const { box, wt } = teardownBox({ outside: true });
+  tick(box, GIT_ENV);
+  tick(box, GIT_ENV);
+  assert.ok(fs.existsSync(wt));
+  assert.equal(lines(box, 'claude-calls').length, 0, 'no claude rm');
+  assert.equal(lines(box, 'asks').filter((l) => /and its session too/.test(l)).length, 1);
 });

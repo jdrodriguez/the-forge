@@ -1697,9 +1697,9 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
 // Every worktreeCleanup.sweepHours the same module sweeps every worktree of the repos the queue builds. Kept work asks
 // the human: at teardown at once, in the sweep after atRiskAskDays. dryRun logs what it would do and changes nothing.
 // Neither runs while the dispatcher is paused, and both catch their own errors so a failure never stops the tick.
-const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], protectedIgnored: null, ...(cfg.worktreeCleanup ?? {}) };
-// worktree-teardown.mjs's own list when worktreeCleanup.protectedIgnored is null.
-const protect = async () => WT_CFG.protectedIgnored ?? (await wtMod()).PROTECTED_IGNORED;
+const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], rebuildableIgnored: null, clones: 'dry-run',
+  ...(cfg.worktreeCleanup ?? {}) };
+// worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one.
 const SWEEP_STATE = path.join(LOCAL, 'worktree-sweep.json');
 const TEARDOWN_TRIES = 3; // ticks a live process may hold the worktree after its worker stops, before the human is asked
 let wtModule = null;
@@ -1786,20 +1786,28 @@ async function teardownTicket(wt, id, t, workers, dirs, st) {
   const live = Object.entries(st.tickets).filter(([x, o]) => x !== id && ['claiming', 'bundled', ...LIVE].includes(o.status));
   const liveBranches = new Set(live.map(([, o]) => o.branch).filter(Boolean));
   const liveRx = live.map(([x]) => new RegExp(`${x}(?!\\d)`, 'i'));
-  // Only worktrees in the worktrees folder: one a person made elsewhere is theirs.
-  const inFolder = (x) => path.resolve(x.path).startsWith(`${path.resolve(WORKTREES)}${path.sep}`);
-  const listed = wt.listWorktrees(conf.repoPath).filter((x) => inFolder(x) && !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
-    && !liveRx.some((rx) => rx.test(`${path.basename(x.path)} ${x.branch ?? ''}`)));
   // A worker often names its local branch unlike the one it pushes, so the worktree is the one on the ticket's branch,
   // else the one at the PR's head, else the only one naming the ticket.
   const idRx = new RegExp(`${id}(?!\\d)`, 'i');
+  const mine = (x) => (t.branch && x.branch === t.branch) || (pr?.headRefOid && x.head === pr.headRefOid) || idRx.test(`${path.basename(x.path)} ${x.branch ?? ''}`);
+  const all = wt.listWorktrees(conf.repoPath);
+  // Only worktrees in the worktrees folder, compared by real path as git reports them: one a person made elsewhere is
+  // theirs. One of this ticket's found outside it makes the ticket's worktree unknown.
+  const folder = wt.key(WORKTREES);
+  const inFolder = (x) => wt.key(x.path).startsWith(`${folder}/`);
+  const outside = all.filter((x) => !inFolder(x) && mine(x));
+  const listed = all.filter((x) => inFolder(x) && !(x.branch && liveBranches.has(x.branch) && x.branch !== t.branch)
+    && !liveRx.some((rx) => rx.test(`${path.basename(x.path)} ${x.branch ?? ''}`)));
   const named = listed.filter((x) => idRx.test(`${path.basename(x.path)} ${x.branch ?? ''}`));
   const entry = (t.branch && listed.find((x) => x.branch === t.branch)) || (pr?.headRefOid && listed.find((x) => x.head === pr.headRefOid))
     || (named.length === 1 ? named[0] : null);
-  // No worktree found is proven only when the ticket has a branch and nothing names the ticket at all; anything less
-  // (several worktrees naming it, no branch on record) is unknown, and its session is left alone.
-  const absent = !entry && Boolean(t.branch) && !named.length;
-  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: conf.repoPath, base: BASE, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(), protect: await protect() })
+  // No worktree found is proven only when the ticket has a branch and nothing anywhere names the ticket; anything less
+  // (several worktrees naming it, one outside the worktrees folder, no branch on record) is unknown, and its session is
+  // left alone.
+  const absent = !entry && Boolean(t.branch) && !named.length && !outside.length;
+  if (!entry) named.push(...outside);
+  const res = entry ? wt.teardownWorktree({ path: entry.path, repo: conf.repoPath, base: BASE, pr, dirs, listed, dryRun: dry, trashDir: await trashDir(),
+    rebuildable: WT_CFG.rebuildableIgnored })
     : absent ? { action: 'gone', reason: `no worktree on ${t.branch} on ${HOST}` }
       : { action: 'kept', unknown: true, reason: `its worktree could not be told apart (${named.length} worktrees name ${id}: ${named.map((x) => x.path).join(', ')})` };
   const tries = (t.teardown?.tries ?? 0) + 1;
@@ -1850,6 +1858,7 @@ async function worktreeSweep(st) {
   // A dry sweep's time never delays the first live one.
   if (mem.lastRun && hoursSince(mem.lastRun) < WT_CFG.sweepHours && !(mem.dryRun && !dry)) return;
   const atRisk = {};
+  const foreign = [];
   let failed = 0;
   let wt;
   try {
@@ -1864,7 +1873,8 @@ async function worktreeSweep(st) {
       const prs = {};
       const list = JSON.parse(gh(['pr', 'list', '--repo', repo.github, '--state', 'all', '--limit', '1000', '--json', 'number,state,headRefName,headRefOid']));
       for (const p of list) if (!prs[p.headRefName] || p.number > prs[p.headRefName].number) prs[p.headRefName] = p;
-      const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry, protect: await protect(),
+      const out = wt.sweepRepo({ repo: repo.path, base: repo.base, worktreesDir: conf.worktreesDir ?? '.claude/worktrees', prs, dryRun: dry,
+        rebuildable: WT_CFG.rebuildableIgnored, clones: WT_CFG.clones,
         trashDir: await trashDir(), liveBranches: new Set(live.map(([, t]) => t.branch).filter(Boolean)), liveIds: live.map(([id]) => id) });
       if (out.error) {
         failed += 1;
@@ -1876,6 +1886,18 @@ async function worktreeSweep(st) {
       log(`${label}${dry ? ' (dry run, nothing changed)' : ''}: ${n('removed')} ${dry ? 'would be ' : ''}removed, ${n('trashed')} orphan(s) ${dry ? 'would be ' : ''}trashed, ${atRiskNow.length} at risk, ${n('kept') - atRiskNow.length} kept, of ${out.results.length}`);
       for (const r of out.results) if (r.would || r.action !== 'kept' || r.atRisk) log(`  ${r.would ? `would be ${r.would}` : r.action}${r.atRisk ? ' AT RISK' : ''}: ${r.name} [${r.branch ?? '-'}] ${r.reason}`);
       for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason };
+      // A folder in the worktrees folder that is not this repo's (a scratch folder, another repo's worktree) is reported
+      // once and left alone. Clones are counted by rule, for the dry run.
+      for (const r of out.results.filter((x) => x.foreign)) {
+        if (!(mem.foreign ?? []).includes(r.path)) log(`  left alone: ${r.name}, ${r.reason}`);
+        foreign.push(r.path);
+      }
+      const clones = out.results.filter((x) => x.clone);
+      if (clones.length) {
+        const by = {};
+        for (const r of clones) by[r.would ?? (r.action === 'kept' ? r.rule : r.action)] = (by[r.would ?? (r.action === 'kept' ? r.rule : r.action)] ?? 0) + 1;
+        log(`  engine clones (${WT_CFG.clones}): ${Object.entries(by).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+      }
     } catch (e) {
       failed += 1;
       log(`${label} failed, trying next tick (${errText(e)})`);
@@ -1899,7 +1921,7 @@ async function worktreeSweep(st) {
   }
   if (!DRY) {
     try {
-      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk }, null, 2)}\n`);
+      fs.writeFileSync(SWEEP_STATE, `${JSON.stringify({ host: HOST, lastRun: iso(), dryRun: dry, atRisk, foreign }, null, 2)}\n`);
     } catch (e) {
       log(`worktree sweep: could not save its state (${errText(e)})`);
     }
