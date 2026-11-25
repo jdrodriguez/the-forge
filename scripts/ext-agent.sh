@@ -165,19 +165,26 @@ case "$ENGINE" in
     # Grok's own read-only switches do not hold on this machine (verified 2026-09-10,
     # grok 1.0.13): --permission-mode plan still wrote a file on request, and
     # --sandbox read-only refuses to start while Docker Desktop's /var/run/docker.sock
-    # is a symlink. The lock is the tool allowlist (files, grep, web, X search) plus
+    # is a symlink. The lock is the tool allowlist (files, grep, web) plus
     # deny rules, which win over --always-approve. --tools covers built-ins only:
     # account-level MCP connectors reach a headless run through the search_tool
     # meta-tool even when `grok mcp list` shows none, so MCP calls are denied too.
     with_timeout "${GROK_BIN:-$(command -v grok || echo "$HOME/.grok/bin/grok")}" \
       --prompt-file "$PROMPT_PATH" \
-      --tools read_file,grep,list_dir,web_search,web_fetch,x_keyword_search,x_semantic_search,x_thread_fetch,x_user_search \
+      --tools read_file,grep,list_dir,web_search,web_fetch \
       --disallowed-tools Agent,search_tool --deny MCPTool --deny Bash --deny Edit --deny Write \
       --always-approve --output-format plain --cwd "$CWD" --reasoning-effort "$EFFORT" \
       < /dev/null > "$OUT" 2> "$LOG"
     ;;
 esac
 STATUS=$?
+
+# An unknown name in --tools makes Grok warn "name no tool" and leave every tool available, so the lock is gone.
+if [ "$ENGINE" = grok ] && grep -q "name no tool" "$LOG" 2>/dev/null; then
+  echo "grok did not recognize a name in --tools, so tools outside the list were available: $(grep -m1 'name no tool' "$LOG")" >&2
+  echo "hint: drop or rename that tool in this script's --tools list, then rerun selftest" >&2
+  exit 1
+fi
 
 if [ "$STATUS" -eq 0 ] && [ -s "$OUT" ]; then
   echo "$OUT"
