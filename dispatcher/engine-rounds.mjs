@@ -54,12 +54,9 @@ async function startRound(c, st, m, id, t, { note, summary, keepRound = false, e
     await c.markStuck(st, m, id, t, 'its title or description now holds personal data, which must not go to a third-party model');
     return 'stuck';
   }
-  // A ticket waiting on the orchestrator holds no slot, so a round on it takes one: only when the pool has one free.
-  if (t.status === 'merge-asked' && c.poolRoom(st) <= 0) {
-    t.note = `its PR needs another round (${summary}), waiting for a free slot on ${c.HOST}`;
-    c.log(`${id}: a round is due (${summary}) but every slot on ${c.HOST} is taken, so it waits`);
-    return 'held';
-  }
+  // A round is a new session on this machine. On a full machine the ticket waits in the dispatcher's wake queue and
+  // holds no slot until one is free; a ticket waiting on the orchestrator holds none to begin with.
+  if (!c.mayWake(st, id, t, summary)) return 'held';
   if (c.DRY) return c.log(`${id}: would start ${engine} round ${round} (${summary})`);
   const file = writeBrief(c, issue, t, { engine, round, note: text });
   // Journaled first: a run that ends mid-start adopts the spawn on the next tick instead of starting a second one.

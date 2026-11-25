@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { CLAUDE_T, ENGINE_T, HEAD, OLD, ROOM, claude, claudeBriefs, engineBox, issue, mergeRequest, merges, plans, starts, tick, ticket } from './engine-sandbox.mjs';
+import { state } from './sandbox.mjs';
 
 const DIRTY = { mergeStateStatus: 'DIRTY' };
 const marker = (box, id = 'ENG-9') => {
@@ -44,9 +45,10 @@ test('a round due on a ticket waiting for the orchestrator waits for a free slot
   const busy = [{ label: 'b', id: 'w-live', status: 'busy', kind: 'background', pid: 1 }];
   const full = engineBox({ host: { maxWorkers: 1 }, tickets: { 'ENG-9': asked, 'ENG-8': CLAUDE_T }, registry: { status: 'done' }, pr: DIRTY, ps: busy });
   const out = tick(full);
-  assert.match(out, /ENG-9: a round is due \(resolve its conflict with main\) but every slot on host-a is taken, so it waits/);
+  assert.match(out, /ENG-9: needs to work again \(resolve its conflict with main\), but this machine is full \(1\/1 slots in use\), so it waits in the wake queue/);
   assert.equal(starts(full).length, 0);
   assert.equal(ticket(full).status, 'merge-asked');
+  assert.deepEqual((state(full).wakeQueue ?? []).map((w) => w.id), ['ENG-9']);
   const room = engineBox({ host: { maxWorkers: 2 }, tickets: { 'ENG-9': asked, 'ENG-8': CLAUDE_T }, registry: { status: 'done' }, pr: DIRTY, ps: busy });
   tick(room);
   assert.equal(starts(room).length, 1);

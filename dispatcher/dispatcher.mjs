@@ -12,7 +12,8 @@
 // model calls: it reads Linear, GitHub and the fleet's session list. Each transition (started, PR opened, merged,
 // needs a merge review, blocked, stuck, paused) shows a macOS notification, and `summary` prints the session-start line.
 //
-// Usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ENG-123 | redispatch ENG-123 | test-notify | pause [reason] | resume
+// Usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ENG-123 | redispatch ENG-123 | wake ENG-123 | test-notify |
+//        pause [reason] | resume
 // Config: agent-queue.config.json at the repo root (lib/config.mjs). State, log and the PAUSED flag (per machine):
 // paths.stateDir. Files every machine reads (heartbeats, bundles, merge requests, main's state): paths.sharedDir.
 // Linear is the shared truth: ready -> building -> Verifying or stuck.
@@ -153,10 +154,10 @@ async function notify(subtitle, text, { id = null, link = null, progress = false
   }
 }
 
-// The command that opens a worker's session, for the blocked-worker ask. Fleet account a is the default config dir.
+// The command that opens a worker's session, for the blocked-worker ask. The primary account is the default config dir.
 // An engine worker has no session to open, so its command prints its registry row, which names its logs and clone.
 const attachCmd = (t) => (engineDriven(t) ? `cat ${t.engineRegistry ?? path.join(LOCAL, 'engine-workers', '<ticket>.json')}`
-  : `${t.account === 'a' ? 'env -u CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=~/.claude-${t.account}`} claude attach ${t.workerId}`);
+  : `${t.account === PRIMARY ? 'env -u CLAUDE_CONFIG_DIR' : `CLAUDE_CONFIG_DIR=~/.claude-${t.account}`} claude attach ${t.workerId}`);
 
 // Side effects after a transition is recorded: each runs once, a failure is logged and kept on the ticket.
 async function effects(t, id, steps) {
@@ -221,13 +222,189 @@ function branchSha(t) {
 const fleetWorkers = () => JSON.parse(run(FLEET, ['ps', '--json', '--all'], { timeout: 60_000 }));
 const fleetWorker = (name) => fleetWorkers().find((w) => w.name === name) ?? null;
 
-// Working fleet workers on this machine that no queue ticket points at, such as a rush ticket another session dispatched.
-// They share the machine with the queue, so they take its maxWorkers slots too. A row with no
-// process is a session left over from a restart, and an idle or done one has finished its turn.
-function outsideWorkers(st) {
-  const ours = new Set(Object.values(st.tickets).filter((t) => t.workerId).map((t) => `${t.account}/${t.workerId}`));
-  return fleetWorkers().filter((w) => w.kind === 'background' && w.pid && !['idle', 'done'].includes(w.state || w.status)
-    && !ours.has(`${w.label}/${w.id}`)).length;
+// --- the hard limit and the wake queue ----------------------------------------------------------------
+// Nothing automatic starts, respawns or wakes a worker session when that would put more working sessions on this
+// machine than hosts.<name>.maxWorkers (plus its open burst slots), or than its sentryWorkers for a Sentry ticket. A
+// ticket that needs to work again on a full machine (the reviewer's requested changes, a failed worker to replace, an
+// engine round on a ticket waiting on the orchestrator, a parked PR gone red) waits in st.wakeQueue, first come first
+// served, holding no slot, its worker neither replaced nor messaged. It wakes on the first tick a slot is free, ahead of
+// any new ready ticket. `dispatcher.mjs wake ENG-123` pushes one ticket through over the limit, once: it writes a
+// request to <sharedDir>/wake-requests, and the machine that holds the ticket honours it on its next tick and clears it.
+const WAKE_REQUESTS = path.join(SHARED, 'wake-requests');
+// This run's decisions: tickets granted a wake (each holds a slot for the rest of the run), the tickets that held a slot
+// when the run reached them, the session list the count reads, and the override requests for tickets held here.
+const wakeRun = { woken: new Set(), held: new Set(), workers: null, overrides: new Map() };
+// A Sentry ticket counts in this machine's Sentry slots; on a machine with none it counts in the regular pool.
+const poolOf = (t) => (t?.sentry && (hostCfg.sentryWorkers ?? 0) > 0 ? 'sentry' : 'regular');
+const baseMax = (pool) => (pool === 'sentry' ? hostCfg.sentryWorkers ?? 0 : hostCfg.maxWorkers ?? Infinity);
+const poolMax = (pool) => baseMax(pool) + (pool === 'regular' ? burstSlots() : 0);
+const slotWord = (pool) => (pool === 'sentry' ? 'Sentry slot' : 'slot');
+const wakeEntry = (st, id) => (st.wakeQueue ?? []).find((w) => w.id === id) ?? null;
+// A ticket holds a slot while it builds, unless it is parked on the reviewer or waits in the wake queue.
+const holdsSlot = (st, id, t) => t?.status === 'building' && !t.parked && !wakeEntry(st, id);
+// A working session, by fleet.sh's own rule: a background session with a process whose state is not idle or done. A
+// row with no process is a session left over from a restart. An engine run works while it is busy.
+const workingRow = (w) => w.kind === 'background' && Boolean(w.pid)
+  && (w.engine ? w.status === 'busy' : !['idle', 'done'].includes(w.state || w.status));
+const workerKey = (t) => (t?.workerId ? `${t.account}/${t.workerId}` : null);
+// Which ticket each worker works for, a bundle's lead before its companions.
+function workerOwners(st) {
+  const owner = new Map();
+  for (const [id, t] of Object.entries(st.tickets)) {
+    const key = workerKey(t);
+    if (key && (!owner.has(key) || st.tickets[owner.get(key)].status === 'bundled')) owner.set(key, id);
+  }
+  return owner;
+}
+// Slots in use in a pool: each ticket that holds a slot or was woken this run, each ticket waiting in the wake queue
+// when `queued` (dispatch keeps those slots for them), and each working session none of those accounts for: a worker
+// started outside the queue, the busy worker of a ticket waiting on a merge or on the reviewer, a stuck ticket's worker
+// still running. A session counts in the pool of the ticket it works for, and in the regular pool when it works for
+// none. `except` leaves out one ticket and its worker.
+function poolUse(st, workers, pool, { except = null, queued = false } = {}) {
+  const counted = new Set();
+  let used = 0;
+  for (const [id, t] of Object.entries(st.tickets)) {
+    const key = workerKey(t);
+    if (id === except) {
+      if (key) counted.add(key);
+      continue;
+    }
+    if (poolOf(t) !== pool) continue;
+    if (holdsSlot(st, id, t) || wakeRun.woken.has(id) || (queued && wakeEntry(st, id) && LIVE.includes(t.status))) {
+      used += 1;
+      if (key) counted.add(key);
+    }
+  }
+  const owner = workerOwners(st);
+  for (const w of workers ?? []) {
+    const key = `${w.label}/${w.id}`;
+    if (!workingRow(w) || counted.has(key)) continue;
+    counted.add(key);
+    const id = owner.get(key);
+    if (poolOf(id ? st.tickets[id] : null) === pool) used += 1;
+  }
+  return used;
+}
+// The working sessions no slot accounts for, for the log and status: outside the queue, and working for a queue ticket
+// that holds no slot.
+function sessionsWithoutSlot(st, workers) {
+  const owner = workerOwners(st);
+  let outside = 0;
+  let slotless = 0;
+  for (const w of workers ?? []) {
+    if (!workingRow(w)) continue;
+    const id = owner.get(`${w.label}/${w.id}`);
+    if (!id) outside += 1;
+    else if (!holdsSlot(st, id, st.tickets[id]) && !wakeRun.woken.has(id)) slotless += 1;
+  }
+  return { outside, slotless };
+}
+// This machine's sessions: the fleet's list, which throws when it can't be read, and the engines' runs.
+async function sessionRows(st) {
+  const rows = fleetWorkers();
+  return engines.wanted(st) ? [...rows, ...await engines.call('reading the engine registry', [], (e, c) => e.rows(c))] : rows;
+}
+
+// Whether a ticket may start, respawn or wake a worker session now. Granted when its pool has a slot free counting the
+// ticket as one (its own slot and worker left out), or when an override for it is pending. A ticket that held no slot
+// and was not waiting goes behind every ticket already waiting in its pool, so the queue stays first come first served.
+// A refused ticket joins the wake queue, or keeps its place there; `join: false` (a command run by hand) only refuses.
+// Once granted, it stays granted for the run.
+function mayWake(st, id, t, reason, { join = true } = {}) {
+  if (wakeRun.woken.has(id)) return true;
+  const pool = poolOf(t);
+  const max = poolMax(pool);
+  const entry = wakeEntry(st, id);
+  const override = wakeRun.overrides.get(id);
+  const used = wakeRun.workers ? poolUse(st, wakeRun.workers, pool, { except: id }) : null;
+  const behind = !entry && !wakeRun.held.has(id) && (st.wakeQueue ?? []).some((w) => w.id !== id && poolOf(st.tickets[w.id]) === pool);
+  const waited = entry ? `${Math.round(hoursSince(entry.since) * 60)} minutes` : null;
+  const burst = used !== null && used + 1 > baseMax(pool) ? `using a burst slot: ${burstState()?.reading}; ${used}/${baseMax(pool)} ${slotWord(pool)}s in use` : null;
+  if (override || (used !== null && !behind && used + 1 <= max)) {
+    wakeRun.woken.add(id);
+    if (entry) {
+      st.wakeQueue = st.wakeQueue.filter((w) => w !== entry);
+      // The wait was the machine's, so it never reads as the live worker's stall. A worker whose session has ended
+      // keeps its clock, so a ticket nothing can move still goes stuck on time once it wakes.
+      if ((wakeRun.workers ?? []).some((w) => w.label === t.account && w.id === t.workerId && w.pid)) t.lastProgressAt = iso();
+      delete t.stalledSince;
+    }
+    if (override) {
+      override.used = true;
+      log(`${id}: a wake override pushes it through over the limit (${used ?? 'unknown'}/${max} ${slotWord(pool)}s in use without it)${entry ? ` after ${waited} in the wake queue` : ''}: ${reason}`);
+    } else if (entry && burst) log(`${id}: ${burst}, so it wakes after ${waited} in the wake queue: ${reason}`);
+    else if (entry) log(`${id}: a ${slotWord(pool)} is free (${used}/${max} in use), so it wakes after ${waited} in the wake queue: ${reason}`);
+    else if (burst) log(`${id}: ${burst}: ${reason}`);
+    saveState(st);
+    return true;
+  }
+  const closed = pool === 'regular' && burstState() && !burstSlots() ? `; ${burstText()}` : '';
+  const full = used === null ? "this machine's working sessions could not be counted"
+    : behind ? `a ticket ahead of it waits for the ${slotWord(pool)}` : `${used}/${max} ${slotWord(pool)}s in use${closed}`;
+  if (!join) return false;
+  if (entry) Object.assign(entry, { reason, pool });
+  else {
+    (st.wakeQueue ??= []).push({ id, since: iso(), reason, pool });
+    log(`${id}: needs to work again (${reason}), but this machine is full (${full}), so it waits in the wake queue`);
+  }
+  t.note = `waiting for a free ${slotWord(pool)} (${full}): ${reason}`;
+  saveState(st);
+  return false;
+}
+// The wake queue keeps only live tickets that still hold no slot of their own.
+function pruneWakeQueue(st) {
+  if (!st.wakeQueue?.length) return;
+  const keep = st.wakeQueue.filter((w) => LIVE.includes(st.tickets[w.id]?.status) && !st.tickets[w.id].parked);
+  for (const w of st.wakeQueue.filter((x) => !keep.includes(x))) {
+    const t = st.tickets[w.id];
+    log(`${w.id}: left the wake queue (${!t ? 'no longer on this machine' : t.parked ? `waiting on ${RV}'s review` : t.status})`);
+  }
+  st.wakeQueue = keep;
+}
+function leaveWakeQueue(st, id, why) {
+  const entry = wakeEntry(st, id);
+  if (!entry) return;
+  st.wakeQueue = st.wakeQueue.filter((w) => w !== entry);
+  log(`${id}: left the wake queue, ${why}`);
+}
+// The override for one ticket, or null. A file the sync has only half written reads as none yet.
+function readWakeRequest(id) {
+  const file = path.join(WAKE_REQUESTS, `${id}.json`);
+  try {
+    return { ...JSON.parse(fs.readFileSync(file, 'utf8')), file, used: false };
+  } catch {
+    return null;
+  }
+}
+const TICKET_FILE = new RegExp(`^${TEAM}-\\d+\\.json$`);
+// The overrides for tickets this machine holds. A request no machine takes within a day is dropped by whichever
+// machine sees it first.
+function loadWakeOverrides(st) {
+  let names;
+  try {
+    names = fs.readdirSync(WAKE_REQUESTS).filter((n) => TICKET_FILE.test(n));
+  } catch {
+    return;
+  }
+  for (const id of names.map((n) => n.slice(0, -'.json'.length))) {
+    const req = readWakeRequest(id);
+    if (!req) continue;
+    if (LIVE.includes(st.tickets[id]?.status)) wakeRun.overrides.set(id, req);
+    else if (hoursSince(req.at) > 24) {
+      if (!DRY) fs.rmSync(req.file, { force: true });
+      log(`${id}: dropped the wake override from ${req.at}, since no machine has held the ticket for a day`);
+    }
+  }
+}
+// An override is honoured once: used, it is cleared. One for a ticket that does not wait for a slot is cleared too; one
+// whose ticket still waits (its wake was not reached this run) stands for the next run.
+function settleWakeOverrides(st) {
+  for (const [id, o] of wakeRun.overrides) {
+    if (!o.used && wakeEntry(st, id)) continue;
+    if (!DRY) fs.rmSync(o.file, { force: true });
+    if (!o.used) log(`${id}: cleared the wake override unused, since it does not wait for a slot (${st.tickets[id]?.status ?? 'gone'})`);
+  }
 }
 
 // --- state, lock, pause ------------------------------------------------------------------------------
@@ -253,6 +430,9 @@ function saveState(st) {
 
 const isPaused = () => fs.existsSync(PAUSED);
 const pauseReason = () => (isPaused() ? fs.readFileSync(PAUSED, 'utf8').trim() : null);
+// dispatcher.holdNewWork: while true, no machine claims a new ready ticket. Unlike a pause, which also stops merges,
+// everything already claimed carries on: PRs merge, workers are replaced and woken, and the wake queue drains.
+const newWorkHeld = () => cfg.holdNewWork === true;
 
 function takeLock() {
   try {
@@ -434,10 +614,36 @@ const clearMergeRequest = (id) => fs.rmSync(path.join(MERGE_REQUESTS, `${id}.jso
 // tickets to it; when it is offline or paused, they build them as usual, so a fix never waits on one machine.
 const HEARTBEATS = path.join(SHARED, 'heartbeats');
 const isSentry = (issue) => issue.labels.nodes.some((l) => l.name === L.sentry);
-function writeHeartbeat() {
+// The heartbeat also carries this machine's wake queue, so `wake` on any machine can say where a ticket waits, and,
+// while workerReservePercent is set, its working sessions per Claude account, for the other machines' reserve.
+function writeHeartbeat(st) {
   if (DRY) return;
   fs.mkdirSync(HEARTBEATS, { recursive: true });
-  fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify({ host: HOST, at: iso(), paused: isPaused() })}\n`);
+  const wakeQueue = (st.wakeQueue ?? []).map(({ id, since, reason, pool }) => ({ id, since, reason, pool }));
+  const beat = { host: HOST, at: iso(), paused: isPaused(), held: newWorkHeld(), wakeQueue,
+    ...(reserving() ? { accountsWorking: accountsWorkingHere() } : {}) };
+  fs.writeFileSync(path.join(HEARTBEATS, `${HOST}.json`), `${JSON.stringify(beat)}\n`);
+}
+// This machine's working sessions per Claude account. An unreadable fleet usage reports none, which only makes the
+// other machines' projection less cautious for one tick.
+function accountsWorkingHere() {
+  try {
+    return JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 })).filter((a) => a.signed_in && a.working)
+      .map((a) => ({ key: accountKey(a), label: a.label, working: a.working }));
+  } catch {
+    return [];
+  }
+}
+// The other enabled machines' heartbeats under maxMinutes old.
+function otherHeartbeats(maxMinutes = 60) {
+  return cfg.enabledHosts.filter((h) => h !== HOST).flatMap((host) => {
+    try {
+      const beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
+      return hoursSince(beat.at) * 60 < maxMinutes ? [beat] : [];
+    } catch {
+      return []; // no heartbeat yet
+    }
+  });
 }
 function liveSentryHost() {
   for (const host of cfg.enabledHosts) {
@@ -786,6 +992,9 @@ async function reviewerReview(st, id, t, pr, workers, why) {
   if (latest?.state === 'APPROVED' && latest.commit_id === pr.headRefOid) return 'approved';
 
   if (latest?.state === 'CHANGES_REQUESTED' && latest.commit_id === pr.headRefOid) {
+    // The changes put a parked ticket back to work: on a full machine it waits in the wake queue, holding no slot, and
+    // its worker is neither replaced nor messaged until it wakes.
+    if (!wakeRun.held.has(id) && !mayWake(st, id, t, `${RV} requested changes on PR #${pr.number}`)) return 'changes';
     j.handledReviews ??= [];
     if (j.handledReviews.includes(latest.id)) {
       t.note = `${RV} requested changes; a worker is addressing them`;
@@ -822,6 +1031,8 @@ async function reviewerReview(st, id, t, pr, workers, why) {
       log(`would start a worker on ${id} to address ${RV}'s requested changes`);
       return 'changes';
     }
+    // A replacement is a new session, so a ticket that kept its slot still needs room for it.
+    if (!mayWake(st, id, t, `a worker for ${RV}'s requested changes on PR #${pr.number}`)) return 'changes';
     let note;
     try {
       note = changesNote(id, pr, latest, reviewComments(pr.number, latest.id));
@@ -867,6 +1078,15 @@ async function reviewerReview(st, id, t, pr, workers, why) {
     }
   }
   return 'waiting';
+}
+
+// Parks a ticket whose green PR waits only on the reviewer: it keeps its PR and its worker, and each tick goes on
+// watching the review, but its slot is free for the next ticket. since is when it first waited.
+function park(id, t, since) {
+  t.parked = since ?? iso();
+  // Waiting on the reviewer is never a stall, so a stall mark left from before it parked goes.
+  delete t.stalledSince;
+  if (!since) log(`${id}: waiting on ${RV}'s review, so it gives up its ${slotWord(poolOf(t))} until they answer`);
 }
 
 // The reason a judgment PR waits on the reviewer, for the ticket comment: the worker's escalation, then the spec's
@@ -981,8 +1201,20 @@ async function advance(st, m, workers) {
     sentryLabels = null;
     log(`could not read the Sentry merge-path labels, so no queue PR merges this tick (${errText(e)})`);
   }
-  for (const [id, t] of Object.entries(st.tickets)) {
-    if (!LIVE.includes(t.status)) continue;
+  // Tickets in the wake queue come last, in the order they started waiting: by then every other ticket has freed the
+  // slot it frees this tick, and the first to wait is the first to take a free slot.
+  const waitingIds = (st.wakeQueue ?? []).map((w) => w.id).filter((x) => st.tickets[x]);
+  for (const id of [...Object.keys(st.tickets).filter((x) => !waitingIds.includes(x)), ...waitingIds]) {
+    const t = st.tickets[id];
+    if (!t || !LIVE.includes(t.status)) continue;
+    if (holdsSlot(st, id, t)) wakeRun.held.add(id);
+    // A green PR waiting only on the reviewer is parked (park). Each tick decides afresh, so requested changes or a red
+    // check take its slot back, through the wake queue on a full machine. An unreadable PR keeps it parked.
+    const parkedAt = t.parked;
+    delete t.parked;
+    const keepParked = () => {
+      if (parkedAt) t.parked = parkedAt;
+    };
     // A question about a companion holds the bundle's one worker, so it counts as waiting on the lead too.
     t.waiting = waiting.has(id) || (t.bundle ?? []).some((c) => waiting.has(c));
     let pr;
@@ -991,6 +1223,7 @@ async function advance(st, m, workers) {
       pr = findPr(t, id);
     } catch (e) {
       log(`${id}: could not read its PR, trying next tick (${errText(e)})`);
+      keepParked();
       continue;
     }
     if (pr) t.pr = pr.url;
@@ -1051,6 +1284,7 @@ async function advance(st, m, workers) {
           verdict = await reviewerReview(st, id, t, pr, workers, await judgmentWhy(id, t, sentryLabels ?? {}));
         } catch (e) {
           log(`${id}: could not read ${RV}'s review state, trying next tick (${errText(e)})`);
+          keepParked();
           saveState(st);
           continue;
         }
@@ -1066,10 +1300,13 @@ async function advance(st, m, workers) {
         notGreen = greenReason(pr);
       } catch (e) {
         log(`${id}: could not check PR #${pr.number}, trying next tick (${errText(e)})`);
+        keepParked();
         continue;
       }
     }
     t.note = notGreen ? `not green: ${notGreen}` : 'green';
+    // A green PR needs no worker, so a ticket that waited for a slot stops waiting.
+    if (!notGreen) leaveWakeQueue(st, id, 'its PR is green');
     // An engine-built PR never merges through this file, whatever its merge path or reviewed paths: once green, and once
     // its round has ended, it goes to the orchestrator the way a risky-path PR does. That includes a PR an engine built
     // and a Claude worker finished, since the engine's code has had no review.
@@ -1085,6 +1322,10 @@ async function advance(st, m, workers) {
       await engines.toOrchestrator(st, id, t, pr, `built by ${by} and finished by a Claude worker, no orchestrator review of the engine's code yet`);
       continue;
     }
+    // A ticket that held no slot as this tick began (parked on the reviewer, or waiting in the wake queue) and now has
+    // work to do takes a slot back only when one is free; until then it waits in the wake queue, and the stall rules
+    // leave it alone: no replacement, no round, no stall note, never stuck for the wait.
+    if (notGreen && t.status === 'building' && !wakeRun.held.has(id) && !mayWake(st, id, t, notGreen)) continue;
     if (notGreen && engineDriven(t)) {
       // An engine's next round, question, limit or failure (engine-rounds.mjs). A module that fails to load holds the
       // ticket for the tick instead of letting the stall rules judge a worker they can't see.
@@ -1099,6 +1340,7 @@ async function advance(st, m, workers) {
     if (!notGreen && path === 'judgment' && verdict !== 'approved') {
       // Waiting on the reviewer is never a stall, the same as waiting on the human's answer.
       t.note = `waiting on ${RV}'s review`;
+      if (verdict === 'waiting') park(id, t, parkedAt);
       continue;
     }
     if (!notGreen) {
@@ -1124,10 +1366,14 @@ async function advance(st, m, workers) {
           verdict = await reviewerReview(st, id, t, pr, workers, t.reviewer.escalated);
         } catch (e) {
           log(`${id}: could not read ${RV}'s review state, trying next tick (${errText(e)})`);
+          keepParked();
         }
         saveState(st);
         if (verdict !== 'approved') {
-          if (verdict !== 'changes') t.note = `waiting on ${RV}'s review`;
+          if (verdict !== 'changes') {
+            t.note = `waiting on ${RV}'s review`;
+            if (verdict === 'waiting') park(id, t, parkedAt);
+          }
           continue;
         }
       } else if (risky.length) {
@@ -1209,6 +1455,8 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
   // "failed" means the session itself died (a reboot or a killed daemon), not that the worker gave up, so its ticket
   // gets one replacement worker before it can go stuck. "done" and "gone" keep going straight to stuck.
   if (t.goneTicks >= 2 && state === 'failed' && (t.redispatches ?? 0) < (cfg.maxRedispatches ?? 1)) {
+    // On a full machine the replacement waits in the wake queue, and the ticket is never made stuck for it.
+    if (!mayWake(st, id, t, `its worker ${t.account}/${t.workerId} failed`)) return;
     try {
       if (await replaceWorker(st, id, t)) return;
       log(`${id}: its worker failed and no account has room for a replacement`);
@@ -1334,12 +1582,15 @@ function memoryFreePercent() {
   return Math.round((kb('MemAvailable') / kb('MemTotal')) * 100);
 }
 
+// This machine's 5-minute load, its cores and its limits, the one reader machineBusy and burstState share.
+function machineLoad() {
+  return { perCore: hostCfg.maxLoadPerCore ?? cfg.maxLoadPerCore, minFree: hostCfg.minMemoryFreePercent ?? cfg.minMemoryFreePercent,
+    cores: os.cpus().length, load: os.loadavg()[1] };
+}
+
 // A machine with no room claims nothing. The ticket stays agent-ready in Linear for its next tick or another machine's.
 function machineBusy() {
-  const perCore = hostCfg.maxLoadPerCore ?? cfg.maxLoadPerCore;
-  const minFree = hostCfg.minMemoryFreePercent ?? cfg.minMemoryFreePercent;
-  const cores = os.cpus().length;
-  const load = os.loadavg()[1];
+  const { perCore, minFree, cores, load } = machineLoad();
   if (perCore && load > perCore * cores) return `load ${Math.round(load)} is over its limit of ${Math.round(perCore * cores)} on ${cores} cores`;
   if (minFree) {
     const free = memoryFreePercent();
@@ -1348,29 +1599,139 @@ function machineBusy() {
   return null;
 }
 
+// Burst slots: hosts.<name>.burstWorkers (default 0) extra regular slots, open while the machine has real headroom: its
+// 5-minute load under burstLoadPerCore per core (the host's, else the top-level one, else half of maxLoadPerCore) and at
+// least burstMinMemoryFreePercent of memory free (the host's, else the top-level one, else twice minMemoryFreePercent).
+// Then the regular pool's limit is maxWorkers + burstWorkers for new dispatches, wakes and redispatch by hand. The
+// Sentry pool has no burst, and a drained machine (maxWorkers 0) opens none, however calm it is. Read once per run.
+let burstMemo;
+const round1 = (n) => Math.round(n * 10) / 10;
+function burstState() {
+  if (burstMemo !== undefined) return burstMemo;
+  const extra = hostCfg.burstWorkers ?? 0;
+  if (!(extra > 0) || hostCfg.maxWorkers === 0) return (burstMemo = null);
+  const { perCore, minFree, cores, load } = machineLoad();
+  const burstPerCore = hostCfg.burstLoadPerCore ?? cfg.burstLoadPerCore ?? (perCore ? perCore / 2 : 0.75);
+  const burstFree = hostCfg.burstMinMemoryFreePercent ?? cfg.burstMinMemoryFreePercent ?? (minFree ? minFree * 2 : 40);
+  let free = null;
+  try {
+    free = memoryFreePercent();
+  } catch {
+    // Unreadable memory opens no burst slot.
+  }
+  const under = burstPerCore * cores;
+  const reading = `load ${round1(load)} of ${perCore ? round1(perCore * cores) : `${cores} cores`}, ${free ?? 'unknown'}% memory free`;
+  const why = !(load < under) ? `load ${round1(load)} is not under ${round1(under)}`
+    : !(free >= burstFree) ? `${free ?? 'unknown'}% of memory free is under ${burstFree}%` : null;
+  return (burstMemo = { extra, slots: why ? 0 : extra, reading, why, under: round1(under), burstFree });
+}
+const burstSlots = () => burstState()?.slots ?? 0;
+// For status and the log: this machine's burst state, or '' when it has no burst slots.
+function burstText() {
+  const b = burstState();
+  if (!b) return '';
+  return b.slots ? `burst open: ${b.slots} extra slot${b.slots === 1 ? '' : 's'} (${b.reading}; opens under load ${b.under} with ${b.burstFree}%+ memory free)`
+    : `burst closed: ${b.why} (${b.reading})`;
+}
+
 // hosts.<host>.fallbackAccounts get queue work only when no regular account can take it, which in practice means
 // the regular ones are under headroomFloorPercent.
 const fallbackAccounts = hostCfg.fallbackAccounts ?? [];
 const usedHere = (label) => fallbackAccounts.includes(label) || !hostCfg.accounts || hostCfg.accounts.includes(label);
 
-// The account a new worker runs on: the one with the most weekly usage left among those with at least
-// headroomFloorPercent left in both windows and fewer than workerCap working sessions, or null. `engines` are
-// engine-workers.mjs's rows for Codex and Grok, in the same shape and ranked by the same figures, with two differences.
-// An engine whose plan usage could not be read is still a candidate, ranked after every account with a reading: its
-// own limit stop and limitCooldownMinutes keep a spent engine off. And on an exact tie an engine goes first (Grok, then
-// Codex), since it is listed first. Callers that start a Claude worker pass no engines.
+// Fable is a sub-limit inside an account's week. Once it is spent the account still runs other models, so the weekly
+// headroom that decides whether an account takes a worker leaves the Fable-only window out, and workerModel decides
+// separately whether that worker runs on Fable. fleet.sh usage --json reports `weekly` as the tightest weekly window,
+// which would read a spent Fable allowance as a spent week. An engine row has no windows.
+const isFableWindow = (w) => w.kind === 'weekly_scoped' && w.scope === 'Fable';
+function weeklyLeft(u) {
+  const ws = (u?.windows ?? []).filter((w) => w.group === 'weekly' && !isFableWindow(w));
+  return ws.length ? Math.min(...ws.map((w) => w.remaining_percentage ?? -1)) : (u?.weekly?.remaining_percentage ?? -1);
+}
+const fableWindow = (u) => (u?.windows ?? []).find(isFableWindow) ?? null;
+
+// burnAccounts: accounts used up first, for usage that would otherwise be lost (a plan about to end, a weekly reset
+// about to wipe it). A burn account wins every ticket while it has burnFloorPercent left, ahead of the engines and the
+// other accounts. burnUntil[label] ends one account's burn at that instant; from then on it is ranked like any other.
+const isBurn = (label) => (cfg.burnAccounts ?? []).includes(label)
+  && !(cfg.burnUntil?.[label] && Date.now() >= Date.parse(cfg.burnUntil[label]));
+// The model switches are separate from the burn. fableAccounts run Fable while it is allowed, burned or not.
+// noFableAccounts never run Fable, and win over both fableAccounts and model "fable".
+const noFable = (label) => (cfg.noFableAccounts ?? []).includes(label);
+const fableOn = (label) => (cfg.fableAccounts ?? []).includes(label);
+// workerCapByAccount: the most working sessions one account may hold on a machine, in place of workerCap (0 included).
+const capOf = (label) => (Number.isInteger(cfg.workerCapByAccount?.[label]) ? cfg.workerCapByAccount[label] : cfg.workerCap);
+// A new worker may run Fable while its account has fableFloorPercent of its Fable allowance left and at least
+// fableMinWeeklyLeftPercent of its week: a Fable reset refunds only the Fable allowance, so it pays in full only when
+// that allowance is spent before the rest of the week.
+function fableAllowed(acct) {
+  if (noFable(acct?.label)) return false;
+  const left = fableWindow(acct?.usage)?.remaining_percentage ?? null;
+  if (left == null || left < (cfg.fableFloorPercent ?? cfg.headroomFloorPercent)) return false;
+  return weeklyLeft(acct?.usage) >= (cfg.fableMinWeeklyLeftPercent ?? 50);
+}
+// With model "fable", a worker runs Fable while fableAllowed, and modelFallback once it is not. A burn account and an
+// account in fableAccounts run Fable while it is allowed, whatever model says.
+function workerModel(acct) {
+  if (cfg.model !== 'fable' && !isBurn(acct?.label) && !fableOn(acct?.label)) return cfg.model;
+  const fallback = cfg.model === 'fable' ? (cfg.modelFallback ?? 'opus') : cfg.model;
+  return fableAllowed(acct) ? 'fable' : fallback;
+}
+// The model for one Claude worker. A ticket whose Size is in modelBySize runs on that model (S on Sonnet, say). A
+// bundle and a replacement worker pass no size and get the regular model, so a ticket the smaller model could not
+// finish is not handed to it again. A burn account or one in fableAccounts runs Fable while it may, Size S included.
+function modelFor(acct, { size = null } = {}) {
+  if ((isBurn(acct?.label) || fableOn(acct?.label)) && fableAllowed(acct)) return 'fable';
+  return (size && cfg.modelBySize?.[size]) || workerModel(acct);
+}
+
+// workerReservePercent ({ <subscriptionType>: percent }): usage promised to running workers. Each working session
+// reserves that share of its account's week, counted across every machine: this one's from fleet.sh usage, the others'
+// from their heartbeats. An account takes a new worker only while its weekly usage left, less what its running workers
+// and the new one reserve, stays at the floor, and accounts are ranked by that projected figure, so one tick's tickets
+// spread across accounts. One email can hold two plans, so an account is keyed by email and plan. Engines reserve nothing.
+const accountKey = (a) => `${a.email ?? a.label}|${a.subscriptionType ?? ''}`;
+const reserveFor = (a) => (a?.subscriptionType ? (cfg.workerReservePercent?.[a.subscriptionType] ?? 0) : 0);
+const reserving = () => Object.values(cfg.workerReservePercent ?? {}).some((p) => p > 0);
+function workingElsewhere() {
+  const counts = new Map();
+  if (!reserving()) return counts;
+  for (const beat of otherHeartbeats()) {
+    for (const w of beat.accountsWorking ?? []) counts.set(w.key, (counts.get(w.key) ?? 0) + (w.working ?? 0));
+  }
+  return counts;
+}
+
+// The account a new worker runs on, or null. A burn account with room goes first. Otherwise the one with the most weekly
+// usage left (after the reserve) among those with at least headroomFloorPercent left in both windows and fewer working
+// sessions than its cap. `engines` are engine-workers.mjs's rows for Codex and Grok, in the same shape and ranked by the
+// same figures, with two differences. An engine whose plan usage could not be read is still a candidate, ranked after
+// every account with a reading: its own limit stop and limitCooldownMinutes keep a spent engine off. And on an exact tie
+// an engine goes first (Grok, then Codex), since it is listed first. Callers that start a Claude worker pass no engines.
 function pickAccount(accounts, engines = []) {
   const floor = cfg.headroomFloorPercent;
+  const elsewhere = workingElsewhere();
+  const fleetWorking = (a) => (a.working ?? 0) + (elsewhere.get(accountKey(a)) ?? 0);
+  // Weekly usage left once the running workers and `extra` more have taken their reserve.
+  const projected = (a, extra = 0) => weeklyLeft(a.usage) - reserveFor(a) * (fleetWorking(a) + extra);
   // A plan with no 5-hour window reports five_hour as null once its usage is known; that is no limit, not an empty
   // one. The weekly window is still required.
-  const fiveHourOk = (u) => u.five_hour == null || (u.five_hour.remaining_percentage ?? -1) >= floor;
-  const roomy = (u) => fiveHourOk(u) && (u.weekly?.remaining_percentage ?? -1) >= floor;
-  const usable = (a) => a.signed_in && a.working < cfg.workerCap && a.usage?.available && roomy(a.usage);
-  const engineUsable = (a) => a.working < cfg.workerCap && !a.usage?.limited && (!a.usage?.available || roomy(a.usage));
-  const left = (a) => (a.usage?.available ? a.usage.weekly.remaining_percentage : -1);
+  const fiveHourOk = (u, min = floor) => u.five_hour == null || (u.five_hour.remaining_percentage ?? -1) >= min;
+  const roomy = (a) => fiveHourOk(a.usage) && projected(a, 1) >= floor;
+  const usable = (a) => a.signed_in && a.working < capOf(a.label) && a.usage?.available && roomy(a);
+  const engineUsable = (a) => a.working < capOf(a.label) && !a.usage?.limited && (!a.usage?.available || roomy(a));
+  const left = (a) => (a.usage?.available ? projected(a) : -1);
   // Spread usage away from the primary account, which the human's own sessions use. The sort is stable, so a tie keeps
   // the engines' place ahead of the Claude accounts.
   const best = (pool) => pool.sort((x, y) => (x.label === PRIMARY) - (y.label === PRIMARY) || left(y) - left(x))[0] ?? null;
+  // A burn account that runs Fable goes first only while its new worker may run Fable; one in noFableAccounts burns
+  // its whole week on other models. Among burn accounts the one with the most projected usage left wins, the primary
+  // account included: listing it there is a choice to burn it.
+  const burnFloor = cfg.burnFloorPercent ?? 2;
+  const burnable = (a) => isBurn(a.label) && usedHere(a.label) && a.signed_in && a.working < capOf(a.label) && a.usage?.available
+    && (noFable(a.label) || fableAllowed(a)) && fiveHourOk(a.usage, burnFloor) && projected(a, 1) >= burnFloor;
+  const burn = accounts.filter(burnable).sort((x, y) => left(y) - left(x))[0] ?? null;
+  if (burn) return burn;
   const regular = accounts.filter((a) => usedHere(a.label) && !fallbackAccounts.includes(a.label) && usable(a));
   return best([...engines.filter(engineUsable), ...regular]) ?? best(accounts.filter((a) => fallbackAccounts.includes(a.label) && usable(a)));
 }
@@ -1518,31 +1879,35 @@ async function dispatch(st, m) {
   }
   ready.sort((a, b) => rank(a.priority) - rank(b.priority) || Date.parse(a.createdAt) - Date.parse(b.createdAt));
   if (!ready.length) return log('queue empty');
+  if (newWorkHeld()) return log(`${ready.length} ready, none claimed: new work is held on every machine (dispatcher.holdNewWork); work already claimed carries on`);
 
   const busy = machineBusy();
   if (busy) return log(`${ready.length} ready, none claimed: this machine is busy, ${busy}`);
 
-  // A bundle is one worker: its companions carry agent-building too, so they are left out of the count.
+  // A bundle is one worker: its companions carry agent-building too, so they are left out of the count. A ticket parked
+  // on the reviewer or waiting in the wake queue holds no slot and leaves the cross-machine count too.
   const companions = bundledCompanions();
-  const active = (await building()).filter((id) => !companions.has(id)).length;
-  const liveHere = Object.values(st.tickets).filter((t) => t.status === 'building');
-  const queued = liveHere.filter((t) => !t.sentry).length;
+  const active = (await building()).filter((id) => !companions.has(id) && !st.tickets[id]?.parked && !wakeEntry(st, id)).length;
   const sentrySlots = hostCfg.sentryWorkers ?? 0;
-  let sentryRoom = sentrySlots - liveHere.filter((t) => t.sentry).length;
   const sentryHost = sentrySlots > 0 ? null : liveSentryHost();
-  let outside;
+  let rows;
   try {
-    outside = outsideWorkers(st);
+    rows = await sessionRows(st);
   } catch (e) {
     return log(`${ready.length} ready, none claimed: could not count this machine's other fleet workers (${errText(e)})`);
   }
-  const local = queued + outside;
-  let room = (hostCfg.maxWorkers ?? Infinity) - local;
+  // The slots in use (poolUse): every ticket that holds one, every ticket in the wake queue (kept for it, ahead of any
+  // new ticket), and every working session no slot accounts for.
+  const local = poolUse(st, rows, 'regular', { queued: true });
+  let room = poolMax('regular') - local;
+  let sentryRoom = sentrySlots - poolUse(st, rows, 'sentry', { queued: true });
+  const { outside, slotless } = sessionsWithoutSlot(st, rows);
+  const waitingHere = (st.wakeQueue ?? []).length;
   // maxDispatchesPerDay is optional: with many small, quick PRs a daily cap runs out fast and the work stops.
   // Worker slots and maxConcurrent still bound the queue.
   const dailyCap = cfg.maxDispatchesPerDay ?? Infinity;
   let slots = Math.min(cfg.maxConcurrent - active, dailyCap - st.dispatches.length, Math.max(room, 0) + Math.max(sentryRoom, 0));
-  if (slots <= 0) return log(`no slots for ${ready.length} ready: ${active}/${cfg.maxConcurrent} building across machines, ${local}/${hostCfg.maxWorkers ?? 'no limit'} on this machine${sentrySlots ? `, Sentry slot ${sentrySlots - sentryRoom}/${sentrySlots}` : ''}${outside ? ` (${outside} outside the queue)` : ''}, ${st.dispatches.length}${Number.isFinite(dailyCap) ? `/${dailyCap}` : ''} dispatched today`);
+  if (slots <= 0) return log(`no slots for ${ready.length} ready: ${active}/${cfg.maxConcurrent} building across machines, ${local}/${hostCfg.maxWorkers ?? 'no limit'} on this machine${burstState() ? ` (${burstText()})` : ''}${sentrySlots ? `, Sentry slot ${sentrySlots - sentryRoom}/${sentrySlots}` : ''}${outside ? ` (${outside} outside the queue)` : ''}${slotless ? ` (${slotless} working without a slot)` : ''}${waitingHere ? ` (${waitingHere} waiting for a slot)` : ''}, ${st.dispatches.length}${Number.isFinite(dailyCap) ? `/${dailyCap}` : ''} dispatched today`);
 
   let accounts = null;
   let engineRows = null; // Codex and Grok as account rows, read when the first ticket an engine may take comes up
@@ -1561,6 +1926,8 @@ async function dispatch(st, m) {
     }
     const useSentrySlot = isSentry(issue) && sentrySlots > 0;
     if (useSentrySlot ? sentryRoom <= 0 : room <= 0) continue;
+    // A ticket takes one of the open burst slots once the regular ones are all in use.
+    const inBurst = !useSentrySlot && room <= burstSlots() ? `, using a burst slot: ${burstState().reading}` : '';
     accounts ??= JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 }));
     // Every account with room is a candidate, Claude, Codex or Grok, ranked by weekly usage left. Codex and Grok take
     // part only while the engines are on and the ticket is one an engine may take (engine-workers.mjs skipReason).
@@ -1594,6 +1961,7 @@ async function dispatch(st, m) {
       const out = await engines.call(`starting ${acct.engine} on ${id}`, 'failed', (e, c) => e.startEngine(c, st, m, issue, acct));
       if (out === 'paused') return;
       if (out !== 'failed') {
+        if (inBurst) log(`${id}: its ${acct.engine} worker runs here${inBurst}`);
         slots -= 1;
         room -= 1;
         acct.working += 1;
@@ -1624,12 +1992,13 @@ async function dispatch(st, m) {
     const members = [issue, ...mates];
     const bundleIds = mates.map((c) => c.identifier);
     const withMates = bundleIds.length ? ` (bundled with ${bundleIds.join(', ')})` : '';
+    const model = modelFor(acct, { size: mates.length ? null : sizeOf(issue) });
     slots -= 1;
     if (useSentrySlot) sentryRoom -= 1;
     else room -= 1;
     acct.working += 1;
     if (DRY) {
-      log(`would dispatch ${id}${withMates} to account ${acct.label} on ${branch}${useSentrySlot ? ' in the Sentry slot' : ''}`);
+      log(`would dispatch ${id}${withMates} to account ${acct.label} on ${branch}${useSentrySlot ? ' in the Sentry slot' : ''}, on ${model}${inBurst}`);
       continue;
     }
     if (isPaused()) return log('paused mid-tick, stopping dispatch');
@@ -1648,7 +2017,7 @@ async function dispatch(st, m) {
         await setState(member.id, m.inProgress);
       }
       out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
-        '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
+        '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
         ...MODE_ARGS, '--no-report', '--', brief(members, branch)],
       { timeout: 180_000 }));
     } catch (e) {
@@ -1656,19 +2025,19 @@ async function dispatch(st, m) {
       await reconcileClaims(st, m);
       continue;
     }
-    Object.assign(t, { status: 'building', dispatchedAt: iso(), account: out.label, workerId: out.id, workerName: out.name });
+    Object.assign(t, { status: 'building', dispatchedAt: iso(), account: out.label, workerId: out.id, workerName: out.name, model });
     for (const c of mates) Object.assign(st.tickets[c.identifier], { status: 'bundled', dispatchedAt: iso(), account: out.label, workerId: out.id, workerName: out.name });
     if (bundleIds.length) writeBundle(id, bundleIds);
     st.dispatches.push(iso());
     saveState(st);
-    log(`${id}: dispatched to ${out.label}/${out.id}${withMates}${useSentrySlot ? ' in the Sentry slot' : ''}`);
+    log(`${id}: dispatched to ${out.label}/${out.id}${withMates}${useSentrySlot ? ' in the Sentry slot' : ''}${inBurst}`);
     await notify(`${id} started`, `Worker ${out.label}/${out.id}: ${issue.title}${withMates}`, { id, progress: true });
     for (const c of mates) {
       await effects(st.tickets[c.identifier], c.identifier, [[`comment the bundle on ${c.identifier}`, () => comment(c.id,
         `Agent dispatcher on ${HOST}: bundled into ${id}. Fleet worker ${out.label}/${out.id} (${out.name}) builds this ticket together with ${[id, ...bundleIds.filter((x) => x !== c.identifier)].join(', ')} as one PR on \`${branch}\`. It moves to ${STATES.verifying} when that PR merges. Questions go to ${HUMAN}'s Slack.`)]]);
     }
     await effects(t, id, [[`comment the dispatch on ${id}`, () => comment(issue.id,
-      `Agent dispatcher on ${HOST}: fleet worker ${out.label}/${out.id} (${out.name}) is building this${withMates} as one PR on \`${branch}\` with ${cfg.model}. No time limit; the dispatcher watches for progress. Questions go to ${HUMAN}'s Slack.`)]]);
+      `Agent dispatcher on ${HOST}: fleet worker ${out.label}/${out.id} (${out.name}) is building this${withMates} as one PR on \`${branch}\` with ${model}. No time limit; the dispatcher watches for progress. Questions go to ${HUMAN}'s Slack.`)]]);
     saveState(st);
   }
 }
@@ -1676,11 +2045,18 @@ async function dispatch(st, m) {
 // Starts a new worker on a ticket whose worker ended before finishing (a reboot ends every fleet worker). The new worker continues from the old one's worktree and PR instead of
 // starting over, and a ticket already marked stuck for it goes back to building. Returns null when no account has room.
 async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) {
+  if (DRY) {
+    log(`${id}: would start a replacement worker on ${t.branch}`);
+    return { dry: true };
+  }
+  // Every caller asks first; this holds the line for one that doesn't. A ticket with no room waits in the wake queue.
+  if (!mayWake(st, id, t, why ?? 'a replacement worker')) return null;
   const members = [];
   for (const x of [id, ...(t.bundle ?? [])]) members.push((await gql('query($id:String!){ issue(id:$id){ id identifier title url description } }', { id: x })).issue);
   const [issue] = members;
   const acct = pickAccount(JSON.parse(run(FLEET, ['usage', '--json'], { timeout: 180_000 })));
   if (!acct) return null;
+  const model = modelFor(acct);
   // An engine ticket a Claude worker takes over (a redispatch by hand, or the round cap that made it stuck): the engine's
   // clone is engine-written throughout, so the worker is told to cut its own worktree from the branch instead.
   const fromEngine = engineDriven(t);
@@ -1688,7 +2064,7 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
     ? `${engines.guard(id, t)}Continue the work on ${id} from origin/${t.branch} instead of starting over. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`
     : `Your previous worker on ${id} ended before finishing (its session stopped, for example when this machine rebooted). Continue its work instead of starting over: the worktree for ${t.branch} under ${WORKTREES}/ may hold commits that were never pushed, so check it first and push them. If a PR exists, read its failing checks and review findings and fix them. Then carry on with the brief below.\n\n`;
   const out = JSON.parse(run(FLEET, ['dispatch', acct.label, '--cwd', WORKSPACE,
-    '--model', cfg.model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(cfg.workerCap),
+    '--model', model, '--effort', cfg.effort, '--name', workerName(id), '--max-workers', String(capOf(acct.label)),
     ...MODE_ARGS, '--no-report', '--', (lead ?? note) + brief(members, t.branch)], { timeout: 180_000 }));
   if (fromEngine) {
     engines.leave(t);
@@ -1697,7 +2073,7 @@ async function replaceWorker(st, id, t, { note: lead = null, why = null } = {}) 
   const wasStuck = t.status === 'stuck';
   // lastOutputAt too: the spin check measures a busy worker's quiet time from it, and the old worker's last commit
   // made every replacement read as stalled on its first tick.
-  Object.assign(t, { status: 'building', account: out.label, workerId: out.id, workerName: out.name, goneTicks: 0,
+  Object.assign(t, { status: 'building', account: out.label, workerId: out.id, workerName: out.name, model, goneTicks: 0,
     lastProgressAt: iso(), lastOutputAt: iso(), redispatchedAt: iso(), redispatches: (t.redispatches ?? 0) + (why ? 0 : 1) });
   for (const k of ['stalledSince', 'stuckAt', 'reason']) delete t[k];
   saveState(st);
@@ -1740,11 +2116,65 @@ async function redispatch(id) {
     if (run1?.status === 'busy') return console.log(`${id}: its ${t.engine} run ${t.workerId} is still busy; stop it first with ext-worker.sh stop ${id}`);
     const w = fleetWorkers().find((x) => x.label === t.account && x.id === t.workerId);
     if (w && ACTIVE.includes(w.status || w.state)) return console.log(`${id}: its worker ${t.account}/${t.workerId} is still ${w.status || w.state}`);
+    if (!(await roomByHand(st, id, t, 'a redispatch by hand'))) return;
     const out = await replaceWorker(st, id, t);
     console.log(out ? `${id}: redispatched to ${out.label}/${out.id}` : `no account has a free worker slot and ${cfg.headroomFloorPercent}%+ headroom`);
   } finally {
     fs.rmdirSync(LOCK);
   }
+}
+
+// A redispatch starts a session too, so it keeps the machine's limit. A pending wake override for the ticket lets one
+// through, once. It only refuses: the ticket does not join the wake queue for an action no tick would repeat.
+async function roomByHand(st, id, t, what) {
+  try {
+    wakeRun.workers = await sessionRows(st);
+  } catch (e) {
+    console.log(`${id}: this machine's working sessions could not be counted (${errText(e)}), so nothing started`);
+    return false;
+  }
+  for (const [x, other] of Object.entries(st.tickets)) if (holdsSlot(st, x, other)) wakeRun.held.add(x);
+  const req = readWakeRequest(id);
+  if (req) wakeRun.overrides.set(id, req);
+  if (mayWake(st, id, t, what, { join: false })) {
+    const o = wakeRun.overrides.get(id);
+    if (o?.used) {
+      fs.rmSync(o.file, { force: true });
+      console.log(`${id}: its wake override let it through over the limit, and is cleared`);
+    }
+    return true;
+  }
+  const pool = poolOf(t);
+  console.log(`${id}: nothing started, since ${what} would put ${HOST} over its limit (${poolUse(st, wakeRun.workers, pool, { except: id })}/${poolMax(pool)} ${slotWord(pool)}s in use without it${pool === 'regular' && burstState() ? `; ${burstText()}` : ''}). Run \`node ${path.join(DIR, 'dispatcher.mjs')} wake ${id}\` first to let it through once.`);
+  return false;
+}
+
+// `wake ENG-123`: the ticket's next wake goes through over its machine's limit, once. Any machine records it in the
+// shared wake-requests folder, and the machine that holds the ticket honours it on its next tick and clears it.
+function wakeCmd(id) {
+  fs.mkdirSync(WAKE_REQUESTS, { recursive: true });
+  fs.writeFileSync(path.join(WAKE_REQUESTS, `${id}.json`), `${JSON.stringify({ id, at: iso(), from: HOST })}\n`);
+  log(`${id}: wake override recorded on ${HOST}`);
+  const local = fs.existsSync(STATE) ? loadState() : { tickets: {} };
+  const t = local.tickets[id];
+  const entry = wakeEntry(local, id);
+  const next = (host, last) => `${host}'s next tick${last ? ` (the last at ${last})` : ''}`;
+  if (LIVE.includes(t?.status)) {
+    return console.log(entry
+      ? `${id} waits in ${HOST}'s wake queue since ${entry.since} (${entry.reason}). Override recorded: ${next(HOST, local.lastTick)} wakes it over the limit, once, and clears the request.`
+      : `${id} is ${t.status} on ${HOST} and does not wait for a slot. Override recorded: if it needs to wake on ${next(HOST, local.lastTick)}, it goes through over the limit; if not, that tick clears the request.`);
+  }
+  for (const host of cfg.enabledHosts.filter((h) => h !== HOST)) {
+    let beat;
+    try {
+      beat = JSON.parse(fs.readFileSync(path.join(HEARTBEATS, `${host}.json`), 'utf8'));
+    } catch {
+      continue;
+    }
+    const w = (beat.wakeQueue ?? []).find((x) => x.id === id);
+    if (w) return console.log(`${id} waits in ${host}'s wake queue since ${w.since} (${w.reason}), as of its heartbeat at ${beat.at}. Override recorded in ${WAKE_REQUESTS}: ${next(host, beat.at)} wakes it over the limit, once, and clears the request.`);
+  }
+  console.log(`${id} is not live on ${HOST}, and no other machine's heartbeat lists it in a wake queue. Override recorded in ${WAKE_REQUESTS}: the machine that holds the ticket honours it on its next tick if the ticket needs to wake, and a request no machine takes is dropped after a day.`);
 }
 
 // --- Sentry triage -------------------------------------------------------------------------------------
@@ -1767,19 +2197,6 @@ async function sentryTriage() {
 
 // --- engine workers ------------------------------------------------------------------------------------
 
-// Free regular slots on this machine now: maxWorkers less the building tickets and the working outside workers, the
-// count dispatch() uses. An outside count that can't be read counts as no room.
-function poolRoom(st) {
-  const queued = Object.values(st.tickets).filter((t) => t.status === 'building' && !t.sentry).length;
-  let outside;
-  try {
-    outside = outsideWorkers(st);
-  } catch {
-    return 0;
-  }
-  return (hostCfg.maxWorkers ?? Infinity) - queued - outside;
-}
-
 // Codex and Grok as queue accounts. The logic is in engine-workers.mjs and engine-rounds.mjs, loaded on first use and
 // only while the engines are on (externalBuilders.fallback.enabled) or a ticket is engine-driven, so a syntax error or a
 // throw there costs one log line. The context hands them the dispatcher's own helpers, so an engine ticket is claimed,
@@ -1788,7 +2205,7 @@ const engines = makeEngineHooks(() => ({
   cfg, log, errText, iso, saveState, effects, notify, run, askHuman, attachCmd, riskyPaths, requestMerge, EXT_WORKER, HUMAN, WORKTREES, SHARED,
   ctx: () => ({ cfg, conf, DIR, ROOT, LOCAL, SHARED, HOST, DRY, REPO, BASE, HUMAN, L, EXT_WORKER, EXT_USAGE, ASK, WORKTREES,
     log, run, gh, gql, iso, hoursSince, errText, saveState, isPaused, notify, effects, comment, issueId, addLabel, removeLabel, setState,
-    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig, poolRoom }),
+    markStuck, reconcileClaims, clearMergeRequest, isSentry, sizeOf, branchFor, fillConfig, mayWake, newWorkHeld }),
 }));
 
 // --- commands ------------------------------------------------------------------------------------------
@@ -1823,12 +2240,18 @@ async function tick() {
     }
     // Engine workers' registry rows join the list shaped like fleet rows, so progress and stall logic read them the same.
     if (workers && engines.wanted(st)) workers = [...workers, ...await engines.call('reading the engine registry', [], (e, c) => e.rows(c))];
+    // The wake queue's slot counts read this list. It is null when the fleet can't be read, and then nothing wakes.
+    wakeRun.workers = workers;
+    loadWakeOverrides(st);
+    pruneWakeQueue(st);
     await advance(st, m, workers);
+    pruneWakeQueue(st);
     await watchWorkers(st, workers);
     await watchSignIns(st);
     await dispatch(st, m);
     await sentryTriage();
-    writeHeartbeat();
+    writeHeartbeat(st);
+    settleWakeOverrides(st);
     st.lastTick = iso();
     delete st.lastError;
   } catch (e) {
@@ -1845,7 +2268,7 @@ async function tick() {
 async function status() {
   const st = loadState();
   const day = (st.dispatches ?? []).filter((d) => hoursSince(d) < 24).length;
-  console.log(`host ${HOST} (${cfg.enabledHosts.includes(HOST) ? 'enabled' : 'not enabled'}), ${isPaused() ? `PAUSED: ${pauseReason()}` : 'running'}`);
+  console.log(`host ${HOST} (${cfg.enabledHosts.includes(HOST) ? 'enabled' : 'not enabled'}), ${isPaused() ? `PAUSED: ${pauseReason()}` : 'running'}${newWorkHeld() ? '; new work HELD on every machine (holdNewWork), claimed work carries on' : ''}`);
   console.log(`last tick ${st.lastTick ?? 'never'}${st.lastError ? `, last error ${st.lastError}` : ''}; dispatched ${day}${cfg.maxDispatchesPerDay ? `/${cfg.maxDispatchesPerDay}` : ''} in 24h; stuck streak ${st.stuckStreak ?? 0}${st.pendingNotice ? '; pause notice not yet delivered' : ''}`);
   if (cfg.sentryTriage?.enabled) {
     try {
@@ -1857,6 +2280,26 @@ async function status() {
   const q = await gql(`query($team:String!,$ready:String!){ issues(first:100, filter:{team:{key:{eq:$team}}, labels:{name:{eq:$ready}},
     state:{type:{nin:["completed","canceled","duplicate"]}}}){ nodes{ identifier } } }`, { team: TEAM, ready: L.ready });
   console.log(`queue: ${q.issues.nodes.length} ${L.ready}${q.issues.nodes.length ? ` (${q.issues.nodes.map((n) => n.identifier).join(', ')})` : ''}`);
+  // The slots counted the way the tick counts them, and the tickets waiting for one here and on the other machines.
+  try {
+    const rows = await sessionRows(st);
+    const { outside, slotless } = sessionsWithoutSlot(st, rows);
+    console.log(`slots on ${HOST}: ${poolUse(st, rows, 'regular', { queued: true })}/${hostCfg.maxWorkers ?? 'no limit'} in use${burstState() ? ` (${burstText()})` : ''}${hostCfg.sentryWorkers ? `, Sentry ${poolUse(st, rows, 'sentry', { queued: true })}/${hostCfg.sentryWorkers}` : ''}${outside ? `; ${outside} working outside the queue` : ''}${slotless ? `; ${slotless} working without a slot` : ''}`);
+  } catch (e) {
+    console.log(`slots on ${HOST}: could not count its working sessions (${errText(e)})`);
+  }
+  const waitLine = (list) => list.map((w) => `${w.id}${w.pool === 'sentry' ? ' (Sentry slot)' : ''} for ${Math.round(hoursSince(w.since) * 60)} min: ${w.reason}`).join('; ');
+  console.log(`wake queue on ${HOST}: ${st.wakeQueue?.length ? waitLine(st.wakeQueue) : 'empty'}`);
+  for (const beat of otherHeartbeats(24 * 60)) {
+    if (beat.wakeQueue?.length) console.log(`wake queue on ${beat.host} (heartbeat ${beat.at}): ${waitLine(beat.wakeQueue)}`);
+  }
+  let overrides = [];
+  try {
+    overrides = fs.readdirSync(WAKE_REQUESTS).filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -'.json'.length));
+  } catch {
+    // No override has been recorded yet.
+  }
+  if (overrides.length) console.log(`wake overrides pending: ${overrides.join(', ')}`);
   for (const [id, t] of Object.entries(st.tickets)) {
     const last = t.mergedAt ?? t.stuckAt ?? t.closedAt ?? t.dispatchedAt ?? t.claimedAt;
     if (!LIVE.includes(t.status) && !['claiming', 'bundled'].includes(t.status) && hoursSince(last) > 7 * 24) continue;
@@ -1864,7 +2307,8 @@ async function status() {
     const bundle = t.bundledInto ? `  (rides on ${t.bundledInto})` : t.bundle?.length ? `  (+ ${t.bundle.join(', ')})` : '';
     if (t.status === 'bundled' && !LIVE.includes(st.tickets[t.bundledInto]?.status) && st.tickets[t.bundledInto]?.status !== 'claiming') continue;
     const eng = engineDriven(t) ? `  (${t.engine} round ${t.round ?? 1}, ${t.engineStatus ?? 'unknown'})` : '';
-    console.log(`  ${id.padEnd(10)} ${t.status.padEnd(12)} ${t.account ?? '-'}/${t.workerId ?? '-'}  ${t.pr ?? t.branch}${bundle}${eng}${t.reason ? `  (${t.reason})` : ''}${errs}`);
+    const waits = wakeEntry(st, id) ? '  (waiting for a slot)' : t.parked ? `  (parked on ${RV}'s review)` : '';
+    console.log(`  ${id.padEnd(10)} ${t.status.padEnd(12)} ${t.account ?? '-'}/${t.workerId ?? '-'}  ${t.pr ?? t.branch}${bundle}${eng}${waits}${t.reason ? `  (${t.reason})` : ''}${errs}`);
   }
 }
 
@@ -1877,7 +2321,7 @@ function summary() {
   const recent = Object.entries(st.tickets).filter(([, t]) => ['merged', 'stuck'].includes(t.status) && hoursSince(t.mergedAt ?? t.stuckAt) < 24);
   if (!live.length && !recent.length && !isPaused()) return;
   const ago = st.lastTick ? `${Math.round((Date.now() - Date.parse(st.lastTick)) / 60_000)} min ago` : 'never';
-  console.log(`[Queue] ${isPaused() ? `PAUSED (${pauseReason()})` : `${live.length} running`}, last check ${ago}. dispatcher.mjs status has more.`);
+  console.log(`[Queue] ${isPaused() ? `PAUSED (${pauseReason()})` : `${live.length} running`}${newWorkHeld() ? ', new work held' : ''}${st.wakeQueue?.length ? `, ${st.wakeQueue.length} waiting for a slot` : ''}, last check ${ago}. dispatcher.mjs status has more.`);
   for (const [id, t] of live) {
     const where = t.prNumber ? `PR #${t.prNumber}, ${t.note ?? t.status}` : 'building, no PR yet';
     const hours = `${hoursSince(t.dispatchedAt ?? t.claimedAt).toFixed(1)}h in${t.lastProgressAt ? `, last progress ${hoursSince(t.lastProgressAt).toFixed(1)}h ago` : ''}${t.stalledSince ? ', STALLED' : ''}`;
@@ -1915,6 +2359,13 @@ else if (cmd === 'redispatch') {
     process.exitCode = 2;
   }
 }
+else if (cmd === 'wake') {
+  if (new RegExp(`^${TEAM}-\\d+$`).test(rest[0] ?? '')) wakeCmd(rest[0]);
+  else {
+    console.log(`usage: node dispatcher.mjs wake ${TEAM}-123`);
+    process.exitCode = 2;
+  }
+}
 else if (cmd === 'pause') {
   fs.writeFileSync(PAUSED, `${iso()} ${rest.join(' ') || 'paused by hand'}\n`);
   log(`paused: ${rest.join(' ') || 'paused by hand'}`);
@@ -1923,6 +2374,6 @@ else if (cmd === 'pause') {
   fs.writeFileSync(STREAK_RESET, `${iso()}\n`);
   log('resumed; the stuck streak resets on the next tick');
 } else {
-  console.log(`usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ${TEAM}-123 | redispatch ${TEAM}-123 | test-notify | pause [reason] | resume`);
+  console.log(`usage: node dispatcher.mjs tick [--dry-run] | status | summary | check ${TEAM}-123 | redispatch ${TEAM}-123 | wake ${TEAM}-123 | test-notify | pause [reason] | resume`);
   process.exitCode = 2;
 }

@@ -89,20 +89,34 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | Key | Example | What it does |
 |---|---|---|
 | `dispatcher.enabledHosts` | `["main-mac"]` | Short hostnames (hostname -s) that run ticks. A host not listed does nothing. |
-| `dispatcher.hosts` | `{"main-mac":{"maxWorkers":4,"accounts":["a","b","c"],"fallbackAccou...` | Per machine. maxWorkers caps working fleet workers there, queue and outside ones. accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. engines (optional) lists which of dispatcher.externalBuilders.fallback.engines may run there: absent means all, [] means none. |
+| `dispatcher.hosts` | `{"main-mac":{"maxWorkers":4,"accounts":["a","b","c"],"fallbackAccou...` | Per machine. maxWorkers is a hard limit on working sessions there: queue workers, engine runs and sessions started outside the queue all count, and nothing automatic starts, respawns or wakes a session past it (a ticket that needs one waits in the wake queue). 0 drains the machine. accounts limits which fleet accounts it may use; fallbackAccounts get work only when no regular account can take it. maxLoadPerCore and minMemoryFreePercent override the defaults below. sentryWorkers are side slots kept for Sentry tickets. burstWorkers (default 0) are extra regular slots that open while the machine is calm (burstLoadPerCore, burstMinMemoryFreePercent below, which a host entry may override); the Sentry pool and a drained machine get none. engines (optional) lists the engines that may run on that machine, out of dispatcher.externalBuilders.fallback.engines: absent means every one of them, [] means none. |
+| `dispatcher.holdNewWork` | `false` | true stops every machine from claiming a new ready ticket. Unlike a pause, which also stops merges, work already claimed carries on: PRs merge, workers are replaced and woken, and the wake queue drains. |
+| `dispatcher.burstLoadPerCore` | `null` | A machine's burst slots (hosts.<name>.burstWorkers) open while its 5-minute load is under this times its cores. null means half of maxLoadPerCore. |
+| `dispatcher.burstMinMemoryFreePercent` | `null` | Burst slots also need at least this much memory free. null means twice minMemoryFreePercent. |
 | `dispatcher.maxConcurrent` | `8` | Workers across all machines, counted through the building label. A bundle counts as one. |
 | `dispatcher.maxDispatchesPerDay` | `null` | null means no daily cap. Worker slots and maxConcurrent still bound the queue. |
 | `dispatcher.maxLoadPerCore` | `1.5` | A machine whose 5-minute load average is over this times its core count claims nothing that tick. |
 | `dispatcher.minMemoryFreePercent` | `20` | A machine with less memory free than this claims nothing that tick (macOS memory pressure level, or MemAvailable on Linux). |
 | `dispatcher.headroomFloorPercent` | `30` | An account needs at least this much left in both its 5-hour and weekly windows to get work. |
 | `dispatcher.workerCap` | `8` | fleet.sh --max-workers for each dispatch: the working background sessions one account may hold. |
+| `dispatcher.workerCapByAccount` | `{}` | Per-account caps in place of workerCap, as {"<label>": n}. 0 keeps an account off queue work. |
+| `dispatcher.workerReservePercent` | `{}` | Percent of an account's week each running worker is assumed to use, by plan (fleet.sh's subscriptionType), e.g. {"max": 4, "team": 8}. An account takes a new worker only while its weekly usage left, less the reserve of its running workers on every machine and the new one, stays at headroomFloorPercent, and accounts are ranked by that figure, so one tick's tickets spread out. Machines share their counts through the heartbeat. {} turns it off. |
 | `dispatcher.stallHours` | `3` | Hours with nothing moving (no commit, no PR activity, worker not busy) before the human gets one stall note. A ticket goes stuck only when its worker has also ended. |
 | `dispatcher.spinHours` | `6` | Hours a worker may stay busy without a commit or PR change before it counts as stalled. |
 | `dispatcher.longRunNoticeHours` | `8` | An informational "still going" Slack line every this many hours of a ticket's build. |
 | `dispatcher.stuckInARowTrips` | `2` | This many stuck tickets in a row pause the dispatcher. |
-| `dispatcher.maxRedispatches` | `1` | Replacement workers a ticket gets when its worker's session dies, a reboot say, before it can go stuck. |
+| `dispatcher.maxRedispatches` | `1` | Replacement workers a ticket gets when its worker's session dies, a reboot say, before it can go stuck. On a full machine the replacement waits in the wake queue; `dispatcher.mjs wake ENG-123` lets one ticket's next wake through over the limit, once. |
 | `dispatcher.flakeWaitMinutes` | `90` | How long a failure on a merge commit waits for a later main commit to pass the same workflow before it pauses the queue. |
-| `dispatcher.model` | `"opus"` | The model every queue worker runs (fleet.sh dispatch --model). |
+| `dispatcher.model` | `"opus"` | The model queue workers run (fleet.sh dispatch --model). "fable" runs Fable while the account may (fableMinWeeklyLeftPercent, fableFloorPercent) and modelFallback once it may not. |
+| `dispatcher.modelBySize` | `{}` | A model per Size label for a single ticket, e.g. {"S": "sonnet"}. A bundle and a replacement worker run the regular model. |
+| `dispatcher.modelFallback` | `"opus"` | The model a worker runs when model is "fable" and its account may not run Fable. |
+| `dispatcher.fableAccounts` | `[]` | Accounts whose workers run Fable while it is allowed, whatever model says. It picks the model only, never the account. |
+| `dispatcher.noFableAccounts` | `[]` | Accounts whose workers never run Fable. Wins over model and fableAccounts. |
+| `dispatcher.fableMinWeeklyLeftPercent` | `50` | A worker may run Fable only while its account has at least this much of its week left (the Fable window aside), so a Fable allowance is spent before the rest of the week. |
+| `dispatcher.fableFloorPercent` | `null` | A worker may run Fable only while its account has this much of its Fable allowance left. null means headroomFloorPercent. |
+| `dispatcher.burnAccounts` | `[]` | Accounts used up first, for usage that would otherwise be lost: one listed here wins every ticket while it has burnFloorPercent left, ahead of the engines and the other accounts, on Fable while allowed unless it is in noFableAccounts. The primary account may be listed. |
+| `dispatcher.burnUntil` | `{}` | An end to one account's burn, as {"<label>": "<ISO time>"}: from then on it is ranked like any other account. |
+| `dispatcher.burnFloorPercent` | `2` | The usage a burn account keeps in both windows before it stops going first. |
 | `dispatcher.effort` | `"high"` | The reasoning effort every queue worker runs at (low, medium, high, xhigh, max). |
 | `dispatcher.permissionMode` | `null` | The Claude Code permission mode for queue workers and the red-main responder (fleet.sh dispatch --mode). null keeps fleet.sh's default, bypassPermissions, where a worker can run any command your user can. Run the queue under a user and on a machine where that is acceptable. A stricter mode (auto, acceptEdits) means workers may stop and wait at a prompt. |
 | `dispatcher.notify` | `true` | macOS notifications per transition. Linux hosts rely on Slack. |
