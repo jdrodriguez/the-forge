@@ -20,6 +20,7 @@ const opts = {
   environments: conf.linear.verifyEnvironments ?? ['staging', 'production'],
 };
 const AUTHORS = conf.linear.verifyEvidenceAuthors ?? [];
+const SCALE = (() => { const s = Number(process.env.FORGE_SLEEP_SCALE ?? 1); return Number.isFinite(s) && s >= 0 ? s : 1; })();
 const pr = process.argv[2];
 const repo = process.argv[3] || conf.github.repo;
 const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
@@ -38,19 +39,25 @@ const read = (id) => linear(`query($id:String!){issue(id:$id){id state{name type
 const viewerId = (await linear('query{viewer{id}}')).viewer.id;
 const accepted = (c) => Boolean(c.user?.id) && (c.user.id === viewerId || AUTHORS.includes(c.user.id));
 
+let missingState = false;
 async function settle(id, waitForIntegration) {
   // The integration's move lands a few seconds after the merge; wait up to two minutes for it on the first ticket.
   let issue;
   for (let i = 0; i < (waitForIntegration ? 8 : 1); i++) {
     issue = (await read(id)).issue;
     if (issue.state.type === 'completed') break;
-    if (waitForIntegration) await new Promise((r) => setTimeout(r, 15000 * Number(process.env.FORGE_SLEEP_SCALE ?? 1)));
+    if (waitForIntegration) await new Promise((r) => setTimeout(r, 15000 * SCALE));
   }
   if (issue.state.type !== 'completed') return console.log(`${id}: in ${issue.state.name}, left as is`);
   if (newestPassing(issue.comments.nodes, { ...opts, accepted, after: view.mergedAt })) {
     return console.log(`${id}: Done with passing verify evidence from after the merge, left as is`);
   }
-  const verifying = issue.team.states.nodes.find((s) => s.name === VERIFYING).id;
+  const verifying = issue.team.states.nodes.find((s) => s.name === VERIFYING)?.id;
+  if (!verifying) {
+    if (!missingState) console.error(`ERROR: the team has no workflow state named "${VERIFYING}" (linear.states.verifying); tickets left in Done`);
+    missingState = true;
+    return console.log(`${id}: left in ${issue.state.name}, no ${VERIFYING} state to move it to`);
+  }
   await linear(`mutation($id:String!,$s:String!){issueUpdate(id:$id,input:{stateId:$s}){success}}`, { id: issue.id, s: verifying });
   await linear(`mutation($id:String!,$b:String!){commentCreate(input:{issueId:$id,body:$b}){success}}`, {
     id: issue.id,
@@ -60,3 +67,4 @@ async function settle(id, waitForIntegration) {
 }
 
 for (const [i, id] of ids.entries()) await settle(id, i === 0);
+if (missingState) process.exitCode = 1;

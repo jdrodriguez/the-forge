@@ -9,8 +9,10 @@
 //
 // Approvals live in orchestrator.approvalsFile, one JSON line each, tied to the exact head they name: a new push needs a
 // new approval. Only the session in orchestrator.lockFile approves or merges, and the lock is read again right before
-// each merge, so a takeover during a run stops it. Environment: QUEUE_PROBE_PR=<n> lets that one PR past a CI hold,
-// MERGE_JUMP=1 sends the PRs to the front of the merge queue, FORGE_SLEEP_SCALE scales every wait (tests set 0).
+// each merge, so a takeover during a run stops it. A process with no CLAUDE_CODE_SESSION_ID (a shell, a script, CI)
+// skips the lock. PRs are tried in order and the run stops at the first one that does not pass, since a later PR may
+// be stacked on it. Environment: QUEUE_PROBE_PR=<n> lets that one PR past a CI hold, MERGE_JUMP=1 sends the PRs to the
+// front of the merge queue, FORGE_SLEEP_SCALE scales every wait (tests set 0).
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,7 +21,7 @@ import { approvalOf, approvedHeads, closeApprovals, recordApproval } from './app
 import { ciHold, checkGate, isDriver, policyFor } from './merge-policy.mjs';
 
 const cfg = loadConfig();
-const SCALE = Number(process.env.FORGE_SLEEP_SCALE ?? 1);
+const SCALE = (() => { const s = Number(process.env.FORGE_SLEEP_SCALE ?? 1); return Number.isFinite(s) && s >= 0 ? s : 1; })();
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms * SCALE);
 const SID = process.env.CLAUDE_CODE_SESSION_ID || '';
 const BY = SID || 'shell';
@@ -111,8 +113,18 @@ if (args[0] === '--all-approved') {
 }
 if (!args.length) { console.log(USAGE); process.exit(1); }
 
-const isFix = (p) => (p.labels ?? []).some((l) => l.name === (cfg.github.fixesMainLabel ?? 'fixes-main')) || String(p.title).startsWith('Revert "');
-const mainRed = () => { try { return JSON.parse(fs.readFileSync(path.join(cfg.paths.sharedDir, 'main-state.json'), 'utf8')).status === 'red'; } catch { return false; } };
+// A fix may merge past a red main or a CI hold: a PR with github.fixesMainLabel, or one whose title starts with
+// github.fixTitlePrefix when that is set.
+const FIX_LABEL = cfg.github.fixesMainLabel ?? 'fixes-main';
+const FIX_PREFIX = cfg.github.fixTitlePrefix || null;
+const isFix = (p) => (p.labels ?? []).some((l) => l.name === FIX_LABEL) || Boolean(FIX_PREFIX && String(p.title).startsWith(FIX_PREFIX));
+// 'red', 'green', or 'unknown' when main-state.json is missing or unreadable, which holds like red.
+const mainState = () => {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(cfg.paths.sharedDir, 'main-state.json'), 'utf8')).status;
+    return s === 'red' || s === 'green' ? s : 'unknown';
+  } catch { return 'unknown'; }
+};
 
 // The PR's migration files that the base branch does not have yet (github.repo only, with premerge.migrations set).
 const MIG = REPO === cfg.github.repo ? cfg.premerge?.migrations : null;
@@ -149,15 +161,20 @@ function gate(pr) {
   if (p.state === 'MERGED') { console.log(`MERGED #${pr} already`); afterMerge(pr); return 'merged'; }
   if (p.state !== 'OPEN') { console.log(`STOP at #${pr}: it is ${p.state}, not open`); return 'held'; }
   if (p.isDraft) { console.log(`STOP before #${pr}: it is a draft, held out of merging`); return 'held'; }
-  if (REPO === cfg.github.repo && mainRed()) {
-    if (!isFix(p)) { console.log(`STOP before #${pr}: main is red`); return 'held'; }
-    console.log(`main is red, but #${pr} fixes it (${cfg.github.fixesMainLabel ?? 'fixes-main'} label or a revert), so it may merge`);
+  const main = REPO === cfg.github.repo ? mainState() : 'green';
+  if (main !== 'green') {
+    const why = main === 'red' ? 'main is red' : `main's state is unknown (${path.join(cfg.paths.sharedDir, 'main-state.json')} is missing or unreadable; is main-watch running?)`;
+    if (!isFix(p)) { console.log(`STOP before #${pr}: ${why}`); return 'held'; }
+    console.log(`${why}, but #${pr} is a fix (${FIX_LABEL}), so it may merge`);
   }
-  if (hold) {
+  if (hold?.error) {
+    if (!isFix(p)) { console.log(`STOP before #${pr}: the CI hold could not be checked: ${hold.error}`); return 'held'; }
+    console.log(`the CI hold could not be checked (${hold.error}), but #${pr} is a fix, so it goes in`);
+  } else if (hold) {
     if (process.env.QUEUE_PROBE_PR === pr) {
       console.log(`the merge queue is held on '${hold.job}'; #${pr} goes in as the one probe (QUEUE_PROBE_PR), to give the hold a later run to read`);
     } else if (!isFix(p)) {
-      console.log(`PAUSED before #${pr}: the merge queue's last two runs (${hold.runs}) failed on job '${hold.job}'. Not enqueued; nothing goes in until a later merge-queue run passes that job. A fixes-main PR or a revert still goes in.`);
+      console.log(`PAUSED before #${pr}: the merge queue's last two runs (${hold.runs}) failed on job '${hold.job}'. Not enqueued; nothing goes in until a later merge-queue run passes that job. A fix (${FIX_LABEL}) still goes in.`);
       return 'held';
     } else {
       console.log(`the merge queue is held on '${hold.job}', but #${pr} fixes main, so it goes in`);
@@ -203,7 +220,9 @@ function gate(pr) {
   const mine = newMigrations(p);
   if (mine.length && policy.mode === 'queue') {
     const q = gql(`query{repository(${GQL_REPO}){mergeQueue(branch:"${BASE}"){entries(first:30){nodes{pullRequest{number files(first:100){nodes{path}}}}}}}}`);
-    const ahead = (q?.data?.repository?.mergeQueue?.entries?.nodes ?? [])
+    const entries = q?.data?.repository?.mergeQueue?.entries?.nodes;
+    if (!Array.isArray(entries)) { console.log(`STOP at #${pr}: the merge queue could not be read (gh failed), so its migration prefixes cannot be checked`); return 'held'; }
+    const ahead = entries
       .filter((n) => String(n.pullRequest.number) !== pr).flatMap((n) => n.pullRequest.files.nodes.map((f) => f.path))
       .filter((f) => f.startsWith(`${MIG.dir}/`));
     const prefix = (f) => path.basename(f).slice(0, MIG.prefixLength ?? path.basename(f).length);
@@ -241,7 +260,8 @@ function gate(pr) {
   // gh answers success without enqueuing when auto-merge is already on, so the entry is checked, and a PR that has
   // none is put in the queue directly. A repo with no merge queue reads MERGED here.
   const e = gql(`query{repository(${GQL_REPO}){pullRequest(number:${pr}){state mergeQueueEntry{state}}}}`)?.data?.repository?.pullRequest;
-  if (e?.state === 'MERGED') { console.log(`#${pr} merged at head ${short(head)}`); return 'queued'; }
+  if (!e) { console.log(`STOP at #${pr}: gh accepted the merge, but its queue entry could not be read (gh failed); check #${pr} by hand`); return 'held'; }
+  if (e.state === 'MERGED') { console.log(`#${pr} merged at head ${short(head)}`); return 'queued'; }
   if (!e?.mergeQueueEntry?.state) {
     // Auto-merge left on would land a later, unapproved push, so it is turned off when the PR does not go in.
     const refuse = (why) => { tryGh(['pr', 'merge', pr, '--repo', REPO, '--disable-auto']); console.log(`STOP at #${pr}: ${why}; auto-merge turned off`); return 'held'; };
@@ -268,22 +288,30 @@ function orderPrs(prs) {
 }
 
 renewLease();
+if (!policy.reviewChecks.length) console.log(`WARNING: no review check is configured for ${REPO} (merge.reviewChecks and github.reviewCheck are empty), so PRs merge without a passed review.`);
 if (!process.env.MERGE_JUMP && policy.mode === 'queue') {
   args = orderPrs(args);
   if (args.length > 1) console.log(`Enqueue order: ${args.map((n) => `#${n}`).join(' ')}`);
 }
 if (policy.mode === 'queue' && policy.ciHold) {
   hold = ciHold({ gh: json, ghText: tryGh, repo: REPO, workflow: cfg.github.ciWorkflow ?? 'CI', base: BASE });
-  if (hold) console.log(`MERGE QUEUE PAUSED: the last two merge-queue runs (${hold.runs}) failed on job '${hold.job}'. Only a fixes-main PR or a revert goes in until a later merge-queue run passes it.`);
+  if (hold?.error) console.log(`MERGE QUEUE HELD: ${hold.error}. Only a fix (${FIX_LABEL}) goes in.`);
+  else if (hold) console.log(`MERGE QUEUE PAUSED: the last two merge-queue runs (${hold.runs}) failed on job '${hold.job}'. Only a fix (${FIX_LABEL}) goes in until a later merge-queue run passes it.`);
 }
 
 let pending = [];
 const merged = [];
 const stopped = [];
-for (const pr of args) {
+for (const [i, pr] of args.entries()) {
   renewLease();
   const r = gate(pr);
   (r === 'queued' ? pending : r === 'merged' ? merged : stopped).push(pr);
+  if (r === 'held' && i < args.length - 1) {
+    const rest = args.slice(i + 1);
+    console.log(`not tried: ${rest.map((n) => `#${n}`).join(' ')} (the run stops at the first PR that does not pass)`);
+    stopped.push(...rest);
+    break;
+  }
 }
 
 // Watching the queue. A live entry is never an ejection, whatever its merge-group CI shows (a cancelled run means GitHub

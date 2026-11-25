@@ -24,19 +24,23 @@ export function readLedger({ file, repo, defaultRepo }) {
 
 const isMerged = (r) => r.merged === true || r.event === 'merged';
 
-// approvalOf(ledger, pr, head): the newest approval of the PR (of that head, when given), or null.
+// One rule for every reader: an approval stays open until a merged line for its PR comes after it. Nothing expires
+// by age.
+
+// approvalOf(ledger, pr, head): the newest open approval of the PR (of that head, when given), or null.
 export function approvalOf(ledger, pr, head) {
   let hit = null;
   for (const r of readLedger(ledger)) {
-    if (String(r.pr) !== String(pr) || isMerged(r) || (head && r.head !== head)) continue;
+    if (String(r.pr) !== String(pr)) continue;
+    if (isMerged(r)) { hit = null; continue; }
+    if (head && r.head !== head) continue;
     hit = r;
   }
   return hit && { ...hit, note: clean(hit.note) };
 }
 
-// approvedHeads(ledger, { days }): the newest approval of each PR not closed by a merge, from the last `days` days,
-// with its age as "3h05m" or "2d4h".
-export function approvedHeads(ledger, { days = 14, at = Date.now() } = {}) {
+// approvedHeads(ledger): the newest open approval of each PR, with its age as "3h05m" or "2d4h".
+export function approvedHeads(ledger, { at = Date.now() } = {}) {
   const newest = new Map();
   for (const r of readLedger(ledger)) {
     newest.delete(String(r.pr));
@@ -45,7 +49,7 @@ export function approvedHeads(ledger, { days = 14, at = Date.now() } = {}) {
   const out = [];
   for (const [pr, r] of newest) {
     const ms = at - Date.parse(r.approvedAt);
-    if (!(ms >= 0) || ms > days * 864e5) continue;
+    if (!(ms >= 0)) continue;
     const m = Math.floor(ms / 6e4);
     const age = m >= 1440 ? `${Math.floor(m / 1440)}d${Math.floor((m % 1440) / 60)}h` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
     out.push({ pr, head: r.head, age, by: clean(r.by), note: clean(r.note), approvedAt: r.approvedAt });

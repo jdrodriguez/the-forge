@@ -43,7 +43,9 @@
     "rerunLabel": "review:rerun",
     "rerunLabelNote": "merge-when-ready.sh adds this label once when the review check reads \"Re-review not requested\". null if your review bot re-runs on every push.",
     "fixesMainLabel": "fixes-main",
-    "fixesMainLabelNote": "A PR with this label (or a revert) may merge while main is red.",
+    "fixesMainLabelNote": "A PR with this label may merge while main is red or the merge queue is held.",
+    "fixTitlePrefix": null,
+    "fixTitlePrefixNote": "Optional title prefix that also marks a PR as a fix for merge-approved.sh, e.g. \"Revert \\\"\" for GitHub's revert PRs. null means only the label counts.",
     "branchTemplate": "agent/{id}",
     "branchTemplateNote": "The branch a worker builds on. {id} is the lowercased ticket ID, so ENG-123 builds on agent/eng-123."
   },
@@ -235,9 +237,9 @@
     "mode": "queue",
     "modeNote": "How merge-approved.sh lands a PR in github.repo: \"queue\" enqueues it in GitHub's merge queue and waits for it to land (a repo without a queue merges at once), \"direct\" squash-merges it.",
     "ciHold": true,
-    "ciHoldNote": "In queue mode, hold the merge queue when its two most recent finished runs failed on the same job, until a later run passes that job. A rollup job that fails only because another job did never counts. A fixes-main PR or a revert still goes in, and QUEUE_PROBE_PR=<n> lets one PR in to give the hold a new run to read.",
+    "ciHoldNote": "In queue mode, hold the merge queue when its two most recent finished runs failed on the same job, until a later run passes that job. A rollup job that fails only because another job did never counts. A fix (github.fixesMainLabel) still goes in, and QUEUE_PROBE_PR=<n> lets one PR in to give the hold a new run to read.",
     "reviewChecks": null,
-    "reviewChecksNote": "Check names that count as the passed review: one of them must pass, and once one has the others may read failed. null means [github.reviewCheck], or no review check when that is null.",
+    "reviewChecksNote": "Check names that count as the passed review: one of them must pass on the head, and none may have failed on it. null means [github.reviewCheck]. With both empty no review is required, and every run says so.",
     "reviewSupportChecks": [],
     "reviewSupportChecksNote": "Checks that only request or stamp the review, e.g. [\"request-review\"]. Their failure does not hold a PR once a review check passed.",
     "requiredChecks": [],
@@ -265,7 +267,7 @@
     },
     "reposNote": "Other repos merge-approved.sh --repo <owner/name> may merge, each with the keys above. A key an entry leaves out falls back to the top-level value. The pre-merge check, migration order, and the red-main hold apply only to github.repo. Leave it {} if the queue builds one repo."
   },
-  "mergeNote": "The gate merge-approved.sh applies to github.repo: not a draft, its current head approved, merge state CLEAN, HAS_HOOKS or UNSTABLE, every reported check passing, and the pre-merge check passing against current main.",
+  "mergeNote": "The gate merge-approved.sh applies to github.repo: not a draft, no approval on file for an older head (running the script on a PR with none is the approval), merge state CLEAN, HAS_HOOKS or UNSTABLE, at least one check reported and every one passing, and the pre-merge check passing against current main. It stops at the first PR that does not pass. A process without CLAUDE_CODE_SESSION_ID (a script, CI) skips the driver lock.",
 
   "push": {
     "gates": [

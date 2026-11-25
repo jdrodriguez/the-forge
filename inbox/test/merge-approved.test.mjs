@@ -18,7 +18,7 @@ const MERGED_POLL = '{"state":"MERGED","mergeQueueEntry":null,"timelineItems":{"
 const STALE_REMOVAL = { __typename: 'RemovedFromMergeQueueEvent', createdAt: '2020-01-01T00:00:00Z', reason: 'failed_checks' };
 const FRESH = (reason) => JSON.stringify({ state: 'OPEN', mergeQueueEntry: null, timelineItems: { nodes: [{ __typename: 'RemovedFromMergeQueueEvent', createdAt: '2099-01-01T00:00:00Z', reason }] } });
 
-function sandbox(merge = {}) {
+function sandbox(merge = {}, github = {}) {
   const t = fs.mkdtempSync(path.join(os.tmpdir(), 'merge-approved-'));
   const root = path.join(t, 'forge');
   for (const d of ['lib', 'inbox']) fs.cpSync(path.join(ROOT, d), path.join(root, d), { recursive: true, filter: (s) => !s.includes(`${path.sep}test`) });
@@ -51,7 +51,7 @@ fs.appendFileSync(process.env.FAKE + '/calls.log', 'to-verifying ' + process.arg
   fs.writeFileSync(path.join(root, 'inbox/lease.sh'), 'echo "lease $*" >> "$FAKE/calls.log"\n');
   fs.writeFileSync(path.join(shared, 'orchestrator-session'), 'test-driver\n');
   fs.writeFileSync(path.join(shared, 'main-state.json'), '{"status":"green"}');
-  const cfg = { ...EXAMPLE, repoPath: path.join(t, 'repo'), paths: { stateDir: state, sharedDir: shared }, merge: { ...EXAMPLE.merge, ...merge } };
+  const cfg = { ...EXAMPLE, repoPath: path.join(t, 'repo'), paths: { stateDir: state, sharedDir: shared }, github: { ...EXAMPLE.github, ...github }, merge: { ...EXAMPLE.merge, ...merge } };
   const configFile = path.join(t, 'config.json');
   fs.writeFileSync(configFile, JSON.stringify(cfg));
   const box = {
@@ -218,13 +218,13 @@ test('a migration file name a PR ahead in the queue already adds stops the PR', 
 const runs = (...r) => JSON.stringify(r.map(([id, conclusion, status = 'completed']) => ({ databaseId: id, status, conclusion, headBranch: `gh-readonly-queue/main/pr-${id}-x`, createdAt: '2026-01-01T00:00:00Z' })));
 const jobs = (box, id, list) => box.write(`jobs-${id}.json`, { jobs: Object.entries(list).map(([name, conclusion]) => ({ name, conclusion })) });
 
-test('the CI hold: two runs failing on the same job hold the queue, except a fix, a revert, or the probe', () => {
-  const box = sandbox();
+test('the CI hold: two runs failing on the same job hold the queue, except a fix (label or configured prefix) or the probe', () => {
+  const box = sandbox({}, { fixTitlePrefix: 'Revert "' });
   box.write('runs.json', runs([9, 'cancelled'], [8, '', 'in_progress'], [7, 'failure'], [6, 'failure'], [5, 'success']));
   jobs(box, 7, { lint: 'success', 'test-api (2/2)': 'failure' });
   jobs(box, 6, { lint: 'failure', 'test-api (2/2)': 'failure' });
   box.pr(301, A).pr(302, A, (p) => ({ ...p, labels: [{ name: 'fixes-main' }] })).pr(303, A, (p) => ({ ...p, title: 'Revert "something"' })).pr(304, A);
-  box.run(['301', '302', '303', '304'], { env: { QUEUE_PROBE_PR: '304' } });
+  box.run(['302', '303', '304', '301'], { env: { QUEUE_PROBE_PR: '304' } });
   assert.equal(box.rc, 1);
   has(box, "failed on job 'test-api (2/2)'");
   has(box, '(7 and 6)');
@@ -324,7 +324,7 @@ test('holds: a draft, a red main (except a fix), a conflict', () => {
   has(box, 'it is a draft');
   fs.writeFileSync(path.join(box.shared, 'main-state.json'), '{"status":"red"}');
   box.pr(502, A).pr(503, A, (p) => ({ ...p, labels: [{ name: 'fixes-main' }] }));
-  box.run(['502', '503']);
+  box.run(['503', '502']);
   has(box, 'STOP before #502: main is red');
   assert.equal(box.enqueued(), '503');
   fs.writeFileSync(path.join(box.shared, 'main-state.json'), '{"status":"green"}');
@@ -332,12 +332,14 @@ test('holds: a draft, a red main (except a fix), a conflict', () => {
   has(box, 'STOP at #505: merge state DIRTY');
 });
 
+const at = (m) => `2026-01-01T00:${String(m).padStart(2, '0')}:00Z`;
+
 test('review checks: any configured name counts, support checks are forgiven once it passed, a failed review stops', () => {
   const box = sandbox({ reviewChecks: ['Claude Code Review', 'Claude Code Review verdict'], reviewSupportChecks: ['request-review'] });
-  box.pr(507, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }, { name: 'Claude Code Review', conclusion: 'FAILURE' }, { name: 'Claude Code Review verdict', conclusion: 'SUCCESS' }, { name: 'request-review', conclusion: 'FAILURE' }] }));
+  box.pr(507, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }, { name: 'Claude Code Review', conclusion: 'FAILURE', startedAt: at(1) }, { name: 'Claude Code Review', conclusion: 'SUCCESS', startedAt: at(5) }, { name: 'Claude Code Review verdict', conclusion: 'SUCCESS' }, { name: 'request-review', conclusion: 'FAILURE' }] }));
   box.run(['507']);
   assert.equal(box.rc, 0, box.out);
-  assert.equal(box.enqueued(), '507');
+  assert.equal(box.enqueued(), '507', 'an older failure superseded by a newer pass of the same check does not hold it');
   box.pr(508, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }, { name: 'Claude Code Review verdict', conclusion: 'FAILURE' }, { name: 'request-review', conclusion: 'FAILURE' }] }));
   box.run(['508']);
   has(box, 'STOP at #508: review not passed (Claude Code Review or Claude Code Review verdict)');
@@ -514,4 +516,104 @@ test('a lock that exists but cannot be read refuses every Claude Code session', 
   fs.rmdirSync(path.join(box.shared, 'orchestrator-session'));
   box.run(['150']);
   assert.equal(box.rc, 0, 'no lock at all means no takeover yet');
+});
+
+test('a review check that failed on this head stops the PR, even with an older pass or another review check passing', () => {
+  const box = sandbox({ reviewChecks: ['Claude Code Review', 'Claude Code Review verdict'] });
+  box.pr(520, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }, { name: 'Claude Code Review', conclusion: 'SUCCESS', startedAt: at(1) }, { name: 'Claude Code Review', conclusion: 'FAILURE', startedAt: at(5) }] }));
+  box.run(['520']);
+  has(box, 'STOP at #520: review not passed');
+  box.pr(521, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }, { name: 'Claude Code Review', conclusion: 'FAILURE' }, { name: 'Claude Code Review verdict', conclusion: 'SUCCESS' }] }));
+  box.run(['521']);
+  has(box, 'STOP at #521: check(s) failing or pending: Claude Code Review');
+  assert.equal(box.enqueued(), '');
+});
+
+test('a revert title is a fix only when github.fixTitlePrefix is set', () => {
+  const box = sandbox();
+  fs.writeFileSync(path.join(box.shared, 'main-state.json'), '{"status":"red"}');
+  box.pr(530, A, (p) => ({ ...p, title: 'Revert "something"' })).run(['530']);
+  has(box, 'STOP before #530: main is red');
+  assert.equal(box.enqueued(), '');
+});
+
+test('a missing or unreadable main-state.json holds every PR but a fix', () => {
+  const box = sandbox().pr(540, A).pr(541, A, (p) => ({ ...p, labels: [{ name: 'fixes-main' }] }));
+  fs.rmSync(path.join(box.shared, 'main-state.json'));
+  box.run(['540']);
+  has(box, "STOP before #540: main's state is unknown");
+  fs.writeFileSync(path.join(box.shared, 'main-state.json'), '{not json');
+  box.run(['540']);
+  has(box, "STOP before #540: main's state is unknown");
+  box.run(['541']);
+  assert.equal(box.enqueued(), '541');
+});
+
+test('merge-queue runs or jobs gh cannot read hold the queue', () => {
+  const box = sandbox().pr(550, A);
+  box.write('runs-fail', '');
+  box.run(['550']);
+  has(box, 'MERGE QUEUE HELD: the merge-queue runs could not be read');
+  has(box, 'STOP before #550: the CI hold could not be checked');
+  fs.rmSync(path.join(box.fake, 'runs-fail'));
+  box.write('runs.json', runs([7, 'failure'], [6, 'failure']));
+  box.write('jobs-fail', '');
+  box.run(['550']);
+  has(box, 'the jobs of merge-queue run 7 could not be read');
+  assert.equal(box.enqueued(), '');
+});
+
+test('a merge queue gh cannot read holds a PR that adds a migration', () => {
+  const box = sandbox().pr(560, A, (p) => ({ ...p, files: [{ path: 'migrations/20261125000001_x.sql' }] }));
+  box.write('queue-fail', '');
+  box.run(['560']);
+  has(box, 'STOP at #560: the merge queue could not be read');
+  assert.equal(box.enqueued(), '');
+});
+
+test('a queue entry gh cannot read after the merge stops the PR with a reason', () => {
+  const box = sandbox().pr(570, A);
+  box.write('entry-fail', '');
+  box.run(['570']);
+  has(box, 'STOP at #570: gh accepted the merge, but its queue entry could not be read');
+  assert.ok(!box.calls().includes('timelineItems'), 'not watched as queued');
+});
+
+test('the run stops at the first PR that does not pass', () => {
+  const box = sandbox().pr(580, A, (p) => ({ ...p, mergeStateStatus: 'DIRTY' })).pr(581, A);
+  box.run(['580', '581']);
+  assert.equal(box.rc, 1);
+  has(box, 'not tried: #581');
+  has(box, 'NOT MERGED: #580 #581');
+  assert.equal(box.enqueued(), '');
+  assert.ok(!box.calls().includes('pr view 581 --repo your-org/your-app --json state,isDraft'), '#581 never reaches the gate');
+});
+
+test('with no review check configured every run warns, and a PR with no checks at all is held', () => {
+  const box = sandbox({}, { reviewCheck: null }).pr(590, A, (p) => ({ ...p, statusCheckRollup: [] }));
+  box.run(['590']);
+  has(box, 'WARNING: no review check is configured');
+  has(box, 'STOP at #590: no checks reported on this head');
+  box.pr(591, A, (p) => ({ ...p, statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }] })).run(['591']);
+  assert.equal(box.enqueued(), '591');
+});
+
+test('a merged line closes earlier approvals for every reader', () => {
+  const box = sandbox().pr(595, B);
+  box.approve(595, A, 'before the merge');
+  fs.appendFileSync(box.approvals, `${JSON.stringify({ pr: 595, head: A, event: 'merged', merged: true, at: new Date().toISOString() })}\n`);
+  box.run(['595']);
+  has(box, 'no approval on file');
+  box.run(['--approved']);
+  lacks(box, 'before the merge');
+});
+
+test('the lock is read again before a direct enqueue when gh left no queue entry', () => {
+  const box = sandbox().pr(596, A);
+  box.write('entry-596.json', { state: 'OPEN', mergeQueueEntry: null });
+  box.write('hook.cjs', `module.exports = (a) => { const q = a.find((x) => x.startsWith('query=')) ?? ''; if (q.includes('mergeQueueEntry{state}}}}')) require('fs').writeFileSync('${box.shared}/orchestrator-session', 'other-session\\n'); };`);
+  box.run(['596']);
+  has(box, 'STOP at #596: this session lost the orchestrator lock during the run (driver is now other-session); auto-merge turned off');
+  assert.equal(box.enqueued(), '596', 'no direct enqueue');
+  assert.match(box.calls(), /gh pr merge 596 --repo your-org\/your-app --disable-auto/);
 });

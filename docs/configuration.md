@@ -43,7 +43,8 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 | `github.ciWorkflow` | `"CI"` | The workflow name the pre-merge check and the main watcher read. |
 | `github.reviewCheck` | `"Claude Code Review"` | The status check that must pass before a PR counts as green. null skips the review check. |
 | `github.rerunLabel` | `"review:rerun"` | merge-when-ready.sh adds this label once when the review check reads "Re-review not requested". null if your review bot re-runs on every push. |
-| `github.fixesMainLabel` | `"fixes-main"` | A PR with this label (or a revert) may merge while main is red. |
+| `github.fixesMainLabel` | `"fixes-main"` | A PR with this label may merge while main is red or the merge queue is held. |
+| `github.fixTitlePrefix` | `null` | Optional title prefix that also marks a PR as a fix for merge-approved.sh, e.g. "Revert \"" for GitHub's revert PRs. null means only the label counts. |
 | `github.branchTemplate` | `"agent/{id}"` | The branch a worker builds on. {id} is the lowercased ticket ID, so ENG-123 builds on agent/eng-123. |
 
 ## `linear`
@@ -119,13 +120,13 @@ Copy agent-queue.config.example.json to agent-queue.config.json (gitignored) and
 
 ## `merge`
 
-The gate merge-approved.sh applies to github.repo: not a draft, its current head approved, merge state CLEAN, HAS_HOOKS or UNSTABLE, every reported check passing, and the pre-merge check passing against current main.
+The gate merge-approved.sh applies to github.repo: not a draft, no approval on file for an older head (running the script on a PR with none is the approval), merge state CLEAN, HAS_HOOKS or UNSTABLE, at least one check reported and every one passing, and the pre-merge check passing against current main. It stops at the first PR that does not pass. A process without CLAUDE_CODE_SESSION_ID (a script, CI) skips the driver lock.
 
 | Key | Example | What it does |
 |---|---|---|
 | `merge.mode` | `"queue"` | How merge-approved.sh lands a PR in github.repo: "queue" enqueues it in GitHub's merge queue and waits for it to land (a repo without a queue merges at once), "direct" squash-merges it. |
-| `merge.ciHold` | `true` | In queue mode, hold the merge queue when its two most recent finished runs failed on the same job, until a later run passes that job. A rollup job that fails only because another job did never counts. A fixes-main PR or a revert still goes in, and QUEUE_PROBE_PR=<n> lets one PR in to give the hold a new run to read. |
-| `merge.reviewChecks` | `null` | Check names that count as the passed review: one of them must pass, and once one has the others may read failed. null means [github.reviewCheck], or no review check when that is null. |
+| `merge.ciHold` | `true` | In queue mode, hold the merge queue when its two most recent finished runs failed on the same job, until a later run passes that job. A rollup job that fails only because another job did never counts. A fix (github.fixesMainLabel) still goes in, and QUEUE_PROBE_PR=<n> lets one PR in to give the hold a new run to read. |
+| `merge.reviewChecks` | `null` | Check names that count as the passed review: one of them must pass on the head, and none may have failed on it. null means [github.reviewCheck]. With both empty no review is required, and every run says so. |
 | `merge.reviewSupportChecks` | `[]` | Checks that only request or stamp the review, e.g. ["request-review"]. Their failure does not hold a PR once a review check passed. |
 | `merge.requiredChecks` | `[]` | Checks that must have passed, besides every reported check passing. Use it for a check that may not have reported yet. |
 | `merge.ignoreChecks` | `[]` | Regex sources for checks left out of the gate entirely, e.g. a preview deploy that fails on forks. |

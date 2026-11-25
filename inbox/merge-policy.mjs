@@ -28,6 +28,7 @@ export function isDriver(lockFile, sessionId) {
 
 const nameOf = (c) => c.name ?? c.context ?? '';
 const resultOf = (c) => c.conclusion || c.state || '';
+const timeOf = (c) => { const t = Date.parse(c.startedAt || c.completedAt || ''); return t > 0 ? t : 0; };
 const OK = ['SUCCESS', 'SKIPPED', 'NEUTRAL'];
 
 // checkGate(pr, policy): null when the PR may merge, else why not. pr carries mergeStateStatus and statusCheckRollup
@@ -38,16 +39,20 @@ export function checkGate(pr, policy) {
   if (!states.includes(pr.mergeStateStatus)) return `merge state ${pr.mergeStateStatus}`;
   const ignored = policy.ignoreChecks.map((rx) => new RegExp(rx));
   const all = (pr.statusCheckRollup ?? []).filter((c) => !ignored.some((rx) => rx.test(nameOf(c))));
-  const passed = (n) => all.some((c) => nameOf(c) === n && resultOf(c) === 'SUCCESS');
+  if (!all.length) return 'no checks reported on this head';
+  // A run counts only while no newer run of the same check exists on the head, so an older pass never hides a newer
+  // failure, and an older failure or cancellation is superseded by a newer run.
+  const newest = all.filter((c) => !all.some((o) => o !== c && nameOf(o) === nameOf(c) && timeOf(o) > timeOf(c)));
+  const passed = (n) => newest.some((c) => nameOf(c) === n && resultOf(c) === 'SUCCESS');
   for (const n of policy.requiredChecks) if (!passed(n)) return `${n} not passed`;
   const reviewed = policy.reviewChecks.some(passed);
   if (policy.reviewChecks.length && !reviewed) return `review not passed (${policy.reviewChecks.join(' or ')})`;
-  // A cancelled run with a later run of the same check is superseded. A review support check (one that requests or
-  // stamps the review) does not count once a review check passed.
-  const superseded = (c) => resultOf(c) === 'CANCELLED' && all.some((o) => o !== c && nameOf(o) === nameOf(c) && resultOf(o) !== 'CANCELLED');
+  // Two runs with the same time: a cancelled one is superseded by the other. A review support check (one that requests
+  // or stamps the review) does not count once a review check passed. A review check that failed on this head always
+  // stops the PR, even when another review check passed.
+  const superseded = (c) => resultOf(c) === 'CANCELLED' && newest.some((o) => o !== c && nameOf(o) === nameOf(c) && resultOf(o) !== 'CANCELLED');
   const support = (c) => reviewed && policy.reviewSupportChecks.includes(nameOf(c));
-  const alternateReview = (c) => reviewed && policy.reviewChecks.includes(nameOf(c));
-  const bad = all.filter((c) => !OK.includes(resultOf(c)) && !superseded(c) && !support(c) && !alternateReview(c));
+  const bad = newest.filter((c) => !OK.includes(resultOf(c)) && !superseded(c) && !support(c));
   return bad.length ? `check(s) failing or pending: ${[...new Set(bad.map(nameOf))].join(', ')}` : null;
 }
 
@@ -89,16 +94,20 @@ export function rootFailures(failed, { closure, nameToId }) {
 
 // ciHold({ gh, ghText, repo, workflow, base }): when the two most recent finished merge-queue runs failed on the same
 // root job, and no newer run passed it, returns { job, runs }; else null. Cancelled and unfinished runs are skipped: a
-// cancelled run is a rebuilt group. gh(args) returns parsed JSON or null; ghText(args) returns text or null.
+// cancelled run is a rebuilt group. When the runs cannot be read it returns { error }, which holds the queue too.
+// gh(args) returns parsed JSON or null; ghText(args) returns text or null. Without the workflow's YAML every failed
+// job counts as a root failure.
 export function ciHold({ gh, ghText, repo, workflow, base }) {
   const needs = ciNeeds(ghText(['workflow', 'view', workflow, '--repo', repo, '--ref', base, '--yaml']) ?? '');
-  const runs = (gh(['run', 'list', '--repo', repo, '--workflow', workflow, '--event', 'merge_group', '--limit', '30', '--json', 'databaseId,status,conclusion']) ?? [])
-    .filter((r) => r.status === 'completed' && ['success', 'failure'].includes(r.conclusion));
+  const listed = gh(['run', 'list', '--repo', repo, '--workflow', workflow, '--event', 'merge_group', '--limit', '30', '--json', 'databaseId,status,conclusion']);
+  if (!Array.isArray(listed)) return { error: 'the merge-queue runs could not be read (gh failed)' };
+  const runs = listed.filter((r) => r.status === 'completed' && ['success', 'failure'].includes(r.conclusion));
   let prev = null;
   const newerPassed = new Set();
   for (const [i, r] of runs.entries()) {
     if (r.conclusion === 'success' || i >= 8) break;
-    const jobs = gh(['run', 'view', String(r.databaseId), '--repo', repo, '--json', 'jobs'])?.jobs ?? [];
+    const jobs = gh(['run', 'view', String(r.databaseId), '--repo', repo, '--json', 'jobs'])?.jobs;
+    if (!Array.isArray(jobs)) return { error: `the jobs of merge-queue run ${r.databaseId} could not be read (gh failed)` };
     const failed = rootFailures(jobs.filter((j) => j.conclusion === 'failure').map((j) => j.name), needs);
     const passed = jobs.filter((j) => j.conclusion === 'success').map((j) => j.name);
     if (prev) {

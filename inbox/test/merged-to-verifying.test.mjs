@@ -1,7 +1,7 @@
 // merged-to-verifying.mjs, run as a subprocess with a stub gh first on PATH and fetch stubbed by a preload, so nothing
 // reaches GitHub or Linear. Each case is one ticket in Done and the comments on it.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,7 +22,7 @@ const FAIL_ROW = '| 1. signs in | FAIL | [s](https://uploads.linear.app/x) |';
 const GOOD = table(PASS_ROW) + footer;
 
 // run(comments, { authors, repo }): runs the helper on PR 1 (ENG-9001); returns { out, moved, ghArgs }.
-function run(comments, { authors = [LISTED], repo } = {}) {
+function run(comments, { authors = [LISTED], repo, states = [{ id: 'st-verifying', name: 'Verifying' }] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'm2v-'));
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
@@ -31,7 +31,7 @@ function run(comments, { authors = [LISTED], repo } = {}) {
   fs.chmodSync(path.join(bin, 'gh'), 0o755);
   const configFile = path.join(dir, 'config.json');
   fs.writeFileSync(configFile, JSON.stringify({ ...EXAMPLE, linear: { ...EXAMPLE.linear, verifyEvidenceAuthors: authors } }));
-  const issue = { id: 'issue-1', state: { name: 'Done', type: 'completed' }, team: { states: { nodes: [{ id: 'st-verifying', name: 'Verifying' }] } }, comments: { nodes: comments } };
+  const issue = { id: 'issue-1', state: { name: 'Done', type: 'completed' }, team: { states: { nodes: states } }, comments: { nodes: comments } };
   const log = path.join(dir, 'mutations.log');
   fs.writeFileSync(path.join(dir, 'stub.mjs'), `import fs from 'node:fs';
 globalThis.fetch = async (_url, opts) => {
@@ -42,14 +42,15 @@ globalThis.fetch = async (_url, opts) => {
   else { fs.appendFileSync('${log}', query.includes('issueUpdate') ? 'move\\n' : 'comment\\n'); data = {}; }
   return { json: async () => ({ data }) };
 };`);
-  const out = execFileSync(process.execPath, ['--import', path.join(dir, 'stub.mjs'), path.join(ROOT, 'inbox/merged-to-verifying.mjs'), '1', ...(repo ? [repo] : [])], {
+  const r = spawnSync(process.execPath, ['--import', path.join(dir, 'stub.mjs'), path.join(ROOT, 'inbox/merged-to-verifying.mjs'), '1', ...(repo ? [repo] : [])], {
     encoding: 'utf8',
     env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, LINEAR_API_KEY: 'test', HOME: dir, AGENT_QUEUE_CONFIG: configFile, FORGE_SLEEP_SCALE: '0' },
   });
+  const out = r.stdout;
   const moved = fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('move');
   const ghArgs = fs.readFileSync(path.join(dir, 'gh-args'), 'utf8');
   fs.rmSync(dir, { recursive: true, force: true });
-  return { out, moved, ghArgs };
+  return { out, moved, ghArgs, err: r.stderr, status: r.status };
 }
 const c = (body, user, createdAt = AFTER) => ({ body, createdAt, user: user ? { id: user } : null });
 
@@ -93,4 +94,16 @@ test('the newest accepted evidence wins', () => {
 test('reads the PR from the repo it is given, else github.repo', () => {
   assert.match(run([c(GOOD, VIEWER)]).ghArgs, /--repo your-org\/your-app/);
   assert.match(run([c(GOOD, VIEWER)], { repo: 'your-org/your-site' }).ghArgs, /--repo your-org\/your-site/);
+});
+
+test('a team with no Verifying state is one clear error, and every ticket is still reported', () => {
+  const r = run([c(table(FAIL_ROW) + footer, VIEWER)], { states: [{ id: 'x', name: 'Done' }] });
+  assert.equal(r.moved, false);
+  assert.equal(r.status, 1);
+  assert.match(r.err, /ERROR: the team has no workflow state named "Verifying"/);
+  assert.match(r.out, /ENG-9001: left in Done, no Verifying state/);
+});
+
+test('the footer counts only at the end of the comment', () => {
+  assert.equal(run([c(`## Verify evidence\n${footer}\n\n| Scenario | Result | Evidence |\n| --- | --- | --- |\n${PASS_ROW}\n`, VIEWER)]).moved, true);
 });
