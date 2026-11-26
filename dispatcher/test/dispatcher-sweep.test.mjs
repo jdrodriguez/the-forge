@@ -78,6 +78,10 @@ test('an Agent tool worktree with commits on no remote is kept and asked about a
   const mem = JSON.parse(fs.readFileSync(memFile, 'utf8'));
   mem.lastRun = new Date(Date.now() - 25 * 3.6e6).toISOString();
   fs.writeFileSync(memFile, JSON.stringify(mem));
+  // A new commit before the next sweep moves HEAD; the branch is still asked about only once.
+  fs.writeFileSync(path.join(agent, 'more.txt'), 'm');
+  git(agent, 'add', '.');
+  git(agent, 'commit', '-q', '-m', 'more');
   tick(box, GIT_ENV);
   assert.equal(lines(box, 'asks').filter((l) => /agent-ab95bd8f5c32d2c61/.test(l)).length, 1, 'asked once');
 });
