@@ -2150,11 +2150,13 @@ async function worktreeSweep(st) {
       log(`${label}${dry ? ' (dry run, nothing changed)' : ''}: ${n('removed')} ${dry ? 'would be ' : ''}removed, ${n('trashed')} orphan(s) ${dry ? 'would be ' : ''}trashed, ${atRiskNow.length} at risk, ${n('kept') - atRiskNow.length} kept, of ${out.results.length}`);
       for (const r of out.results) if (r.would || r.action !== 'kept' || r.atRisk) log(`  ${r.would ? `would be ${r.would}` : r.action}${r.atRisk ? ' AT RISK' : ''}: ${r.name} [${r.branch ?? '-'}] ${r.reason}`);
       // since is the first sweep that saw this worktree at risk at its current HEAD. A reused path whose HEAD moved starts
-      // over, so the ask's age is never older than the work. A record saved without a head keeps its since and asked.
+      // over, so the ask's age is never older than the work. A record saved without a head keeps its since and asked. An
+      // Agent tool worktree is asked about once, at its first unpushed commit, not again at each new one.
       for (const r of atRiskNow) {
         const was = mem.atRisk?.[r.path];
         const same = was && (!('head' in was) || (r.head ?? null) === was.head);
-        atRisk[r.path] = { since: same ? was.since : iso(), asked: same ? was.asked ?? null : null, head: r.head ?? null, reason: r.reason, rule: r.rule };
+        const askedOnce = r.rule === 'agent-unpushed' && was?.rule === 'agent-unpushed';
+        atRisk[r.path] = { since: same ? was.since : iso(), asked: same || askedOnce ? was.asked ?? null : null, head: r.head ?? null, reason: r.reason, rule: r.rule };
       }
       // A folder in the worktrees folder that is not this repo's (a scratch folder, another repo's worktree) is reported
       // once and left alone. Clones are counted by rule, for the dry run.

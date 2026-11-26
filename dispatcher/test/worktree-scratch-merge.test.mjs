@@ -57,6 +57,32 @@ function premergeLike(repo, name, { evil = false } = {}) {
   }
   return wt;
 }
+// Two pushed branches that conflict in conflict.txt's first line, and also change other lines apart. A worktree at
+// conflict-a merges conflict-b, keeps conflict-a's first line and both sides' other changes: every hunk matches one
+// parent, so `git diff-tree --cc` prints nothing, yet the tree is a resolution only this worktree holds.
+function handResolved(repo, name) {
+  git(repo, 'checkout', '-q', '-b', 'conflict-base', 'origin/main');
+  commit(repo, 'conflict.txt', 'one\n2\n3\n4\n5\n6\n7\nlast\n');
+  git(repo, 'push', '-q', 'origin', 'conflict-base');
+  git(repo, 'checkout', '-q', '-b', 'conflict-a');
+  commit(repo, 'conflict.txt', 'one-a\n2\n3\n4\n5\n6\n7\nlast\n');
+  git(repo, 'push', '-q', 'origin', 'conflict-a');
+  git(repo, 'checkout', '-q', '-b', 'conflict-b', 'conflict-base');
+  commit(repo, 'conflict.txt', 'one-b\n2\n3\n4\n5\n6\n7\nlast-b\n');
+  git(repo, 'push', '-q', 'origin', 'conflict-b');
+  git(repo, 'checkout', '-q', 'main');
+  git(repo, 'fetch', '-q', 'origin');
+  const wt = path.join(repo, '.claude/worktrees', name);
+  git(repo, 'worktree', 'add', '-q', '--detach', wt, 'origin/conflict-a');
+  try {
+    git(wt, 'merge', '-q', '--no-edit', '--no-ff', 'origin/conflict-b');
+  } catch { /* the conflict, resolved below */ }
+  fs.writeFileSync(path.join(wt, 'conflict.txt'), 'one-a\n2\n3\n4\n5\n6\n7\nlast-b\n');
+  git(wt, 'add', 'conflict.txt');
+  git(wt, 'commit', '-q', '--no-edit');
+  assert.equal(git(wt, 'diff-tree', '--cc', '--no-commit-id', 'HEAD'), '', 'the resolution hides from --cc');
+  return wt;
+}
 const atRisk = (repo, wt) => classifyWorktree(wt, { repo, dirs: [], fetch: false });
 
 test('the default scratch name is the folder premerge-check.mjs uses for its scratch worktree', () => {
@@ -137,7 +163,28 @@ test('an Agent tool worktree whose only unsaved commit is a pure merge is not as
   const { repo } = setup();
   const wt = premergeLike(repo, 'agent-0123456789abcdef0');
   const r = sweepRepo({ repo, prs: {}, dirs: [], fetch: false, dryRun: true }).results.find((x) => x.name === 'agent-0123456789abcdef0');
-  assert.notEqual(r.rule, 'agent-unpushed', r.reason);
+  assert.equal(r.rule, 'agent-recent', r.reason);
   assert.ok(!r.atRisk, r.reason);
+  assert.ok(fs.existsSync(wt));
+});
+
+test('a hand-resolved conflict that diff-tree --cc does not show is still work, and the repo gains no objects', () => {
+  const { repo } = setup();
+  const wt = handResolved(repo, 'resolved');
+  const objects = () => git(repo, 'count-objects', '-v');
+  const before = objects();
+  const r = atRisk(repo, wt);
+  assert.equal(r.atRisk, true, r.reason);
+  assert.match(r.reason, /1 commit\(s\) on no remote branch/);
+  assert.equal(objects(), before, 'replaying the merge wrote nothing into the repo');
+});
+
+test('an idle detached Agent tool worktree holding a hand-resolved conflict is kept and asked about', () => {
+  const { repo } = setup();
+  const wt = handResolved(repo, 'agent-fedcba9876543210f');
+  const r = sweepRepo({ repo, prs: {}, dirs: [], fetch: false, agent: { idleDays: 0 } }).results.find((x) => x.name === 'agent-fedcba9876543210f');
+  assert.equal(r.rule, 'agent-unpushed', r.reason);
+  assert.equal(r.action, 'kept');
+  assert.ok(r.atRisk);
   assert.ok(fs.existsSync(wt));
 });

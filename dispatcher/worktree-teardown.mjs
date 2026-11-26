@@ -58,7 +58,7 @@ export const SCANNERS = ['/queue-board/', '/dispatcher.mjs'];
 // sweep never removes or trashes one, or its <name>.lock, and never counts it at risk. worktreeCleanup.scratchWorktrees
 // replaces this list.
 export const SCRATCH_WORKTREES = ['premerge-check'];
-const READ_ONLY_GIT = new Set(['status', 'rev-parse', 'rev-list', 'log', 'ls-files', 'merge-base', 'cat-file', 'for-each-ref', 'show-ref', 'diff', 'diff-tree']);
+const READ_ONLY_GIT = new Set(['status', 'rev-parse', 'rev-list', 'log', 'ls-files', 'merge-base', 'cat-file', 'for-each-ref', 'show-ref', 'diff']);
 const rebuildableList = (list) => (Array.isArray(list) && list.length && list.every((x) => typeof x === 'string' && x) ? list : REBUILDABLE_IGNORED);
 const globRx = (g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '[^/]*').replaceAll('?', '[^/]')}$`);
 // The clone modes worktreeCleanup.clones takes.
@@ -424,18 +424,36 @@ function unsavedCount(dir, refs) {
     const text = fs.readFileSync(path.join(git(dir, ['rev-parse', '--absolute-git-dir']), 'logs/HEAD'), 'utf8');
     logged = text.split('\n').flatMap((l) => l.split(' ').slice(0, 2)).filter((h) => /^[0-9a-f]{40,64}$/.test(h) && !/^0+$/.test(h));
   } catch { /* no reflog */ }
-  const listed = execFileSync('git', ['--no-optional-locks', '-C', dir, 'rev-list', '--parents', '--stdin', 'HEAD'],
-    { encoding: 'utf8', input: [...new Set(logged)].concat(refs.map((r) => `^${r}`)).join('\n'), timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 });
-  return workCount(dir, listed);
+  return workCount(dir, historyGit(dir, ['rev-list', '--parents', '--stdin', 'HEAD'], [...new Set(logged)].concat(refs.map((r) => `^${r}`)).join('\n')));
 }
+// History as committed: no replace refs, and no lazy fetch of a missing object in a partial clone (a missing object
+// fails the read, which counts as work).
+const historyGit = (dir, args, input = '', env = {}) => execFileSync('git', ['--no-optional-locks', '--no-replace-objects', '-C', dir, ...args],
+  { encoding: 'utf8', input, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', ...env }, timeout: 120_000,
+    stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 }).trim();
 // Commits only here that hold work, from `rev-list --parents` output: every listed commit except a pure merge. A pure
-// merge has two or more parents, none of them listed (so each is on a saved ref), and no change beyond what its parents
-// hold (`diff-tree --cc` prints nothing, as for any merge git made without a conflict). premerge-check.mjs makes one when
-// it merges main into a PR head; both sides are on GitHub, so removing it loses nothing.
+// merge has two parents, neither listed (so both are on a saved ref), and the exact tree git makes when it merges them
+// with no conflict. premerge-check.mjs makes one when it merges main into a PR head; both sides are on GitHub, so
+// removing it loses nothing. A hand-resolved conflict, or any edit in the merge, gives another tree and counts as work.
 function workCount(dir, listed) {
   const rows = listed.split('\n').filter(Boolean).map((l) => l.split(' '));
   const here = new Set(rows.map(([sha]) => sha));
-  return rows.filter(([sha, ...parents]) => !(parents.length > 1 && parents.every((p) => !here.has(p)) && git(dir, ['diff-tree', '--cc', '--no-commit-id', sha]) === '')).length;
+  return rows.filter(([sha, ...parents]) => !(parents.length === 2 && parents.every((p) => !here.has(p)) && replaysClean(dir, sha, parents))).length;
+}
+// Merges the two parents again with `git merge-tree --write-tree` and compares the tree. The trees it writes go to a
+// temporary object folder that reads this repo's objects as an alternate, so the repo itself is never written.
+function replaysClean(dir, sha, [a, b]) {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-merge-replay-'));
+  try {
+    const objects = path.resolve(dir, historyGit(dir, ['rev-parse', '--git-common-dir']), 'objects');
+    const tree = historyGit(dir, ['merge-tree', '--write-tree', '--no-messages', a, b], '',
+      { GIT_OBJECT_DIRECTORY: scratch, GIT_ALTERNATE_OBJECT_DIRECTORIES: objects }).split('\n')[0];
+    return tree === historyGit(dir, ['rev-parse', `${sha}^{tree}`]);
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 }
 // Days since anything in a worktree changed: its files (node_modules left out) and its git metadata (HEAD, index, reflog).
 function idleDays(dir) {
@@ -499,7 +517,7 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
   }
   if (used) return { ...meta, verdict: 'keep', transient: true, rule: 'process', reason: 'a process has its working folder inside' };
   const head = git(wtPath, ['rev-parse', 'HEAD']);
-  const onlyHere = workCount(wtPath, git(wtPath, ['rev-list', '--parents', 'HEAD', '--not', '--remotes']));
+  const onlyHere = workCount(wtPath, historyGit(wtPath, ['rev-list', '--parents', 'HEAD', '--not', '--remotes']));
   const openPr = pr?.state === 'OPEN';
   const finished = ['MERGED', 'CLOSED'].includes(pr?.state);
   // git worktree remove deletes ignored files too, and untracked ones a person's config hides from status. Only
