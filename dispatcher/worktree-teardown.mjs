@@ -268,11 +268,15 @@ function statusEntries(dir) {
 // Whether a path is one of folders or inside one.
 const inside = (folders) => (f) => folders.some((d) => f.replace(/\/$/, '') === d || f.startsWith(`${d}/`));
 const WALK_CAP = 5000; // files read under one collapsed ignored folder before it simply counts as unsafe
-// The keep folders a checkout holds with something in them, as paths from its root. A keepFolders pattern is a path from
-// the root, with a glob only in its last part (packages/web/.visual-gate-*).
+// The keep folders a checkout holds with something in them, as paths from its root. A keepFolders pattern with a slash
+// is a path from the root, with a glob only in its last part (packages/web/.visual-gate-*). One without a slash
+// (.visual-gate-*) names a folder with that name at any depth, found in git's untracked and ignored listings, so a
+// folder inside a collapsed ignored folder is not seen (that folder then counts by its own name). A keep folder inside
+// another one is left to the outer copy.
 export function keptFolders(dir, keep = KEEP_FOLDERS) {
   const found = [];
-  for (const pat of keepList(keep).map((g) => g.replace(/\/$/, ''))) {
+  const list = keepList(keep).map((g) => g.replace(/\/$/, ''));
+  for (const pat of list.filter((g) => g.includes('/'))) {
     const parent = path.dirname(pat);
     let names = [path.basename(pat)];
     if (/[*?]/.test(names[0])) {
@@ -282,16 +286,47 @@ export function keptFolders(dir, keep = KEEP_FOLDERS) {
         names = [];
       }
     }
-    for (const n of names) {
-      const rel = parent === '.' ? n : `${parent}/${n}`;
-      const st = fs.lstatSync(path.join(dir, rel), { throwIfNoEntry: false });
-      if (st?.isDirectory() && fs.readdirSync(path.join(dir, rel)).length) found.push(rel);
+    for (const n of names) found.push(parent === '.' ? n : `${parent}/${n}`);
+  }
+  const anyDepth = list.filter((g) => !g.includes('/')).map(globRx);
+  if (anyDepth.length) {
+    let listed = [];
+    try {
+      listed = [...git(dir, ['ls-files', '--others', '--exclude-standard']).split('\n'),
+        ...git(dir, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory']).split('\n')].filter(Boolean);
+    } catch {
+      listed = []; // no git here (a former worktree): only the slash patterns apply
+    }
+    for (const f of listed) {
+      const parts = f.replace(/\/$/, '').split('/');
+      // A file entry's last part is the file; a folder entry ends with a slash.
+      const folders = f.endsWith('/') ? parts.length : parts.length - 1;
+      for (let i = 0; i < folders; i++) if (anyDepth.some((r) => r.test(parts[i]))) found.push(parts.slice(0, i + 1).join('/'));
     }
   }
-  return [...new Set(found)].sort();
+  const full = [...new Set(found)].filter((rel) => {
+    const st = fs.lstatSync(path.join(dir, rel), { throwIfNoEntry: false });
+    return st?.isDirectory() && fs.readdirSync(path.join(dir, rel)).length > 0;
+  });
+  return full.filter((rel) => !full.some((o) => o !== rel && rel.startsWith(`${o}/`))).sort();
+}
+// Whether a folder holds no file anywhere under it: only folders, read without following a symlink. Any other entry (a
+// file, a link, a socket) counts as content, and so does a folder too big to read in WALK_CAP entries.
+function holdsNothing(dir, rel) {
+  const stack = [rel];
+  let seen = 0;
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const e of fs.readdirSync(path.join(dir, cur), { withFileTypes: true })) {
+      if (++seen > WALK_CAP || !e.isDirectory()) return false;
+      stack.push(`${cur}/${e.name}`);
+    }
+  }
+  return true;
 }
 // The ignored entries in a checkout that may hold the only copy of something: every ignored file or folder not under a
-// rebuildable one or a keep folder, less a file identical to the main checkout's file at the same path. git collapses an
+// rebuildable one or a keep folder, less a file identical to the main checkout's file at the same path, and less a folder
+// with no file anywhere under it (git lists empty ignored folders). git collapses an
 // ignored folder to one entry, which counts by its own name; one that holds a keep folder is read file by file instead,
 // so the keep folder is left out and everything beside it still counts.
 function unsafeIgnored(dir, repo, rebuildable, folders = []) {
@@ -313,6 +348,8 @@ function unsafeIgnored(dir, repo, rebuildable, folders = []) {
   for (const f of leaves) {
     if (rebuilt(f) || kept(f) || same(f)) continue;
     if (!(f.endsWith('/') && folders.some((d) => d.startsWith(f)))) {
+      // An empty folder (a visual gate's leftover) holds nothing to lose.
+      if (f.endsWith('/') && holdsNothing(dir, f.replace(/\/$/, ''))) continue;
       unsafe.push(f);
       continue;
     }
