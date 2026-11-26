@@ -25,6 +25,8 @@
 //     saved, the removal is finished with --force;
 //   - a read-only git run that the board or the dispatcher started inside a worktree (worktreeCleanup.scanners) is not
 //     a process holding it.
+// Two more: a tool's scratch worktree (worktreeCleanup.scratchWorktrees, premerge-check by default) and its
+// <name>.lock are never swept, and a pure merge of saved commits is not work GitHub lacks.
 // Every action returns { action: 'removed' | 'kept' | 'trashed' | 'gone', reason, rule }, plus atRisk when it holds
 // work GitHub lacks and nothing is using it, transient when a later try may succeed (a live process), foreign for a folder
 // that is not this repo's, and would when a dry run held back a removal or a move.
@@ -51,7 +53,12 @@ export const KEPT_FOLDERS_DIR = path.join(os.homedir(), '.cache/forge/kept-notes
 export const AGENT_WORKTREES = { pattern: '^agent-[0-9a-f]{8,}$', idleDays: 7, remote: 'origin' };
 // A process whose parent's command line holds one of these is the board's or the dispatcher's own scan.
 export const SCANNERS = ['/queue-board/', '/dispatcher.mjs'];
-const READ_ONLY_GIT = new Set(['status', 'rev-parse', 'rev-list', 'log', 'ls-files', 'merge-base', 'cat-file', 'for-each-ref', 'show-ref', 'diff']);
+// Scratch worktrees a tool keeps in the worktrees folder and reuses, by folder name. premerge-check.mjs keeps one named
+// premerge-check, with a premerge-check.lock folder beside it, holding a detached merge of main into a PR head. The
+// sweep never removes or trashes one, or its <name>.lock, and never counts it at risk. worktreeCleanup.scratchWorktrees
+// replaces this list.
+export const SCRATCH_WORKTREES = ['premerge-check'];
+const READ_ONLY_GIT = new Set(['status', 'rev-parse', 'rev-list', 'log', 'ls-files', 'merge-base', 'cat-file', 'for-each-ref', 'show-ref', 'diff', 'diff-tree']);
 const rebuildableList = (list) => (Array.isArray(list) && list.length && list.every((x) => typeof x === 'string' && x) ? list : REBUILDABLE_IGNORED);
 const globRx = (g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '[^/]*').replaceAll('?', '[^/]')}$`);
 // The clone modes worktreeCleanup.clones takes.
@@ -417,8 +424,18 @@ function unsavedCount(dir, refs) {
     const text = fs.readFileSync(path.join(git(dir, ['rev-parse', '--absolute-git-dir']), 'logs/HEAD'), 'utf8');
     logged = text.split('\n').flatMap((l) => l.split(' ').slice(0, 2)).filter((h) => /^[0-9a-f]{40,64}$/.test(h) && !/^0+$/.test(h));
   } catch { /* no reflog */ }
-  return Number(execFileSync('git', ['--no-optional-locks', '-C', dir, 'rev-list', '--count', '--stdin', 'HEAD'],
-    { encoding: 'utf8', input: [...new Set(logged)].concat(refs.map((r) => `^${r}`)).join('\n'), timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 }).trim());
+  const listed = execFileSync('git', ['--no-optional-locks', '-C', dir, 'rev-list', '--parents', '--stdin', 'HEAD'],
+    { encoding: 'utf8', input: [...new Set(logged)].concat(refs.map((r) => `^${r}`)).join('\n'), timeout: 120_000, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 16 << 20 });
+  return workCount(dir, listed);
+}
+// Commits only here that hold work, from `rev-list --parents` output: every listed commit except a pure merge. A pure
+// merge has two or more parents, none of them listed (so each is on a saved ref), and no change beyond what its parents
+// hold (`diff-tree --cc` prints nothing, as for any merge git made without a conflict). premerge-check.mjs makes one when
+// it merges main into a PR head; both sides are on GitHub, so removing it loses nothing.
+function workCount(dir, listed) {
+  const rows = listed.split('\n').filter(Boolean).map((l) => l.split(' '));
+  const here = new Set(rows.map(([sha]) => sha));
+  return rows.filter(([sha, ...parents]) => !(parents.length > 1 && parents.every((p) => !here.has(p)) && git(dir, ['diff-tree', '--cc', '--no-commit-id', sha]) === '')).length;
 }
 // Days since anything in a worktree changed: its files (node_modules left out) and its git metadata (HEAD, index, reflog).
 function idleDays(dir) {
@@ -429,6 +446,12 @@ function idleDays(dir) {
   } catch { /* the folder's own times stand */ }
   return (Date.now() - newest) / 86_400_000;
 }
+// Folder names the sweep leaves alone: each scratch worktree and its <name>.lock. A list that is not plain names falls
+// back to SCRATCH_WORKTREES; an empty list exempts nothing.
+const scratchSet = (list) => {
+  const names = Array.isArray(list) && list.every((x) => typeof x === 'string' && x && !x.includes('/')) ? list : SCRATCH_WORKTREES;
+  return new Set(names.flatMap((n) => [n, `${n}.lock`]));
+};
 const agentRule = (cfg) => {
   const c = { ...AGENT_WORKTREES, ...(cfg && typeof cfg === 'object' ? cfg : {}) };
   if (cfg === false || c.enabled === false) return null;
@@ -476,7 +499,7 @@ export function classifyWorktree(wtPath, { repo, base = 'main', pr = null, dirs,
   }
   if (used) return { ...meta, verdict: 'keep', transient: true, rule: 'process', reason: 'a process has its working folder inside' };
   const head = git(wtPath, ['rev-parse', 'HEAD']);
-  const onlyHere = Number(git(wtPath, ['rev-list', '--count', 'HEAD', '--not', '--remotes']));
+  const onlyHere = workCount(wtPath, git(wtPath, ['rev-list', '--parents', 'HEAD', '--not', '--remotes']));
   const openPr = pr?.state === 'OPEN';
   const finished = ['MERGED', 'CLOSED'].includes(pr?.state);
   // git worktree remove deletes ignored files too, and untracked ones a person's config hides from status. Only
@@ -749,7 +772,7 @@ export function finishedOnGitHub(tickets, prList) {
 // liveIds, is never touched.
 export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktrees', prs = {}, liveBranches = new Set(), liveIds = [], dryRun = false,
   trashDir = trashDirFor(), fetch = true, dirs = null, rebuildable = REBUILDABLE_IGNORED, clones = 'dry-run', keep = KEEP_FOLDERS, keptDir = KEPT_FOLDERS_DIR,
-  agent = AGENT_WORKTREES, scanners = SCANNERS }) {
+  agent = AGENT_WORKTREES, scanners = SCANNERS, scratch = SCRATCH_WORKTREES }) {
   // A given dirs (a test's) is reused for the re-check; otherwise the processes are read again.
   const recheck = dirs ? () => dirs : () => processDirs({ scanners });
   try {
@@ -784,10 +807,17 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
   }
   let saved;
   const savedRefs = () => (saved === undefined ? (saved = remoteThere ? savedRemoteRefs(repo, rule.remote) : null) : saved);
+  const scratchNames = scratchSet(scratch);
+  const scratchRow = (name) => ({ action: 'kept', rule: 'scratch',
+    reason: `a tool's scratch ${name.endsWith('.lock') ? 'lock' : 'worktree'} (worktreeCleanup.scratchWorktrees); never swept` });
   for (const w of listed) {
     // Only worktrees in the worktrees folder: one a person made elsewhere is theirs.
     if (!within(key(w.path), folderReal) || key(w.path) === folderReal) continue;
-    const row = { path: w.path, name: path.basename(w.path), branch: w.branch };
+    const row = { path: w.path, name: path.basename(w.path), branch: w.branch, head: w.head };
+    if (scratchNames.has(row.name)) {
+      results.push({ ...row, ...scratchRow(row.name) });
+      continue;
+    }
     const liveId = w.branch && ids.find((id) => w.branch.toUpperCase().includes(id));
     if (w.branch && (liveBranches.has(w.branch) || liveId)) {
       results.push({ ...row, action: 'kept', rule: 'live', reason: `its ticket${liveId ? ` ${liveId}` : ''} is live` });
@@ -804,6 +834,10 @@ export function sweepRepo({ repo, base = 'main', worktreesDir = '.claude/worktre
   } catch { /* no worktrees folder */ }
   for (const f of folders) {
     if (tracked.has(key(f))) continue;
+    if (scratchNames.has(path.basename(f))) {
+      results.push({ path: f, name: path.basename(f), branch: null, ...scratchRow(path.basename(f)) });
+      continue;
+    }
     results.push({ path: f, name: path.basename(f), branch: null,
       ...teardownWorktree({ path: f, repo, base, dirs, listed, dryRun, trashDir, rebuildable, clones, prs, liveBranches, liveIds, keep, keptDir, agent, recheck }) });
   }

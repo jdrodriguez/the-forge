@@ -1923,11 +1923,12 @@ async function checkStall(st, m, id, t, pr, notGreen, state) {
 // the human: at teardown at once, in the sweep after atRiskAskDays. dryRun logs what it would do and changes nothing.
 // Neither runs while the dispatcher is paused, and both catch their own errors so a failure never stops the tick.
 const WT_CFG = { enabled: true, dryRun: true, sweepHours: 24, atRiskAskDays: 7, trashDir: null, repos: [], rebuildableIgnored: null, clones: 'dry-run',
-  keepFolders: null, keptFoldersDir: null, agentWorktrees: null, scanners: null, ...(cfg.worktreeCleanup ?? {}) };
+  keepFolders: null, keptFoldersDir: null, agentWorktrees: null, scanners: null, scratchWorktrees: null, ...(cfg.worktreeCleanup ?? {}) };
 // worktree-teardown.mjs falls back to its own list for null, an empty list or an invalid one. These are the module
 // options the keys set, with the module's defaults for null.
 const wtOpts = (wt) => ({ rebuildable: WT_CFG.rebuildableIgnored, keep: WT_CFG.keepFolders ?? wt.KEEP_FOLDERS,
-  keptDir: WT_CFG.keptFoldersDir ?? wt.KEPT_FOLDERS_DIR, agent: WT_CFG.agentWorktrees ?? wt.AGENT_WORKTREES });
+  keptDir: WT_CFG.keptFoldersDir ?? wt.KEPT_FOLDERS_DIR, agent: WT_CFG.agentWorktrees ?? wt.AGENT_WORKTREES,
+  scratch: WT_CFG.scratchWorktrees ?? wt.SCRATCH_WORKTREES });
 const wtScanners = (wt) => (Array.isArray(WT_CFG.scanners) ? WT_CFG.scanners : wt.SCANNERS);
 const SWEEP_STATE = path.join(LOCAL, 'worktree-sweep.json');
 const TEARDOWN_TRIES = 3; // ticks a live process may hold the worktree after its worker stops, before the human is asked
@@ -2148,7 +2149,13 @@ async function worktreeSweep(st) {
       const atRiskNow = out.results.filter((r) => r.atRisk);
       log(`${label}${dry ? ' (dry run, nothing changed)' : ''}: ${n('removed')} ${dry ? 'would be ' : ''}removed, ${n('trashed')} orphan(s) ${dry ? 'would be ' : ''}trashed, ${atRiskNow.length} at risk, ${n('kept') - atRiskNow.length} kept, of ${out.results.length}`);
       for (const r of out.results) if (r.would || r.action !== 'kept' || r.atRisk) log(`  ${r.would ? `would be ${r.would}` : r.action}${r.atRisk ? ' AT RISK' : ''}: ${r.name} [${r.branch ?? '-'}] ${r.reason}`);
-      for (const r of atRiskNow) atRisk[r.path] = { since: mem.atRisk?.[r.path]?.since ?? iso(), asked: mem.atRisk?.[r.path]?.asked ?? null, reason: r.reason, rule: r.rule };
+      // since is the first sweep that saw this worktree at risk at its current HEAD. A reused path whose HEAD moved starts
+      // over, so the ask's age is never older than the work. A record saved without a head keeps its since and asked.
+      for (const r of atRiskNow) {
+        const was = mem.atRisk?.[r.path];
+        const same = was && (!('head' in was) || (r.head ?? null) === was.head);
+        atRisk[r.path] = { since: same ? was.since : iso(), asked: same ? was.asked ?? null : null, head: r.head ?? null, reason: r.reason, rule: r.rule };
+      }
       // A folder in the worktrees folder that is not this repo's (a scratch folder, another repo's worktree) is reported
       // once and left alone. Clones are counted by rule, for the dry run.
       for (const r of out.results.filter((x) => x.foreign)) {
@@ -2173,7 +2180,11 @@ async function worktreeSweep(st) {
   // never pushes it.
   const overdue = Object.entries(atRisk).filter(([, a]) => !a.asked && (a.rule === 'agent-unpushed' || hoursSince(a.since) > WT_CFG.atRiskAskDays * 24));
   if (overdue.length) {
-    const ask = `${overdue.length} worktree(s) on ${HOST} have held work GitHub lacks for over ${WT_CFG.atRiskAskDays} days, with no live ticket or process: ${overdue.map(([p, a]) => `${p} (${a.reason})`).join('; ')}`.slice(0, 1500);
+    const age = (since) => {
+      const h = hoursSince(since);
+      return h < 48 ? `${Math.round(h)} hours` : `${Math.floor(h / 24)} days`;
+    };
+    const ask = `${overdue.length} worktree(s) on ${HOST} hold work GitHub lacks, with no live ticket or process (age: since the sweep first saw it at risk at its current HEAD): ${overdue.map(([p, a]) => `${p} (${a.reason}; at risk ${age(a.since)})`).join('; ')}`.slice(0, 1500);
     if (dry) log(`would ask ${HUMAN}: ${ask}`);
     else {
       try {
