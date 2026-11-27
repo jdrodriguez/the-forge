@@ -35,7 +35,7 @@ function sideFootSync() {
   const total = snap ? snap.machines.reduce((n, m) => n + (m.sentryWorkers || 0), 0) : 0;
   s.hidden = !total;
   if (!total) return;
-  const used = snap.tickets.filter((t) => t.live && t.sentry && !t.parked && !t.waitingForSlot).length;
+  const used = snap.tickets.filter((t) => t.live && t.sentry && holdsSlot(t)).length;
   const words = total === 1 ? `Sentry slot ${used ? 'busy' : sentryHost() ? 'idle' : 'offline'}` : `${used} of ${total} Sentry slots busy`;
   s.innerHTML = `${ico('sentry', used ? 'run' : 'todo')}<span>${esc(words)}</span>`;
 }

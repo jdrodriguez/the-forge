@@ -161,8 +161,9 @@ function m2vNative(kind, name, facing, pose, frame, shut, tool) {
   const trail = step === 0 || step === 1;
   const P = qdFigurePal(kind, name);
   if (back && hd.head) hdMap(g, m2vBackRows(kind, trail), P, F.fx - 4.5, top - hd.up / 4, 0.25);
-  if (backTop != null) motion?.after?.();
   else if (shut && hd.head && (use === 'stand' || use === 'walk')) hdHead(g, hd, P, F.fx - 4, top, true, trail);
+  // What the work from behind puts over the back of the head (motionBack), drawn after the head.
+  if (backTop != null) motion?.after?.();
   return c;
 }
 

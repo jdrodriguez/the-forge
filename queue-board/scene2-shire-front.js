@@ -36,7 +36,6 @@ function m2ShireFront(L, r, plan, season, add) {
   const pen = yard.pen;
   r.pen = pen;
   if (pen) r.spots.push(m2ShirePen(L, add, pen.x, pen.y, pen.w, pen.h, season, r.m.host));
-  else left.push('pen');
   const make = {
     garden: (p) => m2ShireGarden(L, add, p.x, p.y + 6, 22, 14, season, r.x),
     cart: (p) => m2ShireCart(L, add, p.x, p.y + 13, season, r.x),
