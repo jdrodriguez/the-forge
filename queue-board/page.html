@@ -531,6 +531,7 @@ h2.gh::after { height: 7px; background: url("data:image/svg+xml,%3Csvg xmlns='ht
 <body>
 <link rel="stylesheet" href="/mobile.css">
 <link rel="stylesheet" href="/mobile-views.css">
+<link rel="stylesheet" href="/control.css">
 <link rel="stylesheet" href="/fleet.css">
 <link rel="stylesheet" href="/forge-core.css">
 <div class="app">
@@ -557,6 +558,8 @@ h2.gh::after { height: 7px; background: url("data:image/svg+xml,%3Csvg xmlns='ht
     </div>
   </main>
 </div>
+<div class="cdlg" id="ctlDialog" hidden></div>
+<div class="ctoast" id="ctlToast" hidden></div>
 <script>
 const POLL_MS = 20000;
 const MC = ['var(--m1)', 'var(--m2)', 'var(--m3)', 'var(--m4)'];
@@ -895,7 +898,7 @@ function render() {
   navigator.setAppBadge?.(needs.length).catch(() => {});
   renderNav(needs);
   renderQueue(needs, mergedTickets().filter((t) => ms(t.mergedAt) < 48 * 3600e3));
-  if (typeof renderFleet === 'function') renderFleet();
+  if (typeof renderControl === 'function') renderControl();
   renderAlarm();
   if (typeof sceneSync === 'function') sceneSync();
   // horn.js sounds the war horn when main turns red, in every view.
@@ -1010,7 +1013,7 @@ function applyView(fromClick = false) {
   if (typeof mapShow === 'function') mapShow(view === 'map');
   // Each map fits the room it has when it shows, so a switch lays it out again.
   if (switched) window.dispatchEvent(new Event('resize'));
-  if (switched && typeof renderFleet === 'function') renderFleet();
+  if (switched && typeof renderControl === 'function') renderControl();
   // Worktrees' machine chips and Forgotten filter live in the address, so a change there draws the view again.
   if (view === 'worktrees' && snap && typeof renderWorktrees === 'function') renderWorktrees();
   $('viewTitle').textContent = VIEWS[view];
@@ -1280,9 +1283,10 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/music.js"></script>
 <script src="/music-duck.js"></script>
 <script src="/side-dock.js"></script>
+<script src="/control-data.js"></script>
 <script src="/fleet-logic.js"></script>
 <script src="/fleet-card.js"></script>
 <script src="/fleet-accounts.js"></script>
-<script src="/fleet-view.js"></script>
+<script src="/control-fleet.js"></script>
 </body>
 </html>
