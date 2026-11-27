@@ -110,15 +110,17 @@ function m2RivArcade(g, x, y, w, h, n, P) {
 function m2RivWing(add, x, base, w, wh, near, arches, foot) {
   const P = M2_PAL.elfWall;
   const panes = [];
-  const H = wh + near + 7;
+  // The wall's top sits one unit under the roof's eave, which is drawn over it, so the roof rests on its wall (pass 2,
+  // 2026-11-27: a five-unit gap made the roofs float).
+  const H = wh + near + 1;
   const o = m2Thing(add, x - 2, base - H, w + 4, H + 0.5, base, (g) => {
-    m2RivRoof(g, 0, 0, w + 4, 2, near, M2_PAL.elfRoof, Math.min(4, near * 0.5));
     const wy = H - wh;
     m2Wall(g, 2, wy, w, wh, P);
-    pxBox(g, 2, wy + 0.5, w, 0.5, M2_PAL.gold[2]);
     const n = Math.max(2, Math.round(w / 6.5));
     if (arches) panes.push(...m2RivArcade(g, 3.5, wy + 2.5, w - 3, wh - 3, n, P));
     else for (let i = 0; i < n; i += 1) panes.push(m2Window(g, 2 + (i + 0.5) * (w / n) - 1.5, wy + 3, 3, wh - 6, P, 'arch'));
+    m2RivRoof(g, 0, 0, w + 4, 2, near, M2_PAL.elfRoof, Math.min(4, near * 0.5));
+    pxBox(g, 2, wy + 1.5, w, 0.5, M2_PAL.gold[2]);
   });
   o.foot = foot;
   return panes.map((p) => ({ ...p, x: x - 2 + p.x, y: base - H + p.y }));
@@ -157,12 +159,11 @@ function m2RivHouse(L, add, { hx, room, base, wallY, season }) {
   // The high hall: its roof, a lower floor with the door and windows, an upper loggia behind a balustrade.
   const hh = 26;
   const near = 11;
-  const HH = hh + near + 7;
+  const HH = hh + near + 2;
   const ho = m2Thing(add, hallX - 2, hb - HH, hw + 4, HH + 0.5, hb, (g) => {
-    m2RivRoof(g, 0, 0, hw + 4, 3, near, R, 4.5);
     const wy = HH - hh;
     m2Wall(g, 2, wy, hw, hh, P);
-    pxBox(g, 2, wy + 0.5, hw, 0.75, M2_PAL.gold[2]);
+    pxBox(g, 2, wy + 1.5, hw, 0.75, M2_PAL.gold[2]);
     panes.push(...m2RivArcade(g, 3, wy + 2.5, hw - 2, 9, Math.max(3, Math.round(hw / 6)), P).map((p) => ({ ...p, ox: hallX - 2, oy: hb - HH })));
     m2RivRail(g, 2, wy + 9, hw, P);
     pxBox(g, 2, wy + 12, hw, 0.5, P[4]);
@@ -179,6 +180,7 @@ function m2RivHouse(L, add, { hx, room, base, wallY, season }) {
       if (!inA(3)) return M2_PAL.gold[ax < -5 ? 3 : ax < 5 ? 2 : 1];
       return M2_PAL.wood[Math.abs(ax) < 1 ? 0 : (px + 1) % 6 === 0 ? 1 : ax < 0 ? 3 : 2];
     });
+    m2RivRoof(g, 0, 0, hw + 4, 3, near, R, 4.5);
   });
   ho.foot = [hallX, hb - 6, hallX + hw, hb];
   for (const p of panes) Object.assign(p, { x: p.ox + p.x, y: p.oy + p.y });

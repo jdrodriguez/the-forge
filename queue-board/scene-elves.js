@@ -137,3 +137,15 @@ JOB_HOOKS.fx.push((a, pose, frame, hand, changed) => {
 JOB_HOOKS.lights.push((g) => {
   for (const r of sc.realms) if (r.kind === 'elf') drawElfLights(g, r, realmProps(r), workRealm(r));
 });
+
+// Rivendell's desks in the side view (scene.js's scLayout): as many to a row as the realm's final width holds (its Sentry
+// post stands on the road, not the grass), centred in it, so three desks sit two and one instead of one to a row in a
+// staircase (pass 2, 2026-11-27). Returns the desks to a row and the first one's x.
+function scElfRow(p, x0, w) {
+  const room = w - p.pad - 10 - SC_COL;
+  const span = (cols) => Math.max(...Array.from({ length: p.n }, (_, j) => (j % cols) * SC_COL + (Math.floor(j / cols) % 2 ? SC_COL / 2 : 0)));
+  let cols = Math.max(p.cols, Math.min(p.n, Math.floor((w - p.pad - 10) / SC_COL)));
+  cols = Math.ceil(p.n / Math.ceil(p.n / cols));
+  while (cols > p.cols && span(cols) > room) cols -= 1;
+  return { cols, left: x0 + p.pad + Math.round((w - p.pad - span(cols)) / 2) };
+}

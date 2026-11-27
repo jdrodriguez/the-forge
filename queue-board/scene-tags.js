@@ -38,12 +38,17 @@ function scMeasureTags() {
 // one already placed moves up above it, and none runs off the scene's sides. A walker's name goes beside it on the road,
 // where it covers no one at a station: on whichever side is clear of other names, or a line up if neither is.
 function scPlaceTags() {
+  // Measured again on every pass, before any name moves: the pixel font loads only once a name first uses it, after
+  // document.fonts.ready has resolved, so a name measured at build kept its fallback font's narrower width and two names
+  // could overlap (pass 2, 2026-11-27: Legolas and Arwen's).
+  scMeasureTags();
   const placed = [];
   const list = [...sc.actors.values()].map((a) => ({ a, el: sc.tags.get(a.key) })).filter((p) => p.el)
     .map((p) => ({ ...p, y: p.a.y - scHead(p.a) - (SC_GLYPH[p.a.mood] ? 11 : 2) })).sort((p, q) => q.y - p.y);
   for (const p of list) {
-    const w = p.el.sw || 30;
-    const h = p.el.sh || 6;
+    // A little margin over the measured size, which rounds to whole screen pixels.
+    const w = (p.el.sw || 30) + 1;
+    const h = (p.el.sh || 6) + 0.5;
     p.el.classList.toggle('sc-road', p.a.road);
     if (p.a.road) {
       const box = (right, y) => ({ x: right ? p.a.x + 5 + w / 2 : p.a.x - 5 - w / 2, y: y + h / 2, w, h });
@@ -62,7 +67,7 @@ function scPlaceTags() {
     }
     const x = Math.min(Math.max(p.a.x, w / 2 + 1), sc.W - w / 2 - 1);
     let y = p.y;
-    for (let tries = 0; tries < 5; tries += 1) {
+    for (let tries = 0; tries < 8; tries += 1) {
       const hit = placed.find((o) => Math.abs(o.x - x) < (o.w + w) / 2 && y > o.y - o.h && y - h < o.y);
       if (!hit) break;
       y = hit.y - hit.h - 0.5;

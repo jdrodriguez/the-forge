@@ -253,12 +253,14 @@ function m2RivPlant(L, add, r, plan, season, { solid, spots, paths, top, cliff, 
   }
   const river = plan.river;
   if (river) avoid.push({ x0: river.base - 9, y0: r.y - 60, x1: river.base + 9, y1: r.y + cliff + 2 });
+  // The desk gardens keep open ground round them: no crown over the desk block or the 8 rows below it (pass 2).
+  if (r.block) avoid.push({ x0: r.block.x0 - 4, y0: r.block.y0 - 30, x1: r.block.x1 + 4, y1: r.block.y1 + 8 });
   const held = [];
   const woods = (o) => m2RivWoods(L, add, { avoid, season, keep: held, ...o });
   const grass = [M2_MAT.elf, M2_MAT.wild, M2_MAT.forest];
   woods({ area: { x0: r.x + 1, y0: r.y - 4, x1: r.x + r.w - 1, y1: r.y + top - 1 }, step: 5.5, mix: [['fir', 4], ['beech', 2], ['birch', 3]], sizes: [1, 2], mats: grass, seed: 81 });
   const floor = held.length;
-  woods({ area: { x0: r.x - 8, y0: r.y + cliff + 3, x1: r.x + r.w + 6, y1: r.f1 + 4 }, step: 4.5, mix: [['fir', 3], ['beech', 3], ['birch', 3]], sizes: [0, 2], mats: grass, seed: 82 });
+  woods({ area: { x0: r.x - 8, y0: r.y + cliff + 3, x1: r.x + r.w + 6, y1: r.f1 + 4 }, step: 6.5, mix: [['fir', 3], ['beech', 3], ['birch', 3]], sizes: [0, 2], mats: grass, seed: 82 });
   m2RivLeafSpots(L, r, held.slice(floor), [...solid, ...avoid.slice(solid.length, solid.length + spots.length)], grass);
   r.rivLateMs = performance.now() - t0;
   r.rivTrees = held.length;
