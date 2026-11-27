@@ -93,21 +93,21 @@ function m2ShirePickets(g, x, y, len) {
   }
   pxBox(g, x, y - 0.25, len, 0.25, '#5a6a3a');
 }
-// A stone chimney standing on the turf at (x, y): coursed stone lit on its left, a cap and a clay pot.
+// A stone chimney standing on the turf at (x, y), 4 units of coursed stone lit on its left, a cap and a clay pot.
 function m2ShireChimney(g, x, y) {
   g.globalAlpha = 0.35;
   pxBox(g, x + 0.5, y - 0.5, 3.5, 1.25, '#1a2a14');
   g.globalAlpha = 1;
-  m2Raster(g, x, y - 5.5, 11, 22, (px, py) => {
+  m2Raster(g, x, y - 4, 11, 16, (px, py) => {
     if (py < 3) return py === 0 ? M2_PAL.stone[5] : M2_PAL.stone[py === 2 ? 1 : 4];
-    if (px === 0 || px === 10 || py === 21) return M2_PAL.stone[0];
+    if (px === 0 || px === 10 || py === 15) return M2_PAL.stone[0];
     if ((py - 3) % 4 === 3 || (px + (Math.floor((py - 3) / 4) % 2) * 3) % 6 === 0) return M2_PAL.stone[1];
     return M2_PAL.stone[px < 4 ? 4 : px < 8 ? 3 : 2];
   });
-  pxBox(g, x + 0.75, y - 7, 1.25, 1.5, '#8a4a2a');
-  pxBox(g, x + 0.75, y - 7, 0.5, 1.5, '#b06a3e');
-  pxBox(g, x + 0.75, y - 7.25, 1.25, 0.25, '#2a1a12');
-  return { x: x + 1.4, y: y - 7.5 };
+  pxBox(g, x + 0.75, y - 5.5, 1.25, 1.5, '#8a4a2a');
+  pxBox(g, x + 0.75, y - 5.5, 0.5, 1.5, '#b06a3e');
+  pxBox(g, x + 0.75, y - 5.75, 1.25, 0.25, '#2a1a12');
+  return { x: x + 1.4, y: y - 6 };
 }
 
 // Draws hole o onto the hills' canvas g (H from m2ShireHills): door, windows, step, lantern, chimney, and its gate or
@@ -169,17 +169,18 @@ function m2ShireHole(g, H, P, o) {
     m2Raster(g, bx, floorY - 2.5, 12, 14, (px, py) => (py < 2 ? (py ? '#1f3a4a' : '#2a1a12') : py % 4 === 0 ? '#2a2420' : M2_PAL.wood[px < 4 ? 4 : px < 9 ? 3 : 1]));
   }
   // The chimney up on the turf above, toward one side.
-  // It goes where no other hole's garden is near, on the side away from Bag End first, close above the face.
+  // It goes where no other hole's garden is near, on the side away from Bag End first, close above the face and over
+  // the hole's own width, so it rises out of the turf the hole is dug into (2026-11-27: stacks stood off to the side).
   const be = P.holes.find((q) => q.big);
   const away = big || !be ? -side : Math.sign(o.x - be.x) || 1;
   let spot = null;
-  for (const dy of [3, big ? 6 : 4.5]) {
-    for (const u of [0.6 * away, 0.85 * away, 0.3 * away, -0.45 * away]) {
+  for (const dy of [2.5, big ? 4.5 : 3.5]) {
+    for (const u of [0.4 * away, 0.55 * away, -0.4 * away, 0.25 * away]) {
       const [x, y] = [o.x + o.hw * u, o.face - dy];
       if (!spot && !P.holes.some((q) => q !== o && [0, 3, 6, 9].some((e) => m2ShireInYard(q, x + (e % 6 ? 2 : -2), y - e)))) spot = [x, y];
     }
   }
-  const [cx, cy] = at(...(spot ?? [o.x - o.hw * 0.45 * side, o.face - 4.5]));
+  const [cx, cy] = at(...(spot ?? [o.x - o.hw * 0.4 * side, o.face - 3]));
   const smoke = m2ShireChimney(g, cx - 1.4, cy);
   // A hole at a hill's foot has its picket fence along the garden's front with the gate open on the path.
   if (!o.ledge) {

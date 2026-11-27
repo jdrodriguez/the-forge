@@ -50,8 +50,9 @@ function golPlace(r) {
   if (r.kind === 'elf') p = { hide: [x0 + 7.5, G + 18], peek: [x0 + 7.5, G + 17.5], exit: [x0 + 8.5, G + 22.5], pool: true, fish: [x0 + 9.5, G + 23.5] };
   else if (r.kind === 'hobbit') {
     const top = (x) => G + 6 - Math.sqrt(Math.max(0, 576 - (x - cx) ** 2)) * 0.62;
+    const patch = shirePatch(r);
     p = { hide: [cx + 21, G + 1], peek: [cx + 20.5, golQ(top(cx + 20.5)) + 0.25], exit: [cx + 26, G + 8], spot: [cx + 26.5, G + 8], behind: (x, y) => y < G + 6 && Math.abs(x - cx) < 27,
-      clip: cut(curve(top, cx - 24, cx + 24, G + 6.5)), keep: [[cx - 24, G - 2, cx + 24, G + 10], [x0 + r.w - 23, G + 1, x0 + r.w - 1, G + 7], [cx + 27, G + 10, x0 + r.w - 5, G + 20]] };
+      clip: cut(curve(top, cx - 24, cx + 24, G + 6.5)), keep: [[cx - 24, G - 2, cx + 24, G + 10], ...(patch ? [[patch.fence[0], patch.fence[1], patch.right, patch.y + 10]] : [])] };
   } else if (r.kind === 'dwarf') {
     p = { hide: [cx - 2.5, G + 1.75], peek: [cx + 2.5, G + 1.75], dark: true, exit: [cx - 2.5, G + 4], spot: [cx - 2.5, G + 4], behind: (x, y) => y < G + 2.1 && Math.abs(x - cx) < 6,
       clip: (g) => { g.beginPath(); g.rect(cx - 5.5, G - 15, 11, 17.25); g.clip(); } };

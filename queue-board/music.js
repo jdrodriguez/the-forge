@@ -1,7 +1,7 @@
 // music.js: the music player in the header, beside Mute (horn.js), in every view. It plays the owner's own Lord of
 // the Rings soundtrack MP3s from the board's machine (music.mjs lists and serves them from the config's folder; the board only reads them) as one continuous
 // mix: a shuffled order of every track, none played twice until all have played, then a new order, each track fading
-// into the next over four seconds on two audio elements. Music starts and pauses it, Next skips ahead, and while it
+// into the next over four seconds on two audio elements. The play button (its icon alone) starts and pauses it, Next skips ahead, and while it
 // plays the header shows the track, its album and a thin line of how far it has got. Its loudness is the sound
 // settings' Music volume (sound-ui.js), apart from the alerts. When the board is muted, or the herald keeps quiet for a
 // Zoom meeting, it fades out and pauses, and on unmute it comes back only if it was playing. The order, the track and
@@ -244,8 +244,8 @@ function musicUi() {
       + `<span class="mu-now" title="${esc(t.title)}${t.album ? `, ${esc(t.album)}` : ''}"><span class="mu-t">${esc(t.title)}</span>`
       + `<span class="mu-a">${esc(t.album)}</span><i class="mu-bar"><b></b></i></span>`
     : '';
-  const html = `<button type="button" class="mu-play is-${state}" data-mu="play" aria-pressed="${music.on}" title="${esc(tip)}"${state === 'none' ? ' disabled' : ''}>`
-    + `${music.on && state !== 'wait' ? MU_PAUSE : MU_PLAY}<span>Music</span></button>${now}`;
+  const html = `<button type="button" class="mu-play is-${state}" data-mu="play" aria-pressed="${music.on}" aria-label="Music" title="${esc(tip)}"${state === 'none' ? ' disabled' : ''}>`
+    + `${music.on && state !== 'wait' ? MU_PAUSE : MU_PLAY}</button>${now}`;
   if (html !== music.html) { musicEl.innerHTML = html; music.html = html; musicEl.dataset.state = state; }
   musicBar();
 }

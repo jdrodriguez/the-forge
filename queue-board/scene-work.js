@@ -73,7 +73,7 @@ const WORK = {
     return [...jobs, { w: 1, steps: [] }];
   },
   hobbit(a, P, st, rng) {
-    const jobs = [{ w: 2, steps: [{ pose: 'water', n: span(rng, 30, 50), anim: alt(4), face: 1 }] }, { w: 1, steps: [] }];
+    const jobs = [{ w: 2, steps: [{ pose: 'sprinkle', n: span(rng, 30, 50), anim: alt(4), face: 1 }] }, { w: 1, steps: [] }];
     if (P.cart) {
       P.veg.forEach((v, i) => jobs.push({ w: 3, spot: `veg${i}`, steps: [
         { go: v },
@@ -136,7 +136,8 @@ function workPlan(a) {
   const P = realmProps(a.realm);
   const rng = (a.rng ??= workRng(pxHash(a.key)));
   const home = 'home';
-  const station = (lo, hi) => ({ pose: 'work', n: span(rng, lo, hi), anim: swing(3), face: 1 });
+  // At the station the work is in front: struck down onto the plot or anvil, or written at the desk (sprites-motion.js).
+  const station = (lo, hi) => ({ pose: stationPose(a.kind), n: span(rng, lo, hi), anim: swing(3), face: 1 });
   const job = { key: P.key, i: 0, t: 0, steps: [{ go: home }] };
   if (!a.planned || Math.hypot(a.x - a.homeX, a.y - a.homeY) > 1) {
     job.steps.push(station(a.planned ? 20 : 0, a.planned ? 50 : 90));
@@ -210,12 +211,15 @@ function workFx(a, pose, frame, hand) {
   const fwd = a.face < 0 ? -1 : 1;
   const x = Math.round(a.x);
   const tool = pose === 'carry' ? a.carry : a.act?.[2];
-  if (pose === 'work' && frame === 1 && changed) {
-    if (tool === 'pick') spray(hand.x + 6 * fwd, hand.y, ['#a5a1ab', '#7e7a86', '#f0a33a'], 3, { up: 1, spread: 1.6, life: 4 });
-    else if (a.kind === 'dwarf') spray(hand.x + 4 * fwd, hand.y, [PX.emberL, PX.ember, '#fff3c4'], 4, { up: 1.3, spread: 1.8, life: 4 });
-    else if (a.kind === 'hobbit') spray(hand.x + 4 * fwd, hand.y + 4, [PX.soil, PX.soilD], 2, { up: 0.8, spread: 1.2, life: 4 });
+  // A struck tool's head lands at the hand point itself (sprites-motion.js); the side swing's lies ahead of the fist.
+  const ahead = pose === 'strike' ? 0 : 1;
+  if ((pose === 'work' || pose === 'strike') && frame === 1 && changed) {
+    if (tool === 'pick') spray(hand.x + 6 * fwd * ahead, hand.y, ['#a5a1ab', '#7e7a86', '#f0a33a'], 3, { up: 1, spread: 1.6, life: 4 });
+    else if (a.kind === 'dwarf') spray(hand.x + 4 * fwd * ahead, hand.y, [PX.emberL, PX.ember, '#fff3c4'], 4, { up: 1.3, spread: 1.8, life: 4 });
+    else if (a.kind === 'hobbit') spray(hand.x + 4 * fwd * ahead, hand.y + 4 * ahead, [PX.soil, PX.soilD], 2, { up: 0.8, spread: 1.2, life: 4 });
     else if (a.kind === 'elf') spray(x + 2 * fwd, Math.round(a.y) - 6, [PX.blue, '#e6f2ff', PX.gold], 1, { up: 0.35, spread: 0.3, life: 16, fall: 0 });
   }
+  if (pose === 'write' && frame === 1 && changed && (sc.tick + a.seed) % 4 === 0) spray(hand.x, hand.y - 1, [PX.blue, '#e6f2ff', PX.gold], 1, { up: 0.35, spread: 0.3, life: 16, fall: 0 });
   if (pose === 'dig' && frame === 1 && changed) {
     spray(hand.x, hand.y, ['#625e6b', '#a5a1ab'], 2, { up: 0.9, spread: 1.4, life: 4 });
     if (Math.random() < 0.5) spray(hand.x, hand.y - 1, GEMS[Math.floor(Math.random() * 4)], 2, { up: 0.7, spread: 0.8, life: 5 });
@@ -225,7 +229,7 @@ function workFx(a, pose, frame, hand) {
     if (sc.tick % 3 === 0) spray(hand.x, hand.y - 1, ['#ecebf0', '#cfcfd6'], 1, { up: 0.3, spread: 0.4, life: 14, fall: -0.01 });
     if (changed) spray(hand.x - fwd, hand.y + 1, ['#f2d27a', '#fff7dc'], 2, { up: 0.25, spread: 1, life: 3, fall: 0 });
   }
-  if (pose === 'water' && frame === 1) spray(hand.x, hand.y, ['#8fc3ff', '#cfe6ff'], 1, { up: 0, spread: 0.3, life: 5, fall: 0.25 });
+  if ((pose === 'water' || pose === 'sprinkle') && frame === 1) spray(hand.x, hand.y, ['#8fc3ff', '#cfe6ff'], 1, { up: 0, spread: 0.3, life: 5, fall: 0.25 });
   if (pose === 'harp' && sc.tick % 7 === 0) {
     particles.push({ x: hand.x, y: hand.y - 3, vx: 0.12 * fwd, vy: -0.25, life: 24, color: ['#fff3c4', '#e6f2ff', PX.gold][sc.tick % 3], fall: 0, glyph: NOTE, sway: 0.3 });
   }

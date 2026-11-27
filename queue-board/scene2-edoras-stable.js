@@ -81,8 +81,9 @@ function m2EdoStables(L, add, D, season) {
   cart.foot = [cx - 1, cy - 2, cx + 10, cy + 0.5];
   const load = { x: cx - 1, y: cy - 7, z: cy + 0.5, sacks: true };
   D.spots.push(wide ? { x: cx - 2.5, y: cy + 0.5, face: 'right', job: 'cart', cart: load } : { x: cx + 4, y: cy + 4, face: 'up', job: 'cart', mid: cx + 4, cart: load });
-  // The paddock below the stables when there is room for it.
-  if (wide) m2EdoPaddock(L, add, D, x0 + 1, cy + 3, r.x + r.w - 1.5, Math.min(D.hb + 1, cy + 22));
+  // The paddock below the stables when there is room for it, its back rail clear of the cart's wheels and its west rail
+  // clear of the hill's palisade.
+  if (wide) m2EdoPaddock(L, add, D, x0 + 3, cy + 5, r.x + r.w - 1.5, Math.min(D.hb + 1, cy + 22));
   D.keep.push({ x0, y0: sy - 15, x1: x0 + sw, y1: cy + 1 });
 }
 
@@ -150,6 +151,15 @@ function m2EdoPaddock(L, add, D, x0, y0, x1, y1) {
       pxBox(g, 0, 2, x1 - x0, 0.5, T[3]);
     });
     rail.foot = [x0, yy - 1, x1, yy + 0.5];
+  }
+  // The ends: a rail down each from the back rail to the front one, a post every 4 units (2026-11-27: with only the back
+  // and front rails the paddock read as two loose fences with the trough between them).
+  for (const xx of [x0, x1 - 0.75]) {
+    const end = m2Thing(add, xx, y0 - 0.5, 0.75, y1 - y0 + 1, y0 + 0.5, (g) => {
+      pxBox(g, 0.25, 0, 0.5, y1 - y0 + 1, T[3]);
+      for (let y = 0; y < y1 - y0; y += 4) pxBox(g, 0, y, 0.75, 1, T[2]);
+    });
+    end.foot = [xx, y0, xx + 0.75, y1];
   }
   const big = typeof m2mDrawHorse === 'function' && x1 - x0 >= 36;
   const n = Math.max(1, Math.min(3, Math.floor((x1 - x0) / (big ? 34 : 22))));

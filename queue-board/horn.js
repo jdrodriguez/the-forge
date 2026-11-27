@@ -79,13 +79,14 @@ function hornUi() {
   // Alerts can't sound while the herald is down or can't read the board; the settings button says so.
   const down = s && (soundHeraldDown() || sound.herald.boardOk === false);
   const state = muted ? 'muted' : zoom ? 'zoom' : 'on';
-  const label = { muted: 'Muted', zoom: 'Muted: Zoom', on: 'Mute' }[state];
+  // The button is the horn alone, struck through while muted; its name stays for screen readers and the tooltip.
+  const label = { muted: 'Sounds muted', zoom: 'Sounds muted for Zoom', on: 'Mute sounds' }[state];
   const title = {
     muted: 'Every alert sound is off on every Mac; notifications still post. Click to turn sound back on.',
     zoom: 'Silent while a Zoom meeting runs. Click to mute for good, or turn off Zoom auto-mute in the sound settings.',
     on: 'Alerts sound when an agent needs you, when something breaks and when work merges. Click to mute them on every Mac.',
   }[state];
-  const html = `<button type="button" class="horn-mute is-${state}" data-horn="mute" aria-pressed="${muted}" title="${title}"${s ? '' : ' disabled'}>${state === 'on' ? HORN_ICON : HORN_OFF}<span>${label}</span></button>`
+  const html = `<button type="button" class="horn-mute is-${state}" data-horn="mute" aria-pressed="${muted}" aria-label="${label}" title="${title}"${s ? '' : ' disabled'}>${state === 'on' ? HORN_ICON : HORN_OFF}</button>`
     + `<button type="button" class="horn-gear${down || sound.error ? ' warn' : ''}" data-horn="settings" aria-haspopup="dialog" aria-expanded="${Boolean(typeof soundPanelOpen === 'function' && soundPanelOpen())}"`
     + ` aria-label="Sound settings" title="${down ? 'Sound settings. The herald is not sounding alerts right now; open for why.' : 'Sound settings'}">${GEAR}</button>`;
   if (html !== sound.html) { hornBtns.innerHTML = html; sound.html = html; }

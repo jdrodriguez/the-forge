@@ -37,13 +37,18 @@ function m2Dale(L, plan, season, add) {
   const top = Math.max(D.y - 14, ere ? ere.y + ere.h + 2 : -99);
   const cx = Math.round(D.x);
   const rvx = cx + 9;
-  // The lake's north shore below the town: the town wall stands above it, the back row's roofs may lean over the realm.
+  // The lake's north shore below the town: the town wall stands above it. Nothing in the town rises past crest, two
+  // units under the yard's kerb (2026-11-27: the back row's roofs and the bell tower stood over the yard's rails), so
+  // the back row stands as far down as that needs and the tower, as tall as the room allows, fronts the square.
   const lake = plan.places.longLake;
   const lx = lake.x - 4;
   let ly = top + 8;
   while (ly < plan.H - 1 && m2MatAt(L, lx, ly) !== M2_MAT.water && m2MatAt(L, cx, ly + 2) !== M2_MAT.water) ly += 1;
   const wallZ = Math.round(Math.min(top + 28, ly - 4));
-  const [y0, y1] = [wallZ - 19, wallZ - 6];
+  const crest = ere ? ere.y + ere.h - 1 : top - 8;
+  const y1 = wallZ - 6;
+  const y0 = Math.min(y1 - 6, Math.max(wallZ - 19, crest + 16));
+  const towerH = Math.max(20, Math.min(33, y1 - crest));
   // The River Running, from Erebor's realm down through the town to the Long Lake's north shore.
   let wy = ly;
   while (wy < plan.H - 1 && m2MatAt(L, lx, wy) !== M2_MAT.water) wy += 1;
@@ -54,32 +59,34 @@ function m2Dale(L, plan, season, add) {
   // The town's ground: paved streets and the market square, the road down to the lake through the south gate.
   m2Blob(L, cx - 2, (y0 + wallZ) / 2, 31, (wallZ - y0) / 2 + 6, M2_MAT.man, { wob: 3, seed: 71, keep: M2_MAT.water });
   m2Path(L, [[cx - 3, top - 4], [cx - 3, wallZ + 3]], 2.4, M2_MAT.road);
-  m2Path(L, [[cx - 30, y0 + 6], [rvx - 3, y0 + 6]], 1.8, M2_MAT.road);
-  m2Path(L, [[rvx + 3, y0 + 6], [cx + 30, y0 + 6]], 1.8, M2_MAT.road);
-  m2Rect(L, cx - 9, y0 + 3, 13, y1 - y0 - 3, M2_MAT.plaza);
-  m2Stroke(L, [[rvx - 4.5, y0 + 6], [rvx + 4.5, y0 + 6]], 2.4, M2_MAT.terrace, { aux: () => 60 });
-  m2Parapets(add, rvx - 4.5, y0 + 6, rvx + 4.5, y0 + 6, 2);
+  const street = Math.round((y0 + y1) / 2);
+  m2Path(L, [[cx - 30, street], [rvx - 3, street]], 1.8, M2_MAT.road);
+  m2Path(L, [[rvx + 3, street], [cx + 30, street]], 1.8, M2_MAT.road);
+  m2Rect(L, cx - 9, y1 - 4, 13, 7, M2_MAT.plaza);
+  m2Stroke(L, [[rvx - 4.5, street], [rvx + 4.5, street]], 2.4, M2_MAT.terrace, { aux: () => 60 });
+  m2Parapets(add, rvx - 4.5, street, rvx + 4.5, street, 2);
   plan.places.daleGate = { x: cx - 3, y: wallZ + 1 };
-  // The houses, back row first.
-  const houses = [[-26, y0, 13, M2_RED], [-13, y0 - 1, 12, M2_SLATE], [17, y0 - 1, 12, M2_RED], [28, y0 + 1, 11, M2_SLATE],
+  // The houses, back row first, either side of the river and the tower.
+  const houses = [[-26, y0, 13, M2_RED], [-13, y0 - 1, 12, M2_SLATE], [19, y0 - 1, 12, M2_RED], [30, y0 + 1, 10, M2_SLATE],
     [-27, y1, 12, M2_SLATE], [-15, y1 + 1, 12, M2_RED], [19, y1, 13, M2_SLATE], [30, y1 + 2, 9, M2_RED]];
-  for (const [dx, z, w, roof] of houses) {
+  // Only the front row's end houses smoke: the back row's smoke rose through the yard's rails (2026-11-27).
+  houses.forEach(([dx, z, w, roof], i) => {
     const hs = m2TownHouse(add, L, cx + dx, z, w, roof, M2_PAL.stone, 'stone', season);
-    if (dx === -13 || dx === 17 || dx === -27) m2Smoke(add, hs.chimney[0], hs.chimney[1], dx + 40);
-  }
-  // The bell tower on the square's north side, and a well in the square.
-  m2Shadow(L, cx + 1.5, y0 + 3, 5, 1.6, 0.8);
-  m2ValeThing(add, `daleTower,${season}`, cx - 4.5, y0 - 30, 9, 33.25, y0 + 3, (g) => m2DaleTower(g, season), [cx - 4, y0, cx + 4, y0 + 3]);
-  add.light({ x: cx, y: y0 - 18, r: 4, c: '#ffc56a' });
-  m2ValeThing(add, 'daleWell', cx - 8, y1 - 3, 4, 4, y1 + 1, m2DaleWell, [cx - 8, y1, cx - 4, y1 + 1]);
+    if (i > 3 && (dx === -27 || dx === 19)) m2Smoke(add, hs.chimney[0], hs.chimney[1], dx + 40);
+  });
+  // The bell tower on the square, between the front row's houses.
+  m2Shadow(L, cx + 1.5, y1, 5, 1.6, 0.8);
+  m2ValeThing(add, `daleTower${towerH},${season}`, cx - 4.5, y1 - towerH, 9, towerH + 0.25, y1, (g) => m2DaleTower(g, season, towerH), [cx - 4, y1 - 3, cx + 4, y1]);
+  add.light({ x: cx, y: y1 - towerH + 12, r: 4, c: '#ffc56a' });
   m2DaleWalls(L, add, cx, wallZ, rvx);
-  // Lamps by the gate, on the bridge and in the square at night.
-  for (const [lx, ly] of [[cx - 7, wallZ - 9], [cx + 1, wallZ - 9], [rvx, y0 + 3], [cx - 1, y1 - 1]]) add.light({ x: lx, y: ly, r: 5, c: '#ffc56a', fire: true });
+  // Lamps by the gate, on the bridge and at the tower's door at night.
+  for (const [lx, ly] of [[cx - 7, wallZ - 9], [cx + 1, wallZ - 9], [rvx, street - 3], [cx - 1, y1 - 1]]) add.light({ x: lx, y: ly, r: 5, c: '#ffc56a', fire: true });
 }
-// The bell tower, 9 by 33 units: courses of stone, an open belfry with the bronze bell, a slate pyramid with a vane.
-function m2DaleTower(g, season) {
+// The bell tower, 9 units wide and h tall (at most 33): courses of stone, an open belfry with the bronze bell, a slate
+// pyramid with a vane; a window in its shaft when it is tall enough for one.
+function m2DaleTower(g, season, h = 33) {
   const S = M2_PAL.stone;
-  m2Wall(g, 1, 10, 7, 23, S, 'stone');
+  m2Wall(g, 1, 10, 7, h - 10, S, 'stone');
   pxBox(g, 1, 10, 7, 0.75, S[5]);
   pxBox(g, 2, 11.5, 5, 5.5, '#141218');
   for (const bx of [1, 4, 7]) pxBox(g, bx, 11, 1, 6, S[bx < 2 ? 4 : 2]);
@@ -91,8 +98,8 @@ function m2DaleTower(g, season) {
   pxBox(g, 4.25, 16.25, 0.5, 0.5, '#3a2a10');
   pxBox(g, 0.5, 17, 8, 1, S[4]);
   pxBox(g, 0.5, 17.75, 8, 0.25, S[1]);
-  m2Window(g, 3.5, 21, 2, 3, S, 'arch');
-  pxBox(g, 3.25, 28.5, 2.5, 4.5, M2_PAL.wood[1]);
+  if (h >= 30) m2Window(g, 3.5, 21, 2, 3, S, 'arch');
+  pxBox(g, 3.25, h - 4.5, 2.5, 4.5, M2_PAL.wood[1]);
   const R = season === 'winter' ? M2_SLATE.map((c, i) => (i > 1 ? hdMix(c, '#eef4f8', 0.6) : c)) : M2_SLATE;
   m2Raster(g, 0, 2, 36, 32, (px, py) => {
     const half = 2 + py * 0.56;
@@ -102,17 +109,6 @@ function m2DaleTower(g, season) {
   });
   pxBox(g, 4.25, 0, 0.5, 2.5, '#2a2a30');
   pxBox(g, 4.5, 0.25, 1.5, 0.75, M2_PAL.gold[2]);
-}
-// The well: a ring of stones with a little roof over its windlass.
-function m2DaleWell(g) {
-  const S = M2_PAL.stone;
-  pxBox(g, 0.25, 2.25, 3.5, 1.5, S[3]);
-  pxBox(g, 0.25, 2.25, 3.5, 0.5, S[5]);
-  pxBox(g, 1, 2.5, 2, 0.5, '#1a2a3a');
-  pxBox(g, 0.5, 0.75, 0.5, 1.75, M2_PAL.wood[2]);
-  pxBox(g, 3, 0.75, 0.5, 1.75, M2_PAL.wood[2]);
-  pxBox(g, 0, 0, 4, 1, M2_RED[3]);
-  pxBox(g, 0, 0, 4, 0.25, M2_RED[5]);
 }
 // The town wall along the south, broken by the gate and by the river's water-gate, with a round tower at each end.
 function m2DaleWalls(L, add, cx, z, rvx) {

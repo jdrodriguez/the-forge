@@ -53,7 +53,7 @@ function m2ShireBack(L, r, season, add, B) {
   lobes.push({ x: hx - rx * 0.1, y: B - D * 0.18, rx: span * 0.8, ry: Math.max(12, D * 0.2), h: 17 });
   const pr = span > 140 ? 13 : span > 105 ? 11 : 9;
   const fieldW = pr * 2.4 + 3;
-  const segs = [[r.x + 1, hx - 2], [hx + 4.5, r.x + r.w - 1 - fieldW]];
+  const segs = [[r.ux0 - 6, hx - 2], [hx + 4.5, r.x + r.w - 1 - fieldW]];
   let dug = 0;
   segs.forEach(([s0, s1], side) => {
     const k = Math.floor((s1 - s0 + 1) / 21);
@@ -112,7 +112,7 @@ function m2ShireBack(L, r, season, add, B) {
   if (holes.party) for (let i = 0; i < 5; i += 1) add.light({ x: H.x + holes.party.x - party.r + i * party.r * 0.5, y: H.y + holes.party.y + party.r * 0.6, r: 3, c: M2_SHIRE_LANTERN[i] });
   // The hedges along the hills' feet, broken at each picket fence, at Bag End's path and at the Party Field.
   const gaps = [...feetHoles.map((o) => [o.x - o.hw - 0.5, o.x + o.hw + 0.5]), [hx - 3, hx + 3], [party.x - 8, party.x + 8]].sort((a, b) => a[0] - b[0]);
-  let x = r.x + 2;
+  let x = r.ux0 - 4;
   for (const [g0, g1] of [...gaps, [r.x + r.w - 2, Infinity]]) {
     if (g0 - x > 3) m2Hedge(L, add, x, B + 0.25, g0 - x, season, Math.round(x));
     x = Math.max(x, g1);

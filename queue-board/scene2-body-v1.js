@@ -80,7 +80,9 @@ const m2vPlain = (rows, legs = false) => rows.map((row) => [...row].map((ch) => 
 // A figure from behind standing or walking, put together from v1's own parts as drawFigure lays them out (legs, body,
 // arms, the staff), with no gear a people's own poses add in front (shields, baldrics, a bow). Returns the head's top,
 // or null for a people that draws this pose its own way (ent, Tom's skip), which keeps drawFigure's frame.
-function m2vBackBody(g, kind, name, F, use, frame, P) {
+// motion ({ way, frame, tool }, sprites-motion.js's motionBack) is work in front of a figure seen from behind: its arms
+// replace the hanging ones, and what it puts over the head is left in motion.after for after the head is drawn.
+function m2vBackBody(g, kind, name, F, use, frame, P, motion = null) {
   const p = F.p;
   const hd = HD_PEOPLE[kind] ?? HD_PEOPLE.man;
   if (kind === 'ent' || (kind === 'bombadil' && use === 'walk')) return null;
@@ -90,13 +92,41 @@ function m2vBackBody(g, kind, name, F, use, frame, P) {
   const lx = F.fx - p.w / 2;
   const bodyTop = top + 5;
   const legTop = F.fy - p.legs + 1 + drop;
+  // What lies beyond a worker seen from behind (the paddle in the kettle) is drawn first, so the body hides its foot.
+  if (motion?.way === 'stir') motionBack(g, P, hd, 'stir', motion.frame, motion.tool, { x: F.fx, top, b: bodyTop, armL: lx - 1, armR: lx + p.w }).before();
   hdMap(g, m2vPlain(hd.legs((p.legs - drop) * 4, step), true), P, lx + hd.legsX, legTop + hd.legsY, 0.25);
   hdMap(g, m2vPlain(hd.body((legTop - bodyTop) * 4)), P, lx, bodyTop, 0.25);
   const swing = use === 'walk' && step % 1 === 0 ? (frame ? 1 : -1) : 0;
-  hdArm(g, P, hd, lx - 1, bodyTop, bodyTop + 2, bodyTop + 3, true, swing);
-  hdArm(g, P, hd, lx + p.w, bodyTop, bodyTop + 2, bodyTop + 3, false, p.staff ? 0 : -swing);
+  const M = motion && motionBack(g, P, hd, motion.way, motion.frame, motion.tool, { x: F.fx, top, b: bodyTop, armL: lx - 1, armR: lx + p.w });
+  if (M) {
+    M.arms();
+    motion.after = M.after;
+  } else {
+    hdArm(g, P, hd, lx - 1, bodyTop, bodyTop + 2, bodyTop + 3, true, swing);
+    hdArm(g, P, hd, lx + p.w, bodyTop, bodyTop + 2, bodyTop + 3, false, p.staff ? 0 : -swing);
+  }
   if (p.staff) hdStaff(g, P, lx + p.w + 1, top, F.fy);
   return top;
+}
+
+// The map's 'work' at a tool as the pose that faces its work (sprites-motion.js): facing you, a struck tool comes down
+// in front onto the work and a quill writes; facing away, the same work from behind (back names motionBack's way); in
+// profile a struck tool keeps v1's swing toward the work, and a bucket, a basket, seed or an empty hand reach toward it.
+// A guard's spear is stood with; brewing faces the kettle.
+function m2vMotion(kind, facing, pose, frame, tool) {
+  const same = { pose, frame, tool };
+  if (pose === 'stir') return facing === 'up' ? { pose: 'stand', frame, tool, back: 'stir' } : same;
+  if (pose !== 'work') return same;
+  if (tool === 'spear') return { pose: 'stand', frame: 0 };
+  const own = PEOPLE[kind]?.tool;
+  const strike = MOTION_STRIKE.includes(tool) ? tool : tool == null && MOTION_STRIKE.includes(own) ? own : null;
+  const quill = tool === 'quill' || (tool == null && own === 'quill');
+  if (facing === 'down') return quill ? { pose: 'write', frame } : { pose: strike ? 'strike' : 'tend', frame, tool: strike ?? tool };
+  if (facing === 'up') return { pose: 'stand', frame, tool: strike ?? tool, back: strike ? 'strike' : 'tend' };
+  if (strike || quill || tool === 'staff') return same;
+  if (tool === 'bucket') return { pose: 'bend', frame: frame === 1 ? 1 : 0 };
+  if (tool === 'basket') return { pose: 'tip', frame: frame === 1 ? 1 : 0, tool };
+  return { pose: (tool == null || tool === 'none') && frame === 0 ? 'reach' : 'tip', frame: 0 };
 }
 
 // v1's tool for a hand: the map's tool name when v1 draws it, else the people's own.
@@ -112,13 +142,17 @@ function m2vNative(kind, name, facing, pose, frame, shut, tool) {
   g.imageSmoothingEnabled = false;
   g.setTransform(4, 0, 0, 4, 0, 0);
   // A pose v1 has by name (sprites-work.js, sprites-chores.js: carry, stir, harp, crank...) passes straight through.
+  // Work in front of the figure: struck down or written on facing you, done from behind facing away (m2vMotion).
+  const mv = m2vMotion(kind, facing, pose, frame, tool);
+  [pose, frame, tool] = [mv.pose, mv.frame, mv.tool];
   const own = !M2V_POSE[pose] && typeof POSES === 'object' && POSES[pose];
   const vp = M2V_POSE[pose] ?? (own ? pose : 'stand');
-  const back = facing === 'up' && (vp === 'walk' || vp === 'stand');
-  const use = facing === 'up' && !back ? 'stand' : vp;
+  const back = facing === 'up' && (vp === 'walk' || vp === 'stand' || Boolean(mv.back));
+  const use = facing === 'up' && !back ? 'stand' : mv.back ? 'stand' : vp;
   const armed = use === 'work';
   const P0 = qdFigurePal(kind, name);
-  const backTop = back ? m2vBackBody(g, kind, name, F, use, frame, P0) : null;
+  const motion = mv.back ? { way: mv.back, frame, tool } : null;
+  const backTop = back ? m2vBackBody(g, kind, name, F, use, mv.back ? 0 : frame, P0, motion) : null;
   if (backTop == null) drawFigure(g, kind, name, F.fx, F.fy, use, frame, own ? tool : armed ? m2vTool(tool) : undefined);
   // The head drawFigure drew, covered again: from behind, or with its eyes shut for a blink.
   const hd = HD_PEOPLE[kind] ?? HD_PEOPLE.man;
@@ -128,6 +162,8 @@ function m2vNative(kind, name, facing, pose, frame, shut, tool) {
   const P = qdFigurePal(kind, name);
   if (back && hd.head) hdMap(g, m2vBackRows(kind, trail), P, F.fx - 4.5, top - hd.up / 4, 0.25);
   else if (shut && hd.head && (use === 'stand' || use === 'walk')) hdHead(g, hd, P, F.fx - 4, top, true, trail);
+  // What the work from behind puts over the back of the head (motionBack), drawn after the head.
+  if (backTop != null) motion?.after?.();
   return c;
 }
 

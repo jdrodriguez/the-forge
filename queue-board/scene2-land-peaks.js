@@ -68,6 +68,13 @@ function m2MtPeaks(pts, range, size, seed, plan) {
     }
     run += len;
   }
+  // Beside Rivendell's desks the Misty Mountains keep every other big peak, so the spires there stand apart (pass 2,
+  // 2026-11-27: that cluster was too dense).
+  const riv = range === 'misty' && plan.realms.find((r) => r.kind === 'elf');
+  if (riv) {
+    let j = 0;
+    for (let i = out.length - 1; i >= 0; i -= 1) if (out[i].big && out[i].y > riv.roadY && out[i].y < riv.y + riv.h && j++ % 2) out.splice(i, 1);
+  }
   const red = plan.places.caradhras;
   // Caradhras stands just behind (north of) Moria's gates, so its summit rises over them.
   const gate = Math.min(plan.zones?.moriaWest?.y0 ?? 1e9, plan.zones?.moriaEast?.y0 ?? 1e9);
@@ -80,6 +87,9 @@ function m2MtKeep(plan, bb) {
   // A realm's box, with its edges drawn in toward its stations by up to 16 units, so the slopes may come down into its
   // empty margins (a valley's sides) but stand clear of every desk, plot and anvil.
   const boxes = plan.realms.map((r) => {
+    // Rivendell keeps its whole width and a margin east of it, so the Misty Mountains stand back from the hall and the
+    // desks with open ground between (pass 2, 2026-11-27: the peaks crowded the hall).
+    if (r.kind === 'elf') return { x0: r.x, y0: r.y, x1: r.x + r.w + 10, y1: r.y + r.h - 24, realm: true };
     const st = plan.stations.filter((t) => t.realm === r);
     const [sx0, sx1] = st.length ? [Math.min(...st.map((t) => t.x)) - 12, Math.max(...st.map((t) => t.x)) + 12] : [r.x + 20, r.x + r.w - 20];
     const sy1 = st.length ? Math.max(...st.map((t) => t.y)) + 6 : r.y + r.h - 20;

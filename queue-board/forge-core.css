@@ -1,7 +1,7 @@
-/* forge-core.css: the sidebar, the header, the Queue page, the sound button and the maps' key. page.html links it after
+/* forge-core.css: the sidebar, the header, the Queue page, the sound controls and the maps' key. page.html links it after
    mobile.css and control.css, so it wins at equal weight. README: "The sidebar", "The Queue", "On a phone". */
 
-/* The sidebar: six items, Middle Earth with its two views under it, the stale-data line and the sound button at the foot. */
+/* The sidebar: six items, Middle Earth with its two views under it, and at the foot the data's age, the Sentry slots and the sound controls. */
 .side-foot { display: none; }
 .docked .side { display: flex; flex-direction: column; z-index: 7; }
 .docked .side-foot { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding: 10px 8px 4px; border-top: 1px solid var(--line); }
@@ -12,27 +12,25 @@
 .nav-item.nav-sub + .nav-item.view { margin-top: 10px; }
 .nav-item .count.over { color: var(--warn); font-weight: 500; }
 .nav-item .count.hot.warm { --wax: #b5600f; --wax-l: #eea25a; --wax-d: #6e3606; }
-.side-stale { display: flex; align-items: center; gap: 7px; font: italic 14px/1.3 var(--serif); color: var(--bad); }
-.side-stale[hidden] { display: none; }
-.side-stale .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bad); flex: none; }
-
-/* The one sound button and its menu. horn.js's own buttons and music.js's player stay hidden; the menu drives them. */
-.horn .horn-btns, .music { display: none !important; }
-.snd { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 30px; border: 1px solid var(--line-2); border-radius: 3px; background: var(--raised); color: var(--ink-2); cursor: pointer; position: relative; }
-.snd:hover, .snd[aria-expanded="true"] { background: var(--active); color: var(--ink); }
-.snd svg { width: 16px; height: 16px; }
-.snd.playing { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)); }
-.snd.warn::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
-.snd-menu { position: absolute; left: 0; bottom: calc(100% + 10px); width: 208px; padding: 6px; background: var(--panel) var(--grain); border: 1px solid var(--line-2); border-radius: 4px; box-shadow: 0 10px 28px rgb(60 40 10 / .22); display: flex; flex-direction: column; gap: 2px; z-index: 31; }
-.snd-menu[hidden] { display: none; }
-.snd-menu .snd-item { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border: 0; border-radius: 3px; background: none; color: var(--ink); font: 500 13px/1 var(--sans); text-align: left; cursor: pointer; }
-.snd-menu .snd-item:hover, .snd-menu .snd-item:focus-visible { background: var(--hover); }
-.snd-menu .snd-item[aria-disabled="true"] { opacity: .55; cursor: default; }
-.snd-menu .snd-item svg { width: 15px; height: 15px; color: var(--ink-2); flex: none; }
+/* The foot (side-dock.js): how old the data is, the Sentry slots, then the music player and the sound buttons in plain
+   sight, as before the redesign. While music plays, its row holds Pause, Next and the track with how far it has got. */
+.side-fresh { margin: 0; white-space: normal; line-height: 1.3; }
+.side-fresh.stale { color: var(--bad); }
+.side-sentry { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-3); }
+.side-sentry[hidden] { display: none; }
+:root:not(.docked) .horn .horn-btns, :root:not(.docked) .music { display: none !important; }
+.docked .side-foot .horn { flex-wrap: wrap; gap: 6px; }
+/* One row of buttons (Play, Next, Mute, Settings), and the playing track on its own line under them (2026-11-27). */
+.docked .side-foot .music { display: contents; }
+.docked .side-foot .mu-play { order: 1; }
+.docked .side-foot .mu-next { order: 2; }
+.docked .side-foot .horn-btns { order: 3; display: flex; gap: 6px; }
+.docked .side-foot .music .mu-now { order: 4; flex: 1 1 100%; max-width: none; }
+/* Play and Mute are their icons alone (2026-11-27); all four foot buttons share one square size. */
+.docked .side-foot .horn button { justify-content: center; width: 30px; padding: 0; }
 .snd-item .nav-t { flex: 1; }
 .snd-item .st { margin-left: auto; color: var(--ink-3); font-weight: 400; font-size: 12px; }
 .snd-item .dot.bad { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); }
-.snd-menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
 .docked .sound-panel { position: fixed; top: auto; right: auto; bottom: 12px; left: 232px; max-height: calc(100dvh - 24px); overflow-y: auto; }
 
 /* The header: the view's name, and on Middle Earth which view. The data's age shows here only on a phone. */
@@ -153,4 +151,3 @@ a.nrow:hover, button.nrow:hover { background: var(--hover); text-decoration: non
   .fold .rest { font-size: 14.5px; }
   .me-key { width: 36px; height: 36px; }
 }
-:root:not(.docked) .snd, :root:not(.docked) .snd-menu { display: none !important; }

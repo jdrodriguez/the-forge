@@ -81,13 +81,13 @@ function scLayout() {
   plans.forEach((p, i) => {
     const add = Math.floor(extra / plans.length) + (i === plans.length - 1 ? extra % plans.length : 0);
     const w = p.w + add;
-    const left = x0 + Math.floor(add / 2) + p.pad + SC_COL / 2;
+    const { cols, left } = p.kind === 'elf' ? scElfRow(p, x0, w) : { cols: p.cols, left: ereborLeft(p, x0, w, x0 + Math.floor(add / 2) + p.pad + SC_COL / 2) };
     const r = { kind: p.kind, title: p.title, m: p.m, x0, w };
     sc.realms.push(r);
     for (let j = 0; j < p.n; j += 1) {
-      const row = j < p.cols ? 0 : 1;
+      const row = Math.floor(j / cols);
       sc.stations.push({ id: `${p.m.host}:r${j}`, host: p.m.host, kind: p.kind, sentry: false, realm: r, y: SC_ROWS[row],
-        x: left + (row ? j - p.cols : j) * SC_COL + (row ? SC_COL / 2 : 0) });
+        x: left + (j % cols) * SC_COL + (row % 2 ? SC_COL / 2 : 0) });
     }
     for (let j = 0; j < p.k; j += 1) sc.stations.push({ id: `${p.m.host}:s${j}`, host: p.m.host, kind: 'ranger', sentry: true, shared: j > 0, realm: r, x: x0 + w - 8 - j * 22, y: ROAD_Y + 2 });
     x0 += w;
@@ -187,12 +187,12 @@ function scPose(a) {
   const t = sc.tick;
   if (a.foe?.wp && a.mood !== 'gone') return a.foe.wp;
   // A four-step walk and a swing with an in-between (sprites-hd.js), each worker at its own point in them; reduced motion's
-  // still frame shows the swing raised or striking.
+  // still frame shows the strike, the tool on the work.
   if (a.moving) return [a.carry ? 'carry' : 'walk', hdWalkFrame(t + a.seed, 2 * (PEOPLE[a.kind]?.pace ?? 1)), a.carry];
   if (a.cheerUntil > performance.now()) return [t % 6 < 3 ? 'cheer' : 'stand', 0];
-  const swing = (k) => (scReduced.matches ? Math.floor(t / k) % 2 : hdSwingFrame(t + a.seed, k));
-  if (a.mood === 'work' || a.mood === 'checking') return a.act ?? ['work', swing(3)];
-  if (a.mood === 'failing') return a.t.workerState === 'busy' || a.t.workerState === 'working' ? ['work', swing(2)] : ['sleep', 0];
+  const swing = (k) => (scReduced.matches ? 1 : hdSwingFrame(t + a.seed, k));
+  if (a.mood === 'work' || a.mood === 'checking') return a.act ?? [stationPose(a.kind), swing(3)];
+  if (a.mood === 'failing') return a.t.workerState === 'busy' || a.t.workerState === 'working' ? [stationPose(a.kind), swing(2)] : ['sleep', 0];
   if (a.mood === 'blocked') return ['ask', Math.floor(t / 4) % 2];
   if (a.mood === 'green') return [t % 20 < 10 ? 'cheer' : 'stand', 0];
   if (a.mood === 'gone') return ['stand', 0];

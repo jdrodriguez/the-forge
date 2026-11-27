@@ -47,8 +47,9 @@ function phoneMoreSet(open) {
 }
 phoneMore.addEventListener('click', () => phoneMoreSet(!phoneMoreOpen()));
 phoneVeil.addEventListener('click', () => phoneMoreSet(false));
-// A link in the sheet or a tab in the bar goes where it says (page.html's own click handler) and the sheet closes.
-phoneSide.addEventListener('click', (e) => { if (phoneMoreOpen() && e.target.closest('a.nav-item')) phoneMoreSet(false); });
+// A link in the sheet or a tab in the bar goes where it says (page.html's own click handler) and the sheet closes. A
+// sound item keeps it open and shows its new state, so Music and then Next track take two taps (side-dock.js).
+phoneSide.addEventListener('click', (e) => { if (phoneMoreOpen() && e.target.closest('a.nav-item:not([data-snd])')) phoneMoreSet(false); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && phoneMoreOpen()) phoneMoreSet(false); });
 
 // renderNav redraws the sidebar on every snapshot; an open sheet is copied again. More lights up while a view behind it

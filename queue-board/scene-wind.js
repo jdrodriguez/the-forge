@@ -60,8 +60,10 @@ function windKeepOut(r, P) {
   for (const f of warFires(r)) out.push([f.x - 4, f.y - 4, f.x + 5, f.y + 2]);
   windSpots(P, (s) => out.push([s.x - 3, s.y - 4, s.x + 3, s.y + 1]));
   if (r.kind === 'elf') for (const [x] of Object.values(elfTrees(r)).flat()) out.push([x - 2, GROUND_Y - 4, x + 4, GROUND_Y + 8]);
-  // The Shire's beds and hill, its fence and its vegetable patch. Rohan's hill and stables are its solid ground.
-  if (r.kind === 'hobbit') out.push([cx - 25, GROUND_Y - 4, cx + 25, GROUND_Y + 11], [r.x0 + r.w - 24, GROUND_Y, r.x0 + r.w, GROUND_Y + 8], [cx + 26, GROUND_Y + 9, r.x0 + r.w - 4, GROUND_Y + 21]);
+  // The Shire's beds and hill, its fence and its vegetable patch (shirePatch). Rohan's hill and stables are its solid ground.
+  const patch = r.kind === 'hobbit' && shirePatch(r);
+  if (r.kind === 'hobbit') out.push([cx - 25, GROUND_Y - 4, cx + 25, GROUND_Y + 11]);
+  if (patch) out.push([patch.fence[0] - 1, patch.fence[1] - 1, patch.fence[2] + 1, patch.y + 11]);
   return out;
 }
 // A realm's strips, worked out again when its layout changes. Each blade of grass is [x, y, tall, clump]: a tuft's

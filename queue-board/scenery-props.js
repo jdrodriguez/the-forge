@@ -161,6 +161,8 @@ function realmProps(r) {
       const spots = [-1, 1].map((side) => ({ side, sx: side < 0 ? x - gap : x + w - 1 + gap }))
         .filter(({ sx }) => sx - 4 >= r.x0 && sx + 4 <= r.x0 + r.w && boxClear([sx - 3, base - 12, sx + 3, base + 1], desks))
         .map(({ side, sx }) => ({ x: sx, y: base + 1, face: -side, room: Math.min(99, ...back.map((bx) => Math.abs(sx - bx))) }))
+        // Erebor's back row stands under its wall, so a spot there must clear its dwarves (2026-11-27: Bofur mined in Kili).
+        .filter((sp) => r.kind !== 'dwarf' || base > PROP_MID || sp.room >= 9)
         .sort((p, q) => q.room - p.room).slice(0, both ? 2 : 1);
       if (spots.length && (!best || spots[0].room > best.spots[0].room)) best = { x, spots };
       if (best?.spots[0].room >= 9) break;
@@ -189,19 +191,23 @@ function realmProps(r) {
     P.chest = fit('chest', 11, 8, PROP_MID, xsFrom(r.x0 + 3, r.x0 + r.w - 14), 6);
   } else if (r.kind === 'hobbit') {
     solid([cx - 20, GROUND_Y - 13, cx + 20, GROUND_Y + 6]);
-    outs.push([cx - 24, GROUND_Y - 2, cx + 24, GROUND_Y + 10], [r.x0 + r.w - 23, GROUND_Y + 1, r.x0 + r.w - 1, GROUND_Y + 7]);
-    const left = cx + 27;
-    const right = r.x0 + r.w - 5;
+    outs.push([cx - 24, GROUND_Y - 2, cx + 24, GROUND_Y + 10], ...shirePosts(r));
+    // The vegetable patch and its fence (shirePatch, scenery-farm.js), and the hobbits' places in its rows.
+    const patch = shirePatch(r);
     P.veg = [];
-    if (right - left >= 14) {
-      outs.push([left, GROUND_Y + 10, right, GROUND_Y + 20]);
-      for (let x = left + 3; x <= right - 9 && P.veg.length < 2; x += 1) {
-        const stand = [x - 3, GROUND_Y + 6, x + 3, GROUND_Y + 19];
-        if (boxClear(stand, desks)) { P.veg.push({ x, y: GROUND_Y + 18, face: 1 }); desks.push(stand); x += 7; }
+    if (patch) {
+      const y1 = patch.y + 10;
+      outs.push(patch.fence, [patch.left, patch.y, patch.right, y1]);
+      for (let x = patch.left + 3; x <= patch.right - 9 && P.veg.length < 2; x += 1) {
+        const stand = [x - 3, y1 - 13, x + 3, y1];
+        if (boxClear(stand, desks)) { P.veg.push({ x, y: y1 - 1, face: 1 }); desks.push(stand); x += 7; }
       }
     }
-    P.brew = fit('brew', 11, 5, GROUND_Y + 6, xsFrom(r.x0 + 2, cx - 31), 5) ?? fit('brew', 11, 5, PROP_MID, xsFrom(r.x0 + 2, r.x0 + r.w - 13), 5);
-    P.cart = fit('cart', 13, 8, PROP_MID, xsFrom(r.x0 + r.w - 15, r.x0 + 2), 6);
+    // The kettle by the hill's foot, and the cart, on a row of plots' line (the middle ones first) where there is room.
+    const rows = shireRows().slice(1).sort((a, b) => Math.abs(a - PROP_MID) - Math.abs(b - PROP_MID));
+    const onRows = (type, w, h, xs, gap) => { for (const base of rows) { const p = fit(type, w, h, base, xs, gap); if (p) return p; } return null; };
+    P.brew = fit('brew', 11, 5, GROUND_Y + 6, xsFrom(r.x0 + 2, cx - 31), 5) ?? onRows('brew', 11, 5, xsFrom(r.x0 + 2, r.x0 + r.w - 13), 5);
+    P.cart = onRows('cart', 13, 8, xsFrom(r.x0 + r.w - 15, r.x0 + 2), 6);
   } else if (r.kind === 'elf') {
     for (const b of [[r.x0, GROUND_Y - 44, r.x0 + 19, GROUND_Y + 21], [cx - 17, GROUND_Y - 18, cx - 14, GROUND_Y + 4], [cx + 15, GROUND_Y - 18, cx + 18, GROUND_Y + 4]]) {
       outs.push(b);

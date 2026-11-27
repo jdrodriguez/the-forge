@@ -134,11 +134,13 @@ function m2eGolGrid(L, plan) {
   for (const list of Object.values(plan.roam ?? {})) for (const p of list) body(p);
   for (const loop of Object.values(plan.patrols ?? {})) for (const p of loop) body(p, 15, 30);
   for (const [k, z] of Object.entries(plan.zones ?? {})) if (!k.startsWith('gollum:')) mark([z.x0, z.y0, z.x1, z.y1], 8);
-  // Erebor's carved facade and gate are painted on the ground (scene2-erebor-gate.js), so they keep their own box.
+  // Erebor's carved facade and gate are painted on the ground (scene2-erebor-gate.js), so they keep their own box, and
+  // so does its paved yard, whose foot a lair's rock stood on (2026-11-27).
   for (const r of plan.realms) {
     if (r.kind !== 'dwarf' || typeof m2EreLayout !== 'function') continue;
     const E = m2EreLayout(r);
     mark([E.cx - E.fw / 2 - 3, E.top - 4, E.cx + E.fw / 2 + 3, E.courtTop + 3], 1);
+    mark([r.x, E.courtBot, r.x + r.w, r.y + r.h], 1);
   }
   const sums = {};
   const sum = (bits) => {

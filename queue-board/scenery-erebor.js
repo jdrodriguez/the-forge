@@ -69,6 +69,16 @@ function ereborWall(g, r) {
 // The gate: a dark doorway, deepest at its top, its far jamb catching the light and its floor faintly lit, stepping in
 // under corbels; pillars of pale dressed stone, fluted and banded with carving; a lintel inlaid with gold runes, a
 // keystone with a gold crown, and two steps before it.
+// Where the first column of a realm's stations stands (scene.js's scLayout passes the centred one, left): in Erebor,
+// moved by less than half a column so the gate stands in the gap between the back row's anvils, since a dwarf at an
+// anvil before it stood in its doorway with Gollum (2026-11-27).
+function ereborLeft(p, x0, w, left) {
+  if (p.kind !== 'dwarf' || p.cols < 2) return left;
+  const cx = x0 + Math.floor(w / 2);
+  const j = Math.max(0, Math.min(p.cols - 2, Math.round((cx - left - SC_COL / 2) / SC_COL)));
+  return cx - SC_COL / 2 - j * SC_COL;
+}
+
 function ereborGate(g, cx) {
   const [Sh, L, B, S, D, O] = EREBOR_GATE;
   pxBox(g, cx - 5.5, GROUND_Y - 15, 11, 17, '#17141c');

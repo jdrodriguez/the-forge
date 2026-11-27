@@ -26,7 +26,8 @@ function m2Rivendell(L, r, plan, season, add) {
   // also keep off the rows above the desk block where the elves stand, and every station's box (m2StationBox) with the 30 rows above it.
   const keep = [{ x0: r.x - 2, y0: r.roadY - 5, x1: r.x + r.w + 2, y1: r.roadY + 5 }];
   for (const s of plan.stations) if (s.realm === r) keep.push({ x0: s.x - 12, y0: s.hy - 40, x1: s.x + 12, y1: s.y + 3 });
-  const shade = [{ x0: r.block.x0, y0: r.block.y0 - 30, x1: r.block.x1, y1: r.block.y0 + 2 }, ...Object.values(plan.zones ?? {})];
+  // Trees keep 3 units off every landmark's zone (pass 2: a fir stood on the Moria gate's roof).
+  const shade = [{ x0: r.block.x0, y0: r.block.y0 - 30, x1: r.block.x1, y1: r.block.y0 + 2 }, ...Object.values(plan.zones ?? {}).map((z) => ({ x0: z.x0 - 3, y0: z.y0 - 3, x1: z.x1 + 3, y1: z.y1 + 3 }))];
   for (const s of plan.stations) {
     if (s.realm !== r) continue;
     const [bx0, by0, bx1, by1] = typeof m2StationBox === 'function' ? m2StationBox(s) : [s.x - 9, s.y - 18, s.x + 9, s.y + 1];
@@ -108,17 +109,27 @@ function m2RivLower(L, add, r, plan, season, { keep, bank, spot, paths }) {
   const river = plan.river;
   const boxes = [];
   const y0 = r.roadY + 8;
-  const [x1, y1] = [r.x + r.w + 1, r.f1 + 2];
-  const zones = Object.values(plan.zones ?? {});
+  // The lowest row keeps 8 units off the realm's foot, so nothing stands on the land south of it.
+  const [x1, y1] = [r.x + r.w + 1, r.f1 - 6];
+  // Each thing keeps 4 units of open ground from the others and 8 from the landmarks' zones (Moria's gate draws its
+  // rubble and bushes past its zone), and stays off Caradhras's western slope, which rises over the realm's south-east
+  // corner (pass 2, 2026-11-27: the south end was packed).
+  const pad = (b, d) => ({ x0: b.x0 - d, y0: b.y0 - d, x1: b.x1 + d, y1: b.y1 + d });
+  const zones = Object.values(plan.zones ?? {}).map((z) => pad(z, 8));
+  const red = plan.places.caradhras;
+  if (red) {
+    const cy = Math.min(red.y, Math.min(plan.zones?.moriaWest?.y0 ?? 1e9, plan.zones?.moriaEast?.y0 ?? 1e9) - 8);
+    zones.push({ x0: red.x - 40, y0: cy - 56, x1: red.x + 40, y1: cy + 20 });
+  }
   const ground = (x, y) => [M2_MAT.elf, M2_MAT.wild, M2_MAT.forest].includes(m2MatAt(L, x, y));
   // The Misty Mountains' western foot at a row (their line, plus the foothills drawn west of it).
   const misty = plan.ranges?.misty ?? [];
   const foot = (y) => { const k = misty.findIndex(([, py]) => py > y); if (k < 1) return Infinity; const [[ax, ay], [bx, by]] = [misty[k - 1], misty[k]]; return ax + ((bx - ax) * (y - ay)) / (by - ay) - 22; };
-  const clear = (b) => b.x0 >= Math.max(r.x, bank(b.y1) - 1) && b.x1 <= Math.min(x1, foot(b.y0), foot(b.y1)) && b.y1 <= y1 + 3 && ![...keep, ...boxes, ...zones].some((k) => m2RivHit(b, k))
+  const clear = (b) => b.x0 >= Math.max(r.x, bank(b.y1) - 1) && b.x1 <= Math.min(x1, foot(b.y0), foot(b.y1)) && ![...keep.map((k) => pad(k, 3)), ...boxes.map((k) => pad(k, 4)), ...zones].some((k) => m2RivHit(b, k))
     && ground(b.x0 + 1, b.y1 - 2) && ground(b.x1 - 1, b.y1 - 2) && ground((b.x0 + b.x1) / 2, b.y1 - 6) && ground(b.x0 + 1, b.y1 - 9) && ground(b.x1 - 1, b.y1 - 9);
-  const find = (w, h, ox, prefer) => {
+  const find = (w, h, ox, prefer, yMax = y1) => {
     let best = null;
-    for (let y = y1; y >= y0 + h - 2; y -= 2) {
+    for (let y = yMax; y >= y0 + h - 2; y -= 2) {
       for (let x = r.x + w / 2; x <= x1 - w / 2; x += 2) {
         const b = { x0: x - w / 2 + ox, y0: y - h, x1: x + w / 2 + ox, y1: y + 2 };
         if (!clear(b)) continue;
@@ -132,25 +143,39 @@ function m2RivLower(L, add, r, plan, season, { keep, bank, spot, paths }) {
   const midX = (Math.max(bank(y1), r.x) + x1) / 2;
   const out = { boxes };
   const pathPts = [];
-  const pav = find(28, 36, 0, x1 - 18);
-  if (pav) {
-    const P = m2RivPavilion(L, add, pav.x, pav.y - 9);
-    P.spots.forEach(spot);
-    const side = pav.x + 22 < r.x + r.w ? 1 : -1;
-    m2RivLampSpot(add, spot, pav.x + side * 15, pav.y - 2, -side);
-    pathPts.push([pav.x, pav.y]);
+  // The healing house toward the river, the pavilion east of it on the same lower path. Both are placed before either is
+  // drawn: where the pavilion finds no room beside the house it is placed first and the house tries a narrower box (its
+  // lamp then overhangs it), and a short valley lets the pavilion stand on the valley's foot itself, as before pass 2.
+  const toRiver = Math.max(bank(y1), r.x) + 30;
+  let heal = find(40, 35, -0.5, toRiver);
+  let pav = find(28, 44, 0, x1 - 18) ?? find(28, 44, 0, x1 - 18, r.f1 + 2);
+  if (!pav && heal) {
+    boxes.splice(boxes.indexOf(heal.b), 1);
+    pav = find(28, 44, 0, x1 - 18) ?? find(28, 44, 0, x1 - 18, r.f1 + 2);
+    heal = find(40, 35, -0.5, toRiver) ?? find(36, 35, 1.5, toRiver);
   }
-  const heal = find(36, 35, 1.5, midX);
   if (heal) {
     out.heal = m2RivHeal(L, add, spot, heal.x, heal.y - 6, season);
     pathPts.push([heal.x, heal.y]);
   }
-  // The archery range, where it fits: a straw target and the line an elf shoots from (scene2-archery.js).
+  if (pav) {
+    const P = m2RivPavilion(L, add, pav.x, pav.y - 9);
+    P.spots.forEach(spot);
+    // Its lamp on whichever side has open ground, west first: the east side faces the mountains and Moria's gate.
+    const lampOk = (x) => x > Math.max(r.x, bank(pav.y)) + 4 && x < r.x + r.w - 4 && ![...zones, ...boxes.filter((b) => b !== pav.b)].some((k) => m2RivHit({ x0: x - 7, y0: pav.y - 23, x1: x + 7, y1: pav.y + 2 }, k));
+    const side = lampOk(pav.x - 15) ? -1 : 1;
+    if (side < 0 || lampOk(pav.x + 15)) m2RivLampSpot(add, spot, pav.x + side * 15, pav.y - 2, -side);
+    pathPts.push([pav.x, pav.y]);
+  }
+  // The archery range, where it fits: a straw target and the line an elf shoots from (scene2-archery.js), off the lower
+  // path's row.
+  const pathRow = pathPts.length ? Math.min(...pathPts.map((p) => p[1])) + 1 : null;
+  if (pathRow !== null) boxes.push({ x0: r.x, y0: pathRow - 2, x1: Math.max(...pathPts.map((p) => p[0])) + 2, y1: pathRow + 2 });
   const range = find(32, 22, 0, midX);
   if (range) m2bowRange(L, add, range.b).forEach(spot);
   if (river && pathPts.length) {
     // The bridge crosses at the lower path's row, with lamp four on the far bank; the water spot on the near bank.
-    const by = Math.min(...pathPts.map((p) => p[1])) + 1;
+    const by = pathRow;
     const [wx0, wx1] = [river.cx(by) - river.hw(by) - 1, river.cx(by) + river.hw(by) + 1];
     paths.push([[wx1 + 2, by], ...pathPts.sort((a, b) => a[0] - b[0]).map(([x]) => [x, by])]);
     paths.push([[wx1 + 6, by], [bank(r.roadY + 6) + 2, r.roadY + 3]]);

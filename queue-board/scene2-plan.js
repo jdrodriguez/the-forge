@@ -92,7 +92,8 @@ function m2Plan(W, H) {
     r.back = fields ? Math.max(24, Math.min(52, H - 42 - r.y)) : kind === 'man' ? 52 : Math.max(46, Math.min(112, Math.round(r.h * 0.36)));
     r.roadY = r.y + r.back + 8;
     r.f0 = r.roadY + 7;
-    r.ux0 = r.x + 6;
+    // A realm on the map's west edge keeps 4 more units clear of it, so its holes and names never touch the map's border.
+    r.ux0 = r.x + (r.x < 4 ? 10 : 6);
     r.ux1 = r.x + r.w - 6;
     // The fields' one desk row sits closer under its road, so the steading clears the White City above it.
     if (fields) r.row0 = 22;
@@ -101,9 +102,9 @@ function m2Plan(W, H) {
   plan.edoras = plan.realms[edoras] ?? null;
   m2PlanRiver(plan);
   // Edoras is laid out last, below the realms above it, and no realm may overlap another or run off the map
-  // (scene2-plan-realms.js).
+  // (scene2-plan-realms.js). It keeps its desks in one row while there is room (scene2-rohan.js's m2PlanEdoras).
   plan.realms.forEach((r) => { if (r !== plan.edoras) m2PlanStations(plan, r); });
-  if (plan.edoras) { m2PlanUnder(plan, plan.edoras); m2PlanStations(plan, plan.edoras); }
+  if (plan.edoras) { m2PlanUnder(plan, plan.edoras); m2PlanEdoras(plan, plan.edoras); }
   m2PlanApart(plan);
   // A second Men realm whose stations fall off the map does not fit at this scale (m2Fit then tries a smaller one).
   const second = plan.realms.find((r) => r.kind === 'man' && r !== plan.edoras);
@@ -191,7 +192,9 @@ function m2PlanStations(plan, r) {
   const cols = Math.max(1, Math.min(r.n, Math.floor((room - fw) / need) + 1, Math.ceil(r.n / Math.max(1, Math.ceil(r.n / 3)))));
   const rows = Math.max(1, Math.ceil(r.n / cols));
   // Rows stagger by half a column where there is room for it; a narrow region packs its desks in straight columns.
-  const stagger = rows > 1 && cols > 1 && (room - fw) / (cols - 1) >= need * 1.6;
+  // Erebor's anvils stand on one grid in even columns (2026-11-27: staggered, they lined up with nothing and the west
+  // column met the mine's rails).
+  const stagger = r.kind !== 'dwarf' && rows > 1 && cols > 1 && (room - fw) / (cols - 1) >= need * 1.6;
   const step = cols > 1 ? Math.min(need + 22, (room - fw - (stagger ? need / 2 : 0)) / (cols - 1)) : 0;
   const blockW = (cols - 1) * step + (stagger ? step / 2 : 0);
   const left = Math.round((r.ux0 + r.ux1) / 2 - blockW / 2);

@@ -50,7 +50,7 @@ const M2M_JOBS = {
   // The Shire.
   water: m2mWork('bucket', 4, (a, h, f) => m2mPuff(h.x, h.y + 1, M2M_WATER, 2, { up: 0.1, spread: 0.3, fall: 0.08, life: 7, floor: m2mFloor(a, f) })),
   feed: m2mWork('seed', 5, (a, h, f) => m2mPuff(h.x, h.y, M2M_SEED, 4, { up: 0.3, spread: 0.9, fall: 0.07, life: 14, floor: m2mFloor(a, f) + 1, dir: m2mDir(f) })),
-  brew: { n: [70, 120], act: (a, t, f) => ({ pose: 'stir', frame: (t >> 2) % 2, face: 'down' }),
+  brew: { n: [70, 120], act: (a, t, f) => ({ pose: 'stir', frame: (t >> 2) % 2, face: f }),
     fx: (a, t, f) => { if (t % 5 === 0) { const h = m2mHand(a, f); m2mWisp(h.x + m2mDir(f) * 2, h.y - 1); } } },
   garden: m2mWork('hoe', 3, (a, h, f) => m2mPuff(h.x + m2mDir(f) * 2, a.y, M2M_SOIL, 3, { up: 0.5, spread: 0.8, fall: 0.09, life: 7, floor: a.y + 0.5 })),
   apples: { n: [50, 90], act: (a, t, f) => ({ pose: t % 24 < 14 ? 'cheer' : 'stand', frame: 0, face: t % 24 < 14 ? 'down' : f }),

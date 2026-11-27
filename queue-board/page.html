@@ -906,20 +906,18 @@ function render() {
   freshness();
 }
 
-// How old the data is. The phone's header always says it; on a desktop window it shows at the sidebar's foot
-// (side-dock.js) only once it is stale: the board can't be reached, or the snapshot is over STALE_MS old.
+// How old the data is. The phone's header says it; on a desktop window the sidebar's foot does, with the Sentry slots
+// (side-dock.js sideFootSync). Either turns red once the board can't be reached or the snapshot is over STALE_MS old.
 const STALE_MS = 3 * 60000;
 function freshness() {
-  const el = $('fresh'), side = $('sideStale');
+  const el = $('fresh');
   const down = failing && Date.now() - lastOk > 90000;
   const age = snap ? dur(ms(snap.generatedAt)).split(' ')[0] : null;
   const stale = down || (snap && ms(snap.generatedAt) > STALE_MS);
   el.className = `fresh ${down || stale ? 'stale' : snap?.refreshing ? 'busy' : 'live'}`;
   $('freshText').textContent = down ? `Board unreachable, data ${age ?? 'never read'} old` : age ? `${age} old` : '';
   el.title = snap ? `Data from ${ago(snap.generatedAt)}${snap.refreshing ? ', refreshing' : ''}` : '';
-  if (!side) return;
-  side.hidden = !stale;
-  side.innerHTML = stale ? `<span class="dot"></span>${down ? `Board unreachable, data ${esc(age ?? 'never read')} old` : `Data ${esc(age)} old`}` : '';
+  if (typeof sideFootSync === 'function') sideFootSync();
 }
 
 async function poll() {
@@ -1090,6 +1088,7 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 <script src="/sprites-wanderers-gear.js"></script>
 <script src="/sprites-captains.js"></script>
 <script src="/sprites-work.js"></script>
+<script src="/sprites-motion.js"></script>
 <script src="/sprites-horse.js"></script>
 <script src="/sprites-horse-art.js"></script>
 <script src="/sprites-horse-post.js"></script>
