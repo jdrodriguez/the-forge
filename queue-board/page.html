@@ -1011,6 +1011,8 @@ function applyView(fromClick = false) {
   // Each map fits the room it has when it shows, so a switch lays it out again.
   if (switched) window.dispatchEvent(new Event('resize'));
   if (switched && typeof renderFleet === 'function') renderFleet();
+  // Worktrees' machine chips and Forgotten filter live in the address, so a change there draws the view again.
+  if (view === 'worktrees' && snap && typeof renderWorktrees === 'function') renderWorktrees();
   $('viewTitle').textContent = VIEWS[view];
   $('viewSub').textContent = VIEW_SUB[view] ?? '';
   document.documentElement.dataset.view = view;
@@ -1019,7 +1021,9 @@ function applyView(fromClick = false) {
     el.classList.toggle('active', el.dataset.view === view);
     el.classList.toggle('parent-on', el.dataset.view === 'me' && me);
   });
-  deepLink = TARGET[view] && target ? { id: `${TARGET[view]}-${decodeURIComponent(target)}`, until: Date.now() + DEEP_LINK_MS } : null;
+  let card = null;
+  try { card = target ? decodeURIComponent(target) : null; } catch { /* a malformed hash names no card */ }
+  deepLink = TARGET[view] && card ? { id: `${TARGET[view]}-${card}`, until: Date.now() + DEEP_LINK_MS } : null;
   if (!keepDeepLink() && (switched || fromClick)) { $('main').scrollTop = 0; window.scrollTo(0, 0); }
 }
 // A link to one card (#fleet/<host>) lands on it. The card may not exist yet (Fleet draws its cards once /api/control

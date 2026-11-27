@@ -104,7 +104,7 @@ async function playAll(cues, volume, fresh) {
 }
 
 // Where a click on a notification goes: worked out from the latest snapshot's board address and repo.
-let links = { board: boardUrl(null, BASE, HOST), here: HOST };
+let links = { board: boardUrl(null, BASE), here: HOST };
 async function announce(events, settings, silent) {
   const on = events.filter((e) => settings.events[e.kind] !== false);
   if (!on.length) return;
@@ -158,7 +158,7 @@ async function cycle() {
     return;
   }
   // Back after a long outage: what changed meanwhile is old news, so start from a fresh baseline and say what waits.
-  links = { board: boardUrl(snap, BASE, HOST), here: HOST, repo: snap.board?.repo };
+  links = { board: boardUrl(snap, BASE), here: HOST, repo: snap.board?.repo };
   const back = downNoticed;
   if (back) state = null;
   downSince = null;

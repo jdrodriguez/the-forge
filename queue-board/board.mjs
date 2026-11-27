@@ -41,9 +41,10 @@ const PORT = Number(process.env.QUEUE_BOARD_PORT ?? qb.port ?? 8787);
 const FRESH_MS = 45_000;
 const LIVE = ['building', 'merge-asked', 'claiming'];
 const HERE = os.hostname().split('.')[0];
-// The address links to this board carry (host-ok.mjs boardAddress): the HTTPS name once Tailscale says it serves this
-// port, this machine's name until then.
-let boardUrl = `http://${HERE.toLowerCase()}:${PORT}/`;
+// The address links to this board carry (host-ok.mjs boardAddress), once the board knows its Tailscale name: the HTTPS
+// name when Tailscale serves this port, else the machine's name. null until then, so the herald keeps the address it
+// reads the board at.
+let boardUrl = null;
 // The dispatcher's launchd interval (StartInterval in dispatcher/agent-dispatcher.plist), for "next tick" on the page.
 const TICK_MINUTES = 20;
 // The fleet account whose config dir is ~/.claude; every other account lives in ~/.claude-<label>.
@@ -585,6 +586,9 @@ async function build() {
         // When its green PR started waiting on the reviewer, from a dispatcher that parks such a ticket; a parked ticket
         // holds no slot.
         parked: t.parked ?? null,
+        // In its machine's wake queue (the dispatcher's wakeQueue): it needs to work again and holds no slot until one
+        // frees. { since, reason, pool } or null.
+        waitingForSlot: (m.state?.wakeQueue ?? []).find((w) => w.id === id) ?? null,
         // The worker's Middle-earth name from the dispatcher, if it gives one; nameWorkers fills the rest. A bundle's
         // companions show on their lead.
         nickname: t.nickname ?? null,

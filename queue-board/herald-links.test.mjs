@@ -74,9 +74,9 @@ test('the reminder opens Needs you; a merge and main green have no link (sound o
 });
 
 test('the board address comes from the snapshot, else this Mac\'s name in place of loopback', () => {
-  assert.equal(boardUrl({ board: { url: B } }, 'http://127.0.0.1:8787', 'board-mac'), B);
-  assert.equal(boardUrl({}, 'http://127.0.0.1:8787', 'board-mac'), 'http://board-mac:8787/');
-  assert.equal(boardUrl({ board: { url: 'javascript:x' } }, 'http://board-mac:8787', 'second-mac'), 'http://board-mac:8787/');
+  assert.equal(boardUrl({ board: { url: B } }, 'http://127.0.0.1:8787'), B);
+  assert.equal(boardUrl({}, 'http://127.0.0.1:8787'), 'http://127.0.0.1:8787/');
+  assert.equal(boardUrl({ board: { url: 'javascript:x' } }, 'http://board-mac:8787'), 'http://board-mac:8787/');
 });
 
 test('the board hands out its HTTPS name only when tailscale serve proxies its own port', () => {

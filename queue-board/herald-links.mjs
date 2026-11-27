@@ -9,20 +9,20 @@
 //   the reminder, and an ask with no worker         <board>#sec-needs (the Queue at Needs you)
 //   a merge, main green                             nothing: these play their sound and post no banner
 // The board's address comes from the snapshot (board.url, the address a phone or the installed app uses), so a link
-// works from any device; a board too old to say gets this Mac's name in place of loopback.
+// works from any device. A board that names none (its Tailscale address not known yet) gets the address the herald reads it at.
 
 export const SOUND_ONLY = new Set(['merge', 'mainGreen']);
 const TICKET = /^[A-Z][A-Z0-9]*-\d+$/;
 const SESSION = /^local_[A-Za-z0-9-]{1,64}$/;
 const HOST = /^[A-Za-z0-9-]+$/;
 
-// The board's address for links, ending in a slash.
-export function boardUrl(snap, base, here) {
+// The board's address for links, ending in a slash: the one the snapshot names, else the address the herald reads the
+// board at, which a click on the same machine reaches too.
+export function boardUrl(snap, base) {
   const own = snap?.board?.url;
   if (typeof own === 'string' && /^https?:\/\/[A-Za-z0-9.:[\]-]+\/?$/.test(own)) return own.endsWith('/') ? own : `${own}/`;
   try {
     const u = new URL(base);
-    if (['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) u.hostname = String(here).toLowerCase();
     return `${u.origin}/`;
   } catch {
     return null;
