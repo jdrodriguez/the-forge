@@ -1,9 +1,9 @@
-// sessions.js: the Sessions view, the owner's Claude app sessions outside the queue on every machine, from the
-// snapshot's sessions (sessions.mjs). It answers what is running, what needs them and what they haven't looked at:
-// sessions working now first, then waiting on them (what each needs, in its own words), ready for their review, new
-// since they last opened them, errored, and last the ones gone quiet that were never archived, which are the ones that get forgotten. A routine shows only its latest
-// run. Handled hides a row until its session does something new (board.mjs keeps the marks). View opens the session's
-// transcript in the session panel (session.js); replies happen in the Claude app. Loaded after page.html's own script
+// sessions.js: the Sessions view, the owner's Claude app sessions outside the queue on every machine, from the snapshot's
+// sessions (sessions.mjs). Waiting on them (what each needs, in its own words) and Ready for their review stay open; every
+// other group (working now, new since they last opened them, errored, quiet for two days, done and seen) is one line that
+// opens in place. A row shows only its open PRs. A routine shows only its latest run. Handled hides a row until its
+// session does something new (board.mjs keeps the marks). View opens the session's transcript in the session panel
+// (session.js); replies happen in the Claude app. Loaded after page.html's own script
 // and uses its helpers: $, esc, ago, ico, ICON, link, linkify, snap, machineColor, realmName, sigil, render.
 const SESS_GROUPS = [
   ['working', 'Working now', 'run', 'run'],
@@ -11,12 +11,14 @@ const SESS_GROUPS = [
   ['review', 'Ready for your review', 'pr', 'todo'],
   ['unseen', 'New since you looked', 'spark', 'run'],
   ['error', 'Errored', 'bad', 'bad'],
-  ['quiet', 'Quiet for 2+ days, never archived', 'free', 'free'],
+  ['quiet', 'Quiet for 2+ days', 'free', 'free'],
   ['done', 'Done and seen', 'ok', 'merged'],
 ];
-// The groups that start folded: they hold what is finished.
-const SESS_FOLDED = new Set(['quiet', 'done']);
+// The groups that show as one line until opened: only Waiting on you and Ready for your review ask anything of the owner.
+const SESS_FOLDED = new Set(['working', 'unseen', 'error', 'quiet', 'done']);
 const sessOpen = { handled: false };
+const SESS_DOWN = '<svg class="ic" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const SESS_UP = '<svg class="ic" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 9l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const sessKey = (m, r) => `${m.host}:${r.id}`;
 const sessAgo = (ms) => (ms ? ago(new Date(ms).toISOString()) : 'never');
 
@@ -51,7 +53,7 @@ function sessRow({ m, r, group, handled }) {
     r.parent ? `<span class="chip">${(() => { const p = m.rows.find((x) => x.id === r.parent); return p ? `from ${esc(p.title)}` : 'side session'; })()}</span>` : '',
     r.remote ? '<span class="chip">remote</span>' : '',
     folder ? `<span class="chip" title="${esc(r.folder)}">${esc(folder)}</span>` : '',
-    ...r.prs.filter((p) => /^https:\/\//.test(p.url)).map((p) => `<a class="chip" href="${esc(p.url)}" target="_blank" rel="noopener">${ICON.pr}#${esc(p.number)} ${esc(String(p.state || '').toLowerCase())}</a>`),
+    ...r.prs.filter((p) => /^https:\/\//.test(p.url) && p.state === 'OPEN').map((p) => `<a class="chip" href="${esc(p.url)}" target="_blank" rel="noopener">${ICON.pr}#${esc(p.number)} ${esc(String(p.state || '').toLowerCase())}</a>`),
   ].join('');
   const said = group === 'needs' ? r.ask || r.detail || 'Its last turn ended waiting on you.' : group === 'error' ? r.error : r.detail || r.report || '';
   const fresh = (r.activityAt ?? 0) > (r.focusedAt ?? 0) + 60_000;
@@ -70,18 +72,19 @@ function renderSessions() {
   const rows = sessRows();
   const live = rows.filter((x) => !x.handled);
   const count = (g) => live.filter((x) => x.group === g).length;
-  const older = S.machines.reduce((n, m) => n + (m.older || 0), 0);
   const read = S.machines.filter((m) => m.at).map((m) => m.at).sort()[0];
   const errs = S.machines.filter((m) => m.error).map((m) => `${m.name}: ${m.error}`);
   const bar = `<div class="ibar"><span><b>${count('working')}</b> working</span><span><b>${count('needs')}</b> waiting on you</span><span><b>${count('review')}</b> to review</span><span><b>${count('unseen')}</b> new since you looked</span>`
-    + `${older ? `<span title="Not archived, no activity in the last two weeks; not listed">${older} older sessions never archived</span>` : ''}<span>Read ${read ? ago(read) : 'never'}</span>`
+    + `<span>Read ${read ? ago(read) : 'never'}</span>`
     + `${errs.length ? `<span class="bad">Could not read ${esc(errs.join('; '))}</span>` : ''}</div>`;
   const groups = SESS_GROUPS.map(([g, title, icon, cls]) => {
     const list = live.filter((x) => x.group === g);
     if (!list.length) return g === 'needs' ? `<section class="group"><div class="all-clear">${ico('ok', 'ok')}No session is waiting on you.<span class="lore">No messengers at the door.</span></div></section>` : '';
-    const folded = SESS_FOLDED.has(g) && !sessOpen[g];
-    const more = SESS_FOLDED.has(g) ? `<div class="more-row"><button class="show-all sess-fold" type="button" data-g="${g}">${folded ? `Show ${list.length}` : 'Hide'}</button></div>` : '';
-    return `<section class="group"><h2 class="gh">${ico(icon, cls)}${esc(title)} <span class="gcount${g === 'needs' ? ' seal' : ''}">${list.length}</span></h2>${folded ? '' : list.map(sessRow).join('')}${more}</section>`;
+    if (SESS_FOLDED.has(g)) {
+      const open = Boolean(sessOpen[g]);
+      return `<section class="group sess-line"><button class="fold sess-fold" type="button" data-g="${g}" aria-expanded="${open}">${ico(icon, cls)}<span class="lab">${esc(title)}</span><b>${list.length}</b><span class="go">${open ? SESS_UP : SESS_DOWN}</span></button>${open ? `<div class="fold-body">${list.map(sessRow).join('')}</div>` : ''}</section>`;
+    }
+    return `<section class="group"><h2 class="gh">${ico(icon, cls)}${esc(title)} <span class="gcount${g === 'needs' ? ' seal' : ''}">${list.length}</span></h2>${list.map(sessRow).join('')}</section>`;
   }).join('');
   const done = rows.filter((x) => x.handled);
   const handledRow = done.length ? `<section class="group"><div class="more-row"><button class="show-all sess-fold" type="button" data-g="handled">${sessOpen.handled ? 'Hide' : 'Show'} ${done.length} marked handled</button></div>${sessOpen.handled ? done.map(sessRow).join('') : ''}</section>` : '';

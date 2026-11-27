@@ -1,6 +1,6 @@
 // scene2-gollum.js: the Gollums of the map from above (scene2.js), one to each machine's realm (2026-11-09: one
 // Gollum per machine, his findings in a view of their own), each counting only his own machine from gollum-data.js's
-// grHost, the same report the Gollum view (gollum-view.js) and the side view's Gollums read. He hoards forgotten work:
+// grHost, the same report the Worktrees view's Forgotten filter and the side view's Gollums read. He hoards forgotten work:
 // his machine's worktrees that no worker and no process uses, whose last commit is three days old or more (seven while
 // the PR is still open). He lives in a lair in his realm's land (scene2-gollum-lairs.js) with his heap of trinkets
 // beside its mouth, as big as his machine's count. He crouches by his heap counting, rocking over it, then creeps out
@@ -11,7 +11,7 @@
 // cleaned up or taken back into use) he slinks home and sulks hidden in his lair 24 seconds, as v1's Gollum does
 // (scene-gollum.js's GOL_SULK; 2026-11-09: parity with the side view). A machine with nothing to report
 // keeps its Gollum hidden in his lair, only his pale eyes showing at night. No text is drawn about him on the map: a
-// click on him or his heap opens his machine in the Gollum view (#gollum/<host>). Each has his own seed, so they keep
+// click on him or his heap opens his machine's forgotten worktrees (#worktrees/<host>/forgotten). Each has his own seed, so they keep
 // their own time. With reduced motion each simply crouches at his heap, or clutches the Ring.
 
 const m2eGols = new Map();
@@ -185,13 +185,13 @@ function m2eGolAt(e) {
   return hit?.host ?? null;
 }
 // Hooked once every script has run, so these come after scene2-tags.js's own: a click that a worker or a landed eagle
-// did not take opens the Gollum view at his machine, and the pointer turns to a hand over him.
+// did not take opens his machine's forgotten worktrees, and the pointer turns to a hand over him.
 function m2eGolHook() {
   m2View.addEventListener('click', (e) => {
     if (m2Hit(e) || m2EagleUnder(e)) return;
     const host = m2eGolAt(e);
     if (!host) return;
-    history.pushState(null, '', '#gollum/' + encodeURIComponent(host));
+    history.pushState(null, '', '#worktrees/' + encodeURIComponent(host) + '/forgotten');
     applyView(true);
   });
   m2View.addEventListener('mousemove', (e) => { if (!m2View.style.cursor && m2eGolAt(e)) m2View.style.cursor = 'pointer'; });

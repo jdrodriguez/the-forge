@@ -2,7 +2,7 @@
 // (scene-saruman.js sarTag, sarAt, sarOpen). While he gazes into a lit stone a tag beside his pedestal on Orthanc's top
 // counts the calls under each engine's mark ("Saruman · 5 [Codex] · 5 [Grok]", ai-marks.js), its square in the stone's
 // colour; it moves over his head while a worker's name is beside the pedestal. Its tooltip says what runs in words and
-// how much of each plan's week is used. Clicking him, his pedestal or the tag opens the Machines view, as in the side
+// how much of each plan's week is used. Clicking him, his pedestal or the tag opens the Fleet view, as in the side
 // view; a worker or a landed eagle under the pointer comes first (scene2-tags.js). Loaded after scene2-tags.js, so its
 // listeners on the canvas run after that file's. The figure and the stone are scene2-saruman.js (m2eSar).
 
@@ -17,7 +17,7 @@ function m2eSarTag(tick) {
   if (!show) { if (S.tag) m2eSarTags.innerHTML = S.tag = ''; return; }
   const text = [esc('Saruman'), now.codex && `${now.codex} ${aiMark('codex')}`, now.grok && `${now.grok} ${aiMark('grok')}`].filter(Boolean).join(' · ');
   const title = `The palantír: ${[now.codex && `${now.codex} Codex`, now.grok && `${now.grok} Grok`].filter(Boolean).join(' and ')} call${now.codex + now.grok > 1 ? 's' : ''} running on ${(m2.snap ?? snap).servedBy}`
-    + `\nCodex ${now.use.codex}% and Grok ${now.use.grok}% of the week used. Click for the Machines view.`;
+    + `\nCodex ${now.use.codex}% and Grok ${now.use.grok}% of the week used. Click for the Fleet view.`;
   const html = `<button class="sc-name" type="button" data-seer title="${esc(title)}"><i></i>${text}</button>`;
   if (html !== S.tag || S.tagScale !== m2.scale) {
     m2eSarTags.innerHTML = S.tag = html;
@@ -56,7 +56,7 @@ function m2eSarAt(e) {
   return x >= Math.min(S.x, S.home ?? S.x) - 4 * K && x <= S.stone.x + 2.5 * K && y >= S.feet - 17 * K && y <= S.feet + 1;
 }
 const m2eSarOpen = () => {
-  history.pushState(null, '', '#machines');
+  history.pushState(null, '', '#fleet');
   applyView(true);
 };
 m2eSarTags.addEventListener('click', (e) => { if (e.target.closest('[data-seer]')) m2eSarOpen(); });

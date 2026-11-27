@@ -1,6 +1,6 @@
-// gollum-data.js: what Gollum reports, worked out once from the snapshot for the Gollum view (gollum-view.js) and for
-// his figures in both Middle-earth views (scene-gollum.js, scene2-gollum.js), so all three count the same way
-// (2026-11-09: one Gollum per machine, his findings in a view of their own).
+// gollum-data.js: what Gollum reports, worked out once from the snapshot for the Worktrees view's Forgotten filter
+// (worktrees.js), the Fleet accounts table's past-90% mark (fleet-accounts.js) and his figures in both Middle-earth
+// views (scene-gollum.js, scene2-gollum.js), so all of them count the same way.
 // He hoards forgotten work: a worktree that no worker and no process uses, whose last commit is three days old or more
 // (seven while its PR is still open). And he covets usage: a Claude account in the queue (not one the board only
 // watches) that has used 90% or more of its 5-hour or weekly window, the window not yet reset. An account shows once

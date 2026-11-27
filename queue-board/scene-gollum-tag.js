@@ -1,9 +1,9 @@
 // scene-gollum-tag.js: what goes with each Gollum in the Middle-earth view (scene-gollum.js): the Ring, a fish from
-// the falls' pool and his hoard of trinkets, in 32-bit; after the night shade, his shining eyes and their glint from
-// his hiding place; the wisps of his muttering; and the clicks on him or his hoard, which open his machine in the
-// Gollum view (#gollum/<host>). The file is named for the HTML tag he wore over his head until 2026-11-09, when it was
-// dropped for taking too much room; the Gollum view shows what he found now. Loaded after
-// scene-gollum.js. Uses sprites-hd.js's qdMap, scenery-land.js's qdOval, scenery-props.js's heapGlint, scene.js's sc,
+// the falls' pool and his hoard of trinkets, in 32-bit; his shining eyes and their glint from his hiding place, lights
+// of scenery-lights.js's drawn after the night shade; the wisps of his muttering; and the clicks on him or his hoard,
+// which open his machine's forgotten worktrees (#worktrees/<host>/forgotten). The file is named for the HTML tag he wore over his head
+// until 2026-11-09, when it was dropped for taking too much room; the Worktrees view's Forgotten filter and the Fleet accounts table show what he found now. Loaded
+// after scene-gollum.js. Uses sprites-hd.js's qdMap, scenery-land.js's qdOval, scenery-props.js's heapGlint, scene.js's sc,
 // scCanvas and scHit, scene-call.js's callEnvoyAt, and page.html's applyView.
 
 // The Ring: plain gold, lit on its upper left, with a white glint that flashes when glint is set.
@@ -124,9 +124,9 @@ function golAt(e) {
   }
   return null;
 }
-// Opens his machine in the Gollum view.
+// Opens his machine's forgotten worktrees.
 function golOpen(host) {
-  history.pushState(null, '', '#gollum/' + encodeURIComponent(host));
+  history.pushState(null, '', '#worktrees/' + encodeURIComponent(host) + '/forgotten');
   applyView(true);
 }
 scCanvas.addEventListener('click', (e) => {
