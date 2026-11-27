@@ -41,3 +41,12 @@ export function callerOf(req, { port, own = [] }) {
   if (fwd) return fwd;
   return String(req.headers.host ?? '').endsWith(`:${port}`) ? sock : 'proxied';
 }
+
+// The address a link to this board should carry, so it opens from any device: the HTTPS name when `tailscale serve`
+// (status: `tailscale serve status --json`) hands this board's port on under it, which is also the address the
+// installed app was added from, and otherwise the machine's short name on the board's port.
+export function boardAddress(status, { tsName, me, port }) {
+  const web = tsName && status?.Web?.[`${tsName}:443`]?.Handlers?.['/']?.Proxy;
+  if (web && new RegExp(`^https?://(127\\.0\\.0\\.1|localhost):${port}/?$`).test(web)) return `https://${tsName}/`;
+  return `http://${me}:${port}/`;
+}

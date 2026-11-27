@@ -12,28 +12,22 @@
   main.main { margin: 0; border: 0; border-radius: 0; height: auto; min-height: calc(100dvh - var(--bar-h) - var(--sab)); overflow: visible; box-shadow: none; }
   main.main::before { content: none; }
 
-  /* The nav is a bar along the bottom, in thumb reach: Inbox, Sessions, Queue and Middle-earth, then More, which opens
-     the rest of the sidebar as a sheet (mobile.js). The counts that wait on the owner ride on their tabs as wax seals. */
+  /* The nav is a bar along the bottom, in thumb reach: Queue, Sessions, Inbox and Middle Earth, then More, which opens
+     Fleet, Worktrees and sound as a sheet (mobile.js). The counts that wait on you ride on their tabs as wax seals. */
   .side { position: fixed; z-index: 20; inset: auto 0 0 0; height: auto; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 0 var(--sar) var(--sab) var(--sal); overflow: visible;
     background: color-mix(in srgb, var(--frame) 94%, transparent); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); border-top: 3px double var(--line-2); border-bottom: 0; }
   .ws { display: none; }
   .nav { display: contents; }
   #nav > .nav-item { display: none; }
-  #nav > .nav-item.view:is([data-view="inbox"], [data-view="sessions"], [data-view="queue"], [data-view="scene"]), .nav-more {
+  #nav > .nav-item.view:is([data-view="inbox"], [data-view="sessions"], [data-view="queue"], [data-view="me"]), .nav-more {
     position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; height: var(--bar-h); min-width: 0; margin: 0; padding: 7px 2px 6px;
     font: 500 13.5px/1 var(--serif); letter-spacing: 0; text-transform: none; color: var(--ink-2); background: none; border: 0; border-radius: 0; box-shadow: none; cursor: pointer; }
   #nav > .nav-item.view .nav-t { flex: none; max-width: 100%; }
   #nav > .nav-item.view > .ico, #nav > .nav-item.view > .ico svg, .nav-more svg { width: 20px; height: 20px; }
-  #nav > .nav-item.view.active, .side:has(.nav-item.view.active:is([data-view="map"], [data-view="machines"], [data-view="worktrees"], [data-view="gollum"])) .nav-more, .nav-more[aria-expanded="true"] {
+  #nav > .nav-item.view.active, #nav > .nav-item.view.parent-on, :root:is([data-view="fleet"], [data-view="worktrees"], [data-view="control"], [data-view="gollum"]) .nav-more, .nav-more[aria-expanded="true"] {
     color: var(--ink); background: var(--active); box-shadow: inset 0 2px 0 var(--gold); }
-  #nav > .nav-item.view .count, #nav > .nav-item[data-view="queue"]::after, .nav-more::after { position: absolute; top: 3px; left: calc(50% + 5px); }
+  #nav > .nav-item.view .count { position: absolute; top: 3px; left: calc(50% + 5px); }
   #nav > .nav-item.view .count:not(.hot) { font: 500 11px/1 var(--sans); letter-spacing: 0; color: var(--ink-3); top: 8px; left: calc(50% + 14px); }
-  /* The Queue's own count is Needs you (mobile.js copies it from the sidebar's group link). */
-  .side[data-needs="hot"] .nav-item[data-view="queue"]::after, .side[data-needs="warm"] .nav-item[data-view="queue"]::after, .side[data-more="hot"] .nav-more::after {
-    content: var(--needs, ""); --wax: #a3271d; --wax-l: #e0685a; --wax-d: #64110c; display: inline-grid; place-items: center; min-width: 21px; height: 21px; padding: 0 5px; color: #fff1e4; font: 600 11px/1 var(--sans); letter-spacing: 0; text-shadow: 0 -1px 0 rgb(0 0 0 / .45);
-    background: radial-gradient(circle at 36% 30%, var(--wax-l), var(--wax) 55%, var(--wax-d)); border-radius: 50%; }
-  .side[data-needs="warm"] .nav-item[data-view="queue"]::after { --wax: #b5600f; --wax-l: #eea25a; --wax-d: #6e3606; }
-  .side[data-more="hot"] .nav-more::after { content: ""; min-width: 11px; width: 11px; height: 11px; padding: 0; top: 7px; left: calc(50% + 9px); }
   .seal, .nav-item .count.hot, .stat b.seal, h2.gh .gcount.seal { font-size: 11px; }
 
   /* The More sheet: the rest of the sidebar, rising from the bar. */
@@ -47,22 +41,16 @@
   .more-sheet .nav-item.view.active { background: var(--active); box-shadow: inset 2px 0 0 var(--gold); }
   .more-sheet .nav-item .count { font-size: 13px; }
   .more-sheet .nav-item .count.hot { font-size: 11px; }
+  .more-sheet .snd-item svg { width: 18px; height: 18px; color: var(--ink-2); }
+  .more-sheet .snd-item .st { margin-left: auto; font: 400 13px/1 var(--sans); color: var(--ink-3); }
+  .more-sheet .snd-item[aria-disabled="true"] { opacity: .55; }
 
-  /* The header: the view's name and how fresh the data is, the counts, then sound. It scrolls away with the page. */
-  header.bar { position: static; height: auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title fresh" "stats stats" "music horn"; align-items: center; gap: 8px 10px;
-    padding: calc(12px + var(--sat)) var(--gut) 10px; border-radius: 0; }
-  h1 { grid-area: title; white-space: normal; line-height: 1.2; min-width: 0; }
-  .fresh { grid-area: fresh; margin: 0; font-size: 13.5px; }
-  .stats { grid-area: stats; flex-wrap: wrap; overflow: visible; gap: 6px; }
-  .stat { height: 28px; font-size: 12.5px; }
-  .music { grid-area: music; min-width: 0; gap: 6px; }
-  .horn { grid-area: horn; }
-  .horn .horn-btns { gap: 6px; }
-  .music button, .horn button { height: 44px; min-width: 44px; justify-content: center; padding: 0 12px; font-size: 13.5px; border-radius: 4px; }
-  .music svg { width: 13px; height: 13px; } .horn svg, .horn .horn-mute.is-muted svg, .horn .horn-mute.is-zoom svg { width: 16px; height: 16px; }
-  .music .mu-next, .horn .horn-gear { padding: 0; }
-  .music .mu-now { max-width: none; flex: 1 1 0; padding-left: 2px; }
-  .music .mu-t { font-size: 13px; } .music .mu-a { display: none; }
+  /* The header: the view's name and how old the data is; on Middle Earth, the switch between its two views. It
+     scrolls away with the page. Sound lives in the More sheet. */
+  header.bar { position: static; height: auto; display: flex; align-items: center; gap: 8px 10px; padding: calc(12px + var(--sat)) var(--gut) 10px; border-radius: 0; }
+  h1 { white-space: nowrap; line-height: 1.2; min-width: 0; }
+  .fresh { margin: 0 0 0 auto; font-size: 13.5px; }
+  .side-foot { display: none; }
 
   /* Banners keep the page's gutter. */
   .banner, .alarm { margin: 12px var(--gut) 0; }
@@ -71,10 +59,9 @@
 
   /* Group headings and the page's gutter. */
   h2.gh { position: static; padding: 0 var(--gut); }
-  .group, .mcard, .build, .bay { scroll-margin-top: 8px; }
+  .group, .fcard, .build, .bay { scroll-margin-top: 8px; }
   .slots { padding: 14px var(--gut) 16px; }
-  .row, .more-row, .empty, .all-clear, .ibar, .wt-sum { padding-inline: var(--gut); }
-  .mview { padding: 14px var(--gut) 24px; }
+  .row, .more-row, .empty, .all-clear, .ibar, .wt-sum, .wt-pick { padding-inline: var(--gut); }
 
   /* Buttons and links are 44px to the thumb. A button grows; a chip or a link in a line keeps its look and its
      touch area grows round it. */
@@ -128,10 +115,9 @@
   .app { padding: 0 var(--sar) 0 calc(var(--rail-w) + var(--sal)); }
   main.main { min-height: 100dvh; }
   .side { inset: 0 auto 0 0; width: calc(var(--rail-w) + var(--sal)); grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); padding: var(--sat) 0 var(--sab) var(--sal); border-top: 0; border-right: 3px double var(--line-2); }
-  #nav > .nav-item.view:is([data-view="inbox"], [data-view="sessions"], [data-view="queue"], [data-view="scene"]), .nav-more { height: auto; min-height: 44px; font-size: 12.5px; }
-  #nav > .nav-item.view.active, .side:has(.nav-item.view.active:is([data-view="map"], [data-view="machines"], [data-view="worktrees"], [data-view="gollum"])) .nav-more, .nav-more[aria-expanded="true"] { box-shadow: inset 2px 0 0 var(--gold); }
+  #nav > .nav-item.view:is([data-view="inbox"], [data-view="sessions"], [data-view="queue"], [data-view="me"]), .nav-more { height: auto; min-height: 44px; font-size: 12.5px; }
+  #nav > .nav-item.view.active, #nav > .nav-item.view.parent-on, :root:is([data-view="fleet"], [data-view="worktrees"], [data-view="control"], [data-view="gollum"]) .nav-more, .nav-more[aria-expanded="true"] { box-shadow: inset 2px 0 0 var(--gold); }
   .more-sheet.on { left: 100%; right: auto; bottom: 0; top: 0; width: min(420px, calc(100vw - var(--rail-w) - var(--sal) - 24px)); max-height: none; align-content: start; border-top: 0; border-left: 0; border-right: 3px double var(--line-2); border-radius: 0 10px 10px 0; box-shadow: 10px 0 30px rgb(0 0 0 / .28); }
-  header.bar { grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "title fresh music horn" "stats stats stats stats"; padding-top: calc(8px + var(--sat)); padding-bottom: 8px; }
-  .fresh { justify-self: start; }
+  header.bar { padding-top: calc(8px + var(--sat)); padding-bottom: 8px; }
   .sound-panel { inset: 0 0 0 auto; width: min(440px, 100vw); max-height: none; border-width: 0 0 0 3px; border-radius: 10px 0 0 10px; padding-top: calc(14px + var(--sat)); }
 }

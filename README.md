@@ -75,7 +75,7 @@ Once it runs, open a Claude Code session, pin it, name it after `orchestrator.se
 
 ## The board
 
-`queue-board/` is a read-only web page of the whole queue across your machines: worker slots, tickets, PRs, CI and review state, what needs you, your Linear inbox, your Claude app sessions and every git worktree. Each machine is drawn as a realm of Middle-earth and each worker as a pixel figure. A herald (`queue-board/install-herald.sh`) plays an alert and posts a macOS notification when something needs you or breaks. `queue-board/README.md` describes every view.
+`queue-board/` is a read-only web page of the whole queue across your machines: worker slots, tickets, PRs, CI and review state, what needs you, your Linear inbox, your Claude app sessions and every git worktree. Each machine is drawn as a realm of Middle-earth and each worker as a pixel figure. A herald (`queue-board/install-herald.sh`) plays an alert and posts a macOS notification when something needs you or breaks. `queue-board/README.md` describes every view. To try a board change without touching the queue, run a copy with `QUEUE_BOARD_DRY=1`, which refuses every POST (`queue-board/README.md`, "Trying a change").
 
 ## Configuration
 

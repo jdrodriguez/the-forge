@@ -4,14 +4,14 @@
 // pedestal at the far west end of the road (Isengard lies west), at the road's near edge, clear of every realm's
 // stations, props and landmarks, the eagles' crags at the road's back edge and Gollum's places. He leans over the stone
 // with his hands held over it and gazes into it, and now and then slowly lifts his head and turns it to look out of the
-// scene. The stone glows in each engine's colour, the same as the Machines view's seeing-stones (ART_STONE_TINT,
-// realm-art.js): Codex cold blue, Grok amber, and while both run the glow shifts slowly from one to the other with the
+// scene. The stone glows in each engine's colour, (SAR_FALLBACK_TINT):
+// Codex cold blue, Grok amber, and while both run the glow shifts slowly from one to the other with the
 // other's colour in the arms of light turning inside it. The more calls run, the brighter the stone, the faster its arms
 // turn, and the wider its light on his face, beard, hands and robe; at night it lights his face from below and casts a
 // pool on the road. A subscription past 80% of its weekly limit (snap.services, the account signed in on the board's
 // Mac) glows dimmer and redder, the more so the nearer it is to 100%. When no call has run for 25 seconds the stone dims
 // and he turns and walks off the west edge; the pedestal stays, its stone dark. A tag beside him counts the calls
-// ("Saruman · 5 Codex · 5 Grok"); clicking him or it opens the Machines view. Walkers on the ground go round his pedestal
+// ("Saruman · 5 Codex · 5 Grok"); clicking him or it opens the Fleet view. Walkers on the ground go round his pedestal
 // (sc.path.extra). With reduced motion he simply stands at the stone while calls run, its glow steady. The art is
 // sprites-saruman.js and sprites-saruman-stone.js. Uses scene.js's sc, scG, scStage, scCanvas, scHit and scReduced,
 // scene-call.js's callEnvoyAt, and page.html's snap, applyView and esc.
@@ -44,7 +44,7 @@ function sarRead() {
 }
 // An engine's [deep, glow, core] and its brightness (1 at 80% or under, down to 0.55 at 100%), redder past 80%.
 function sarTint(name, use) {
-  const base = (typeof ART_STONE_TINT === 'object' ? ART_STONE_TINT : SAR_FALLBACK_TINT)[name];
+  const base = SAR_FALLBACK_TINT[name];
   const f = Math.max(0, Math.min(1, (use - 80) / 20)) ** 0.6;
   if (!f) return { c: base, b: 1 };
   return { c: [hdMix(base[0], '#5c1610', 0.6 * f), hdMix(base[1], '#d0442c', 0.65 * f), hdMix(base[2], '#f08a70', 0.6 * f)], b: 1 - 0.45 * f };
@@ -142,7 +142,7 @@ function sarTag() {
   // His tag counts the calls under each engine's mark (ai-marks.js); the tooltip keeps the words.
   const text = [esc('Saruman'), now.codex && `${now.codex} ${aiMark('codex')}`, now.grok && `${now.grok} ${aiMark('grok')}`].filter(Boolean).join(' · ');
   const title = `The palantír: ${[now.codex && `${now.codex} Codex`, now.grok && `${now.grok} Grok`].filter(Boolean).join(' and ')} call${now.codex + now.grok > 1 ? 's' : ''} running on ${snap.servedBy}`
-    + `\nCodex ${now.use.codex}% and Grok ${now.use.grok}% of the week used. Click for the Machines view.`;
+    + `\nCodex ${now.use.codex}% and Grok ${now.use.grok}% of the week used. Click for the Fleet view.`;
   const html = `<button class="sc-name" type="button" data-seer title="${esc(title)}"><i></i>${text}</button>`;
   if (html !== sar.tag || sar.tagScale !== sc.scale) {
     sarTags.innerHTML = sar.tag = html;
@@ -168,7 +168,7 @@ function sarTag() {
   el.style.top = `${((ty + sc.dy) / sc.H) * 100}%`;
 }
 
-// Whether a pointer event falls on him or his pedestal while he is there, and opening the Machines view.
+// Whether a pointer event falls on him or his pedestal while he is there, and opening the Fleet view.
 function sarAt(e) {
   if (sar.mode === 'away') return false;
   const box = scCanvas.getBoundingClientRect();
@@ -177,7 +177,7 @@ function sarAt(e) {
   return x >= sar.x - 4 && x <= SAR_X + 8.5 && y >= SAR_Y - 17 && y <= SAR_Y + 1;
 }
 function sarOpen() {
-  history.pushState(null, '', '#machines');
+  history.pushState(null, '', '#fleet');
   applyView(true);
 }
 sarTags.addEventListener('click', (e) => { if (e.target.closest('[data-seer]')) sarOpen(); });

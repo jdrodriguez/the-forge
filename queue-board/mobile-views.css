@@ -48,43 +48,15 @@
   .bay .id { font-size: 12.5px; } .bay .what { font-size: 13.5px; } .bay .when { font-size: 12px; }
   .bay.seat { font-size: 13px; }
 
-  /* Machines: four seats a row so a name fits on one line, gauges with a narrower label, tables as stacked rows. */
-  .msec { padding-inline: 12px; }
-  .mband-t { left: 11px; }
-  .mband h3 { font-size: 19px; letter-spacing: .16em; }
+  /* Seats four a row so a name fits on one line, and gauges with a narrower label. */
   .seats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 4px; }
   .seat { width: auto; }
   .seat-fig { width: 54px; }
   .seat-n { font-size: 11px; letter-spacing: 0; overflow-wrap: normal; }
   .seat-id { font-size: 11.5px; }
   .gauge { grid-template-columns: 96px minmax(0, 1fr) auto; gap: 10px; font-size: 12.5px; }
-  .mwt { flex-wrap: wrap; row-gap: 2px; min-height: 44px; font-size: 13px; }
-  .mwt .t { white-space: normal; }
   .sub { font-size: 12.5px; }
-  .mh > span, .ledger span { font-size: 11px; }
 
-  /* The account tables (a machine's accounts, the Accounts card, Gollum's Ring) are stacked rows: the account on its
-     own line, then its 5-hour, weekly and read cells side by side, each under its own small label. The labels repeat
-     the table's header, which a stacked row no longer sits under. */
-  table.accts, table.accts tbody { display: block; width: 100%; }
-  table.accts thead { display: none; }
-  table.accts tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
-  table.accts tr:last-child { border-bottom: 0; padding-bottom: 2px; }
-  table.accts td { display: block; min-width: 0; }
-  table.accts td, table.accts tr:last-child td, table.accts tr:has(+ tr.agrp) td { padding: 0; border: 0; }
-  table.accts td.wide { display: none; }
-  table.accts td.who, table.accts td[colspan] { grid-column: 1 / -1; font-size: 14.5px; }
-  table.accts td[colspan] { font-size: 13px; }
-  table.accts td.who + td:not(.wide, [colspan])::before, table.accts td.where + td:not([colspan])::before { content: "5-hour"; }
-  table.accts td.who + td:not(.wide, [colspan]) + td::before, table.accts td.where + td:not([colspan]) + td::before { content: "Weekly"; }
-  table.accts td.who + td:not(.wide, [colspan]) + td + td.muted::before { content: "Saved"; }
-  table.accts td.where + td:not([colspan]) + td + td.muted::before { content: "Read"; }
-  table.accts td:not(.who, .wide, [colspan])::before { display: block; margin-bottom: 4px; font: 600 11px/1.2 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
-  table.accts tr.agrp { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 14px 0 8px; border-bottom-color: var(--line-2); }
-  table.accts tr.agrp th { display: block; padding: 0; border: 0; }
-  table.accts tr.agrp th.wide { display: none; }
-  table.accts tr.agrp th.tally { text-align: right; font-size: 13px; }
-  .mcard.wide table.accts th:first-child { width: auto; }
   pre.log { font-size: 12px; }
 
   /* Inbox. */
@@ -93,8 +65,8 @@
   .ibar a { margin-left: 0; }
 
   /* A link in a line of text keeps its look; its touch area is 44px tall. */
-  #main a:not(.bay, .mwt, .chip), dialog.sess a:not(.chip) { position: relative; }
-  #main a:not(.bay, .mwt, .chip)::after, dialog.sess a:not(.chip)::after { content: ""; position: absolute; left: -3px; right: -3px; top: 50%; height: 44px; min-height: 100%; transform: translateY(-50%); }
+  #main a:not(.bay, .fwt, .chip), dialog.sess a:not(.chip) { position: relative; }
+  #main a:not(.bay, .fwt, .chip)::after, dialog.sess a:not(.chip)::after { content: ""; position: absolute; left: -3px; right: -3px; top: 50%; height: 44px; min-height: 100%; transform: translateY(-50%); }
 }
 
 /* A phone on its side: the page scrolls, and a map's frame is the whole screen (mobile.js brings it to the top). */

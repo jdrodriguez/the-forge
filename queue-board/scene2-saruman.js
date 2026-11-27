@@ -2,8 +2,8 @@
 // has him (scene-saruman.js). The owner's sessions hand read-only research to Codex and Grok; the board counts the calls
 // running on its own Mac (snap.seer). Saruman stands on the top of Orthanc (plan.places.orthancTop) beside his palantir
 // on its black stand. When calls start he walks back to the stone if he was pacing, turns to it and gazes into it, and
-// the stone lights over a second, glowing in its engine's colour, the same as the Machines view's seeing-stones
-// (ART_STONE_TINT): Codex cold blue, Grok amber, and while both run it shifts slowly between them. The more calls, the
+// the stone lights over a second, glowing in its engine's colour, the same as the side view's
+// stone (M2E_STONE): Codex cold blue, Grok amber, and while both run it shifts slowly between them. The more calls, the
 // brighter the stone, the faster its arms of light turn and the wider its light on him; at night it lights his face and
 // beard from below and the lit stone shines over the night's shade. A subscription past 80% of its weekly limit
 // (snap.services, the account signed in on the board's own Mac) glows dimmer and redder, the more so the nearer it is to
@@ -18,7 +18,7 @@
 
 const M2E_SAR_STAY = 25000;
 const m2eSar = { key: '', top: null, seen: 0, last: null, x: 0, dir: 1, mode: 'pace', glow: 0, started: false, rkey: '', now: null, look: null };
-const M2E_STONE = typeof ART_STONE_TINT !== 'undefined' ? ART_STONE_TINT : { codex: ['#3d6ea6', '#9fd4ff', '#eaf7ff'], grok: ['#9a5a1e', '#ffb35c', '#fff0cf'] };
+const M2E_STONE = { codex: ['#3d6ea6', '#9fd4ff', '#eaf7ff'], grok: ['#9a5a1e', '#ffb35c', '#fff0cf'] };
 const M2E_SAR_K = typeof M2V_K === 'number' ? M2V_K : 1.6;
 
 // The tower's flat top for this layout (plan.places.orthancTop, the centre of the top Orthanc's art builds with four

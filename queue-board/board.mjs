@@ -22,19 +22,29 @@ import { readSettings, writeSettings, applyUpdate, readStatus, playAfterWarning,
 import { musicList, musicFile, musicEvents, musicAlert, alertPages } from './music.mjs';
 import { weatherNow } from './weather.mjs';
 import { extRuns } from './ext-runs.mjs';
-import { hostAllowed, certName, callerOf } from './host-ok.mjs';
+import { hostAllowed, certName, callerOf, boardAddress } from './host-ok.mjs';
+import { dryRefusal } from './dry.mjs';
+import { loadPlain } from './plain-script.mjs';
 import { REALM_KINDS, realmTable } from './realms.mjs';
 import { spreadOn, realmsByHost, assignRealms } from './realm-spread.mjs';
 import { giveNames } from './worker-names.mjs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const cfg = loadConfig();
+// The config read again on each snapshot, for what can change while the board runs (a machine's burst slots); the
+// start copy when the read fails.
+const liveConfig = () => { try { return loadConfig(); } catch { return cfg; } };
+const { burstOpen } = loadPlain('./worker-count.js');
 const dc = cfg.dispatcher ?? {};
 const qb = cfg.queueBoard ?? {};
 const PORT = Number(process.env.QUEUE_BOARD_PORT ?? qb.port ?? 8787);
 const FRESH_MS = 45_000;
 const LIVE = ['building', 'merge-asked', 'claiming'];
 const HERE = os.hostname().split('.')[0];
+// The address links to this board carry (host-ok.mjs boardAddress), once the board knows its Tailscale name: the HTTPS
+// name when Tailscale serves this port, else the machine's name. null until then, so the herald keeps the address it
+// reads the board at.
+let boardUrl = null;
 // The dispatcher's launchd interval (StartInterval in dispatcher/agent-dispatcher.plist), for "next tick" on the page.
 const TICK_MINUTES = 20;
 // The fleet account whose config dir is ~/.claude; every other account lives in ~/.claude-<label>.
@@ -538,6 +548,8 @@ function mainState() {
 }
 
 async function build() {
+  // config.json as it is now, so a burst or wind-down change made in Fleet shows on the next snapshot without a restart.
+  const nowDc = liveConfig().dispatcher ?? {};
   const ext = refreshExt();
   refreshWatched();
   const inboxRead = refreshInbox();
@@ -574,6 +586,9 @@ async function build() {
         // When its green PR started waiting on the reviewer, from a dispatcher that parks such a ticket; a parked ticket
         // holds no slot.
         parked: t.parked ?? null,
+        // In its machine's wake queue (the dispatcher's wakeQueue): it needs to work again and holds no slot until one
+        // frees. { since, reason, pool } or null.
+        waitingForSlot: (m.state?.wakeQueue ?? []).find((w) => w.id === id) ?? null,
         // The worker's Middle-earth name from the dispatcher, if it gives one; nameWorkers fills the rest. A bundle's
         // companions show on their lead.
         nickname: t.nickname ?? null,
@@ -701,6 +716,10 @@ async function build() {
       stuckStreak: m.state?.stuckStreak ?? 0,
       maxWorkers: m.maxWorkers ?? null,
       sentryWorkers: m.sentryWorkers ?? 0,
+      // Burst slots (dispatcher.hosts.<host>.burstWorkers) and how many are open now by the dispatcher's rule, for the
+      // one worker count (worker-count.js).
+      burstWorkers: nowDc.hosts?.[m.host]?.burstWorkers ?? 0,
+      burstOpen: burstOpen(nowDc.hosts?.[m.host], nowDc, m.load, m.memFreePercent),
       engineAccounts: m.engineAccounts ?? [],
       heartbeat: beats[m.host],
       dispatchedToday: (m.state?.dispatches ?? []).filter((d) => hoursSince(d) < 24).length,
@@ -743,6 +762,8 @@ async function build() {
     },
     sessions: sessionsSnapshot(),
     main: mainState(),
+    // The board's own address and repo, for links that must open from any device (the herald's notifications).
+    board: { url: boardUrl, repo: REPO || null },
     errors,
   };
 }
@@ -873,13 +894,15 @@ const hostOk = (req) => hostAllowed(req.headers.host, { port: PORT, me: ME, bind
 const caller = (req) => callerOf(req, { port: PORT, own: [tailscaleIp, ...BIND] });
 
 // In the order page.html loads them, so a test page built from this list loads them the same way.
-const PAGE_SCRIPTS = ['/mobile.js', '/ai-marks.js', '/session.js', '/inbox.js', '/worktrees.js', '/gollum-data.js', '/sessions.js', '/sprites.js', '/sprites-gear.js', '/sprites-gear-stations.js', '/sprites-hd.js', '/sprites-hd-folk.js', '/sprites-qd.js', '/sprites-wanderers.js', '/sprites-wanderers-folk.js', '/sprites-wanderers-gear.js', '/sprites-captains.js', '/sprites-work.js', '/sprites-horse.js', '/sprites-horse-art.js', '/sprites-horse-post.js', '/sprites-chores.js', '/sprites-rohan.js', '/realm-art-kit.js', '/realm-art.js', '/machines-accounts.js', '/machines.js', '/gollum-view.js', '/scenery-sun.js', '/scenery.js', '/scenery-qd.js', '/scenery-sky.js', '/scenery-sky-qd.js', '/scenery-land.js', '/scenery-land-qd.js', '/scenery-rohan.js', '/scenery-rohan-stables.js', '/scenery-falls.js', '/scenery-erebor.js', '/scenery-lights.js', '/scenery-props.js', '/scenery-props-hd.js', '/scenery-props-qd.js', '/scenery-farm.js', '/scenery-rohan-props.js', '/scenery-hoard.js', '/scenery-elves.js', '/scenery-heal.js', '/scenery-shire.js', '/realm-view.js', '/scene-tags.js', '/scene.js', '/scene-path.js', '/scene-weather.js', '/scene-weather-fall.js', '/scenery-weather.js', '/scenery-storm.js', '/scenery-snow.js', '/scene-wind.js', '/scene-glow.js', '/scene-work.js', '/scene-jobs.js', '/scene-farm.js', '/scene-hoard.js', '/scene-elves.js', '/scene-wild.js', '/scene-rohan.js', '/scene-rohan-horses.js', '/scene-duel.js', '/scene-orcs.js', '/scene-ride.js', '/scene-tower.js', '/scene-call.js', '/scene-call-light.js', '/sprites-eagle.js', '/sprites-eagle-fly.js', '/scene-eagle.js', '/sprites-gollum.js', '/scene-gollum.js', '/scene-gollum-tag.js', '/sprites-saruman.js', '/sprites-saruman-stone.js', '/scene-saruman.js', '/scene2.js', '/scene2-plan.js', '/scene2-plan-realms.js', '/scene2-core-places.js', '/scene2-plan-south.js', '/scene2-tiles.js', '/scene2-build.js', '/scene2-trees.js', '/scene2-rivendell.js', '/scene2-rivendell-trees.js', '/scene2-rivendell-house.js', '/scene2-rivendell-garden.js', '/scene2-shire.js', '/scene2-shire-hill.js', '/scene2-shire-holes.js', '/scene2-shire-oak.js', '/scene2-shire-props.js', '/scene2-shire-pen.js', '/scene2-shire-mill.js', '/scene2-shire-front.js', '/scene2-shire-fill.js', '/scene2-erebor.js', '/scene2-erebor-gate.js', '/scene2-erebor-river.js', '/scene2-erebor-works.js', '/scene2-erebor-yard.js', '/scene2-rohan.js', '/scene2-edoras.js', '/scene2-edoras-stable.js', '/scene2-edoras-gondor.js', '/scene2-stations.js', '/scene2-station-art.js', '/scene2-rohan-shield.js', '/scene2-elf.js', '/scene2-folk.js', '/scene2-body-kit.js', '/scene2-body-parts.js', '/scene2-body-head.js', '/scene2-tool.js', '/scene2-body-elf.js', '/scene2-body-man.js', '/scene2-body-hobbit.js', '/scene2-body-dwarf.js', '/scene2-body-wizard.js', '/scene2-body-captains.js', '/scene2-body-ent.js', '/scene2-body-wild.js', '/scene2-body-v1.js', '/scene2-move.js', '/scene2-path.js', '/scene2-life-fx.js', '/scene2-jobs.js', '/scene2-life.js', '/scene2-life-road.js', '/scene2-haul.js', '/scene2-haul-jobs.js', '/scene2-stock.js', '/scene2-stock-art.js', '/scene2-chores.js', '/scene2-rohan-banner.js', '/scene2-archery.js', '/scene2-life-beasts.js', '/scene2-horse-art.js', '/scene2-horse.js', '/scene2-rider.js', '/scene2-rider-draw.js', '/scene2-rider-v1.js', '/scene2-fx.js', '/scene2-orc-art.js', '/scene2-orc-body.js', '/scene2-duel.js', '/scene2-orcs.js', '/scene2-orc-draw.js', '/scene2-war.js', '/scene2-rider-fight.js', '/scene2-rider-bug.js', '/scene2-life-deer.js', '/scene2-eye.js', '/scene2-eagle-art.js', '/scene2-call.js', '/scene2-eagle.js', '/scene2-call-bar.js', '/scene2-gollum-art.js', '/scene2-gollum.js', '/scene2-gollum-lairs.js', '/scene2-foes-v1.js', '/scene2-saruman.js', '/scene2-weather.js', '/scene2-wind.js', '/scene2-weather-fall.js', '/scene2-glow.js', '/scene2-tags.js', '/scene2-notes.js', '/scene2-mist.js', '/scene2-fireworks.js', '/scene2-saruman-tag.js', '/scene2-lands.js', '/scene2-land-peaks.js', '/scene2-land-peaks-draw.js', '/scene2-places.js', '/scene2-land-eriador.js', '/scene2-land-eriador-bree.js', '/scene2-land-eriador-trolls.js', '/scene2-land-eriador-willow.js', '/scene2-land-vale.js', '/scene2-land-vale-beorn.js', '/scene2-land-vale-wild.js', '/scene2-land-lake.js', '/scene2-land-lake-town.js', '/scene2-moria.js', '/scene2-moria-east.js', '/scene2-lorien.js', '/scene2-world.js', '/scene2-gondor.js', '/scene2-mordor.js', '/scene2-mordor-gate.js', '/scene2-mordor-doom.js', '/scene2-helm.js', '/scene2-helm-caves.js', '/scene2-isengard-orthanc.js', '/scene2-isengard.js', '/scene2-gondor-city.js', '/scene2-gondor-citybuild.js', '/scene2-gondor-osgiliath.js', '/scene2-gondor-fields.js', '/scene2-gondor-river.js', '/scene2-gondor-sea.js', '/scene2-gondor-ithilien.js', '/horn.js', '/sound-ui.js', '/music.js', '/music-duck.js'];
+const PAGE_SCRIPTS = ['/worker-count.js', '/queue-view.js', '/mobile.js', '/ai-marks.js', '/session.js', '/inbox.js', '/gollum-data.js', '/worktrees.js', '/sessions.js', '/sprites.js', '/sprites-gear.js', '/sprites-gear-stations.js', '/sprites-hd.js', '/sprites-hd-folk.js', '/sprites-qd.js', '/sprites-wanderers.js', '/sprites-wanderers-folk.js', '/sprites-wanderers-gear.js', '/sprites-captains.js', '/sprites-work.js', '/sprites-horse.js', '/sprites-horse-art.js', '/sprites-horse-post.js', '/sprites-chores.js', '/sprites-rohan.js', '/scenery-sun.js', '/scenery.js', '/scenery-qd.js', '/scenery-sky.js', '/scenery-sky-qd.js', '/scenery-land.js', '/scenery-land-qd.js', '/scenery-rohan.js', '/scenery-rohan-stables.js', '/scenery-falls.js', '/scenery-erebor.js', '/scenery-lights.js', '/scenery-props.js', '/scenery-props-hd.js', '/scenery-props-qd.js', '/scenery-farm.js', '/scenery-rohan-props.js', '/scenery-hoard.js', '/scenery-elves.js', '/scenery-heal.js', '/scenery-shire.js', '/realm-view.js', '/scene-tags.js', '/scene.js', '/scene-path.js', '/scene-weather.js', '/scene-weather-fall.js', '/scenery-weather.js', '/scenery-storm.js', '/scenery-snow.js', '/scene-wind.js', '/scene-glow.js', '/scene-work.js', '/scene-jobs.js', '/scene-farm.js', '/scene-hoard.js', '/scene-elves.js', '/scene-wild.js', '/scene-rohan.js', '/scene-rohan-horses.js', '/scene-duel.js', '/scene-orcs.js', '/scene-ride.js', '/scene-tower.js', '/scene-call.js', '/scene-call-light.js', '/sprites-eagle.js', '/sprites-eagle-fly.js', '/scene-eagle.js', '/sprites-gollum.js', '/scene-gollum.js', '/scene-gollum-tag.js', '/sprites-saruman.js', '/sprites-saruman-stone.js', '/scene-saruman.js', '/scene2.js', '/scene2-plan.js', '/scene2-plan-realms.js', '/scene2-core-places.js', '/scene2-plan-south.js', '/scene2-tiles.js', '/scene2-build.js', '/scene2-trees.js', '/scene2-rivendell.js', '/scene2-rivendell-trees.js', '/scene2-rivendell-house.js', '/scene2-rivendell-garden.js', '/scene2-shire.js', '/scene2-shire-hill.js', '/scene2-shire-holes.js', '/scene2-shire-oak.js', '/scene2-shire-props.js', '/scene2-shire-pen.js', '/scene2-shire-mill.js', '/scene2-shire-front.js', '/scene2-shire-fill.js', '/scene2-erebor.js', '/scene2-erebor-gate.js', '/scene2-erebor-river.js', '/scene2-erebor-works.js', '/scene2-erebor-yard.js', '/scene2-rohan.js', '/scene2-edoras.js', '/scene2-edoras-stable.js', '/scene2-edoras-gondor.js', '/scene2-stations.js', '/scene2-station-art.js', '/scene2-rohan-shield.js', '/scene2-elf.js', '/scene2-folk.js', '/scene2-body-kit.js', '/scene2-body-parts.js', '/scene2-body-head.js', '/scene2-tool.js', '/scene2-body-elf.js', '/scene2-body-man.js', '/scene2-body-hobbit.js', '/scene2-body-dwarf.js', '/scene2-body-wizard.js', '/scene2-body-captains.js', '/scene2-body-ent.js', '/scene2-body-wild.js', '/scene2-body-v1.js', '/scene2-move.js', '/scene2-path.js', '/scene2-life-fx.js', '/scene2-jobs.js', '/scene2-life.js', '/scene2-life-road.js', '/scene2-haul.js', '/scene2-haul-jobs.js', '/scene2-stock.js', '/scene2-stock-art.js', '/scene2-chores.js', '/scene2-rohan-banner.js', '/scene2-archery.js', '/scene2-life-beasts.js', '/scene2-horse-art.js', '/scene2-horse.js', '/scene2-rider.js', '/scene2-rider-draw.js', '/scene2-rider-v1.js', '/scene2-fx.js', '/scene2-orc-art.js', '/scene2-orc-body.js', '/scene2-duel.js', '/scene2-orcs.js', '/scene2-orc-draw.js', '/scene2-war.js', '/scene2-rider-fight.js', '/scene2-rider-bug.js', '/scene2-life-deer.js', '/scene2-eye.js', '/scene2-eagle-art.js', '/scene2-call.js', '/scene2-eagle.js', '/scene2-call-bar.js', '/scene2-gollum-art.js', '/scene2-gollum.js', '/scene2-gollum-lairs.js', '/scene2-foes-v1.js', '/scene2-saruman.js', '/scene2-weather.js', '/scene2-wind.js', '/scene2-weather-fall.js', '/scene2-glow.js', '/scene2-tags.js', '/scene2-notes.js', '/scene2-mist.js', '/scene2-fireworks.js', '/scene2-saruman-tag.js', '/scene2-lands.js', '/scene2-land-peaks.js', '/scene2-land-peaks-draw.js', '/scene2-places.js', '/scene2-land-eriador.js', '/scene2-land-eriador-bree.js', '/scene2-land-eriador-trolls.js', '/scene2-land-eriador-willow.js', '/scene2-land-vale.js', '/scene2-land-vale-beorn.js', '/scene2-land-vale-wild.js', '/scene2-land-lake.js', '/scene2-land-lake-town.js', '/scene2-moria.js', '/scene2-moria-east.js', '/scene2-lorien.js', '/scene2-world.js', '/scene2-gondor.js', '/scene2-mordor.js', '/scene2-mordor-gate.js', '/scene2-mordor-doom.js', '/scene2-helm.js', '/scene2-helm-caves.js', '/scene2-isengard-orthanc.js', '/scene2-isengard.js', '/scene2-gondor-city.js', '/scene2-gondor-citybuild.js', '/scene2-gondor-osgiliath.js', '/scene2-gondor-fields.js', '/scene2-gondor-river.js', '/scene2-gondor-sea.js', '/scene2-gondor-ithilien.js', '/horn.js', '/sound-ui.js', '/music.js', '/music-duck.js', '/side-dock.js', '/fleet-logic.js', '/fleet-card.js', '/fleet-accounts.js', '/fleet-view.js'];
 // What makes the board installable as an app: the manifest, the service worker and the icons, each by exact path.
 const APP_FILES = {
   '/manifest.webmanifest': 'application/manifest+json',
   '/sw.js': 'text/javascript; charset=utf-8',
   '/mobile.css': 'text/css; charset=utf-8',
   '/mobile-views.css': 'text/css; charset=utf-8',
+  '/fleet.css': 'text/css; charset=utf-8',
+  '/forge-core.css': 'text/css; charset=utf-8',
   '/icons/icon.svg': 'image/svg+xml',
   '/icons/icon-192.png': 'image/png',
   '/icons/icon-512.png': 'image/png',
@@ -890,6 +913,9 @@ async function handle(req, res) {
   const url = new URL(req.url, 'http://board');
   if (url.pathname === '/healthz') return send(res, 200, 'text/plain', 'ok');
   if (!hostOk(req)) return send(res, 421, 'text/plain', 'unknown host');
+  // A dry-run board (QUEUE_BOARD_DRY=1, dry.mjs) refuses every POST, so a copy run to try a change sends nothing.
+  const dry = dryRefusal(req.method);
+  if (dry) return send(res, dry.status, 'application/json', JSON.stringify(dry.body));
   if (req.method === 'POST' && url.pathname === '/api/open') return openSession(req, res, url.searchParams.get('id'));
   if (req.method === 'POST' && url.pathname === '/api/send') return sendMessage(req, res, url.searchParams.get('id'));
   if (req.method === 'POST' && url.pathname === '/api/alert') return musicAlert(req, res, caller(req));
@@ -912,7 +938,11 @@ async function handle(req, res) {
     if (!snap) await refresh();
     else refresh();
     if (!snap) return send(res, 503, 'application/json', JSON.stringify({ error: 'the first snapshot failed; see the board log' }));
-    return send(res, 200, 'application/json', JSON.stringify({ ...snap, refreshing: Boolean(pending) }));
+    // viewerHost names this Mac when the page asking runs on it, so the page knows a claude:// link to a session here
+    // opens in this Mac's Claude app; on any other device it is null and the page opens the board's own panel instead.
+    const from = caller(req);
+    const viewerHost = from === '127.0.0.1' || from === '::1' || (tailscaleIp && from === tailscaleIp) ? HERE : null;
+    return send(res, 200, 'application/json', JSON.stringify({ ...snap, refreshing: Boolean(pending), viewerHost }));
   }
   return send(res, 404, 'text/plain', 'not found');
 }
@@ -947,6 +977,7 @@ async function readTsName() {
   try {
     tsName = certName(JSON.parse(await run('tailscale', ['status', '--json'], { timeout: 10_000 })));
     up = true;
+    if (tsName) boardUrl = boardAddress(JSON.parse(await run('tailscale', ['serve', 'status', '--json'], { timeout: 10_000 })), { tsName, me: ME, port: PORT });
   } catch { /* Tailscale is not up yet */ }
   if (!tsName) setTimeout(readTsName, up ? 600_000 : 60_000);
 }

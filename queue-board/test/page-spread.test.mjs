@@ -74,7 +74,7 @@ test('a worker keeps its realm and its name across ten snapshots while others st
   }
 });
 
-test('a click on a worker opens its session panel, and a click on Gollum opens the real machine\'s Gollum page', { skip: NO_CHROME }, async () => {
+test('a click on a worker opens its session panel, and a click on Gollum opens the real machine\'s forgotten worktrees', { skip: NO_CHROME }, async () => {
   const fix = oneMachine();
   const far = fix.tickets.find((t) => t.live && t.realm === 'erebor');
   for (const v of ['scene', 'map']) {
@@ -106,24 +106,24 @@ test('a click on a worker opens its session panel, and a click on Gollum opens t
     assert.deepEqual(r.errors, [], v);
     assert.equal(r.value.panel, true, `${v}: the panel opened on ${far.id}`);
     assert.deepEqual(r.value.lairs, [HOST], `${v}: one Gollum, in the first realm`);
-    assert.equal(r.value.hash, `#gollum/${HOST}`, v);
+    assert.equal(r.value.hash, `#worktrees/${HOST}/forgotten`, v);
   }
 });
 
-test('the header and the Queue view count the machine\'s own slots, and the other views show one machine', { skip: NO_CHROME }, async () => {
+test('the sidebar and the Queue view count the machine\'s own slots, and the other views show one machine', { skip: NO_CHROME }, async () => {
   const fix = oneMachine();
-  const expr = `({ header: [...document.querySelectorAll('.stat')].map((e) => e.innerText).join(' | '), queue: document.getElementById('view-queue')?.innerText ?? '' })`;
+  const expr = `({ fleet: document.querySelector('#nav [data-view="fleet"] .count')?.innerText ?? '', queue: document.getElementById('view-queue')?.innerText ?? '' })`;
   const q = await load(fix, 'queue', expr);
   assert.deepEqual(q.errors, [], 'queue');
-  assert.match(q.value.header, /\b\d+ of 8 building\b/);
-  assert.match(q.value.queue, /\b\d+ of 8 at work\b/);
+  assert.match(q.value.fleet, /^\d+\/8$/);
+  assert.match(q.value.queue, /\b\d+ of 8 slots\b/);
   // No drawn realm's id (host~realm) reaches a card, a link or the text of the views that show machines.
-  for (const v of ['queue', 'machines', 'worktrees', 'gollum', 'sessions']) {
-    const r = await load(fix, v, `({ cards: [...document.querySelectorAll('#view-${v} article.mcard[id]')].map((e) => e.id), drawn: document.getElementById('view-${v}').innerHTML.includes('${HOST}~') })`);
-    assert.deepEqual(r.errors, [], v);
-    assert.equal(r.value.drawn, false, `${v} shows only the real machine`);
-    if (v === 'machines') assert.ok(r.value.cards.includes(`m-${HOST}`), `${v}: ${r.value.cards}`);
-    if (v === 'gollum') assert.ok(r.value.cards.includes(`g-${HOST}`), `${v}: ${r.value.cards}`);
+  for (const [v, hash] of [['queue', 'queue'], ['fleet', 'fleet'], ['worktrees', 'worktrees'], ['worktrees', `worktrees/${HOST}/forgotten`], ['sessions', 'sessions']]) {
+    const r = await load(fix, hash, `({ cards: [...document.querySelectorAll('#view-${v} article.fcard[id], #view-${v} section.group[id]')].map((e) => e.id), drawn: document.getElementById('view-${v}').innerHTML.includes('${HOST}~') })`);
+    assert.deepEqual(r.errors, [], hash);
+    assert.equal(r.value.drawn, false, `${hash} shows only the real machine`);
+    if (v === 'fleet') assert.ok(r.value.cards.includes(`f-${HOST}`), `${hash}: ${r.value.cards}`);
+    if (v === 'worktrees') assert.ok(r.value.cards.includes(`wt-${HOST}`), `${hash}: ${r.value.cards}`);
   }
 });
 

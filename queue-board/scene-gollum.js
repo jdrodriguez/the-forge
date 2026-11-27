@@ -1,6 +1,6 @@
 // scene-gollum.js: Gollum in the Middle-earth view (scene.js), one in each realm whose machine gives him something to
 // keep (2026-11-07; one per machine from 2026-11-09, when a single Gollum in the busiest realm hid the others).
-// What each one keeps is his machine's entry in gollum-data.js's report (grHost), counted as the Gollum view counts
+// What each one keeps is his machine's entry in gollum-data.js's report (grHost), counted as the Worktrees view's Forgotten filter counts
 // it: the worktrees forgotten there, and the Claude accounts signed in there that have used 90% or more of a 5-hour or
 // weekly window. He creeps out of his hiding place in his own realm and hunches over a little hoard of trinkets, more
 // of them the more is forgotten on his machine, rocking and muttering; while a hot account is signed in there he
@@ -11,7 +11,7 @@
 // day he keeps near his hiding place and ducks back into it now and then. In Rivendell he snatches at a fish in the
 // pool now and then. With reduced motion he is simply crouched at his hoard, still. Each has his own seed, so they
 // don't rock, creep or go home in step. He walks with scMove, so scene-path.js takes him round things. He wears no
-// tag: a click on him or his hoard opens his machine in the Gollum view. The art is sprites-gollum.js; the Ring, the
+// tag: a click on him or his hoard opens his machine's forgotten worktrees. The art is sprites-gollum.js; the Ring, the
 // fish, the hoard, his shining eyes, his muttering and the clicks are scene-gollum-tag.js. Uses gollum-data.js's
 // grHost, scene.js's sc, scG, scMove and scReduced, sprites.js's pxHash, scenery-props.js's realmProps and boxClear,
 // scenery.js's warFires, scene-eagle.js's eagles and scene-tower.js's eye.

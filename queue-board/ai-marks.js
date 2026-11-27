@@ -1,7 +1,7 @@
 // ai-marks.js: the small logos that stand for Claude, Codex and Grok on the board's labels (2026-11-09: wherever
 // the board would use the words Codex, Grok or Claude it uses the little icons, which also saves space). Every worker's
 // label carries the mark of what runs it: the map tags in both Middle-earth views, the Queue's slots, cards and Needs you
-// rows, the Machines view's seats. Words stay in sentences and tooltips, where the mark carries a title of its own.
+// rows, the Fleet view's seats. Words stay in sentences and tooltips, where the mark carries a title of its own.
 // Sources, each a brand's own mark: Claude's spark is Simple Icons' "claude" (CC0 icon data), drawn in Claude's orange;
 // Codex's cloud with a prompt is cut from Codex.app's own icon (app.icns), its white field made clear; Grok's mark is
 // Wikimedia Commons' "Grok-icon.svg" (CC0) without its black square, drawn in the text colour so it shows in both themes.

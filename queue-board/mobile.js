@@ -1,14 +1,13 @@
 // mobile.js: what a phone needs beyond CSS (mobile.css, mobile-views.css; README "On a phone"). Loaded first of the page
 // scripts, after page.html's own, so scene.js and scene2.js can ask it for a map's room. Uses page.html's $, esc, snap,
 // view and standing. On a desktop window none of this shows or runs: every part asks phoneMq first.
-//   - The bottom bar's More button and its sheet: the rest of the sidebar (the Queue's groups, the map from above,
-//     Machines, Worktrees, Gollum and their links), copied from the nav each time it opens or the nav is redrawn.
-//   - The Queue tab's count: Needs you, read from the sidebar's group link.
+//   - The bottom bar's More button and its sheet: the rest of the sidebar (Fleet and Worktrees), copied from the nav
+//     each time it opens or the nav is redrawn, then the sound items (side-dock.js's sndItems). The Side view and the
+//     Top view switch in the header of Middle Earth, so they stay out of the sheet.
 //   - The two maps: how tall a map may be (phoneMapRoom) and where it opens (phoneAim).
 const phoneMq = matchMedia('(max-width: 899px), (pointer: coarse) and (max-height: 540px)');
 const phoneLandMq = matchMedia('(max-width: 899px) and (max-height: 540px) and (orientation: landscape), (pointer: coarse) and (max-height: 540px) and (orientation: landscape)');
-const PHONE_BAR = ['inbox', 'sessions', 'queue', 'scene'];
-const PHONE_MORE = '[data-view="map"], [data-view="machines"], [data-view="worktrees"], [data-view="gollum"]';
+const PHONE_BAR = ['queue', 'sessions', 'inbox', 'me'];
 const phoneSide = document.querySelector('.side');
 
 const phoneMore = document.createElement('button');
@@ -30,15 +29,13 @@ phoneSide.append(phoneMore, phoneSheet);
 document.body.append(phoneVeil);
 
 const phoneMoreOpen = () => phoneSheet.classList.contains('on');
-// Every sidebar link the bar has no room for, in the sidebar's order. The Queue's groups come first; their heading is the
-// Queue tab's own name, since the tab itself stays in the bar. A copy made while the sheet is open replaces its links,
-// so the link that held the keyboard's focus takes it again.
+// Every sidebar view the bar has no room for, in the sidebar's order, then sound. A copy made while the sheet is open
+// replaces its items, so the one that held the keyboard's focus takes it again.
 function phoneMoreFill() {
-  const rest = [...document.querySelectorAll('#nav > .nav-item')].filter((a) => !PHONE_BAR.includes(a.dataset.view));
-  const queue = document.querySelector('#nav > .nav-item[data-view="queue"] .nav-t')?.textContent ?? 'Queue';
-  const held = phoneSheet.contains(document.activeElement) ? document.activeElement.getAttribute('href') : null;
-  phoneSheet.innerHTML = `<h4>${esc(queue)}</h4>${rest.map((a) => a.outerHTML).join('')}`;
-  if (held) [...phoneSheet.querySelectorAll('a.nav-item')].find((a) => a.getAttribute('href') === held)?.focus();
+  const rest = [...document.querySelectorAll('#nav > .nav-item.view')].filter((a) => !PHONE_BAR.includes(a.dataset.view));
+  const held = phoneSheet.contains(document.activeElement) ? document.activeElement.dataset.snd ?? document.activeElement.getAttribute('href') : null;
+  phoneSheet.innerHTML = `<h4>More</h4>${rest.map((a) => a.outerHTML).join('')}${typeof sndItems === 'function' ? `<h4>Sound</h4>${sndItems('a')}` : ''}`;
+  if (held) [...phoneSheet.querySelectorAll('.nav-item')].find((a) => (a.dataset.snd ?? a.getAttribute('href')) === held)?.focus();
 }
 // Closing hides the sheet's links, so keyboard focus held by one of them goes back to the More button.
 function phoneMoreSet(open) {
@@ -54,15 +51,9 @@ phoneVeil.addEventListener('click', () => phoneMoreSet(false));
 phoneSide.addEventListener('click', (e) => { if (phoneMoreOpen() && e.target.closest('a.nav-item')) phoneMoreSet(false); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && phoneMoreOpen()) phoneMoreSet(false); });
 
-// renderNav redraws the sidebar on every snapshot. Each time, the Queue tab takes the Needs you count (red when
-// something is blocked, amber when it is only worth a look), More takes a seal when a view behind it is hot, and an
-// open sheet is copied again.
+// renderNav redraws the sidebar on every snapshot; an open sheet is copied again. More lights up while a view behind it
+// is open (mobile.css, by the page's data-view).
 function phoneNavSync() {
-  const c = document.querySelector('#nav .nav-sub[href="#sec-needs"] .count');
-  const n = Number(c?.textContent) || 0;
-  phoneSide.dataset.needs = !n ? 'none' : c.classList.contains('hot') ? 'hot' : 'warm';
-  phoneSide.style.setProperty('--needs', `"${n || ''}"`);
-  phoneSide.dataset.more = document.querySelector(`#nav > .nav-item.view.hot:is(${PHONE_MORE})`) ? 'hot' : 'none';
   if (phoneMoreOpen()) phoneMoreFill();
 }
 new MutationObserver(phoneNavSync).observe($('nav'), { childList: true });

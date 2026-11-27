@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // herald.mjs: the queue herald. It reads the board's snapshot every 20 seconds, works out what changed
 // (herald-events.mjs) and, for each new event, plays its cue with afplay and posts a macOS notification titled
-// "Middle-earth" saying who and what, with the Forge's icon. It needs no browser, so the owner hears the queue while working in anything else.
+// "Middle-earth" saying who and what, with the Forge's icon. A click on one opens the thing it is about (herald-links.mjs):
+// a worker's session panel on the board, a Claude app session in the app, a machine's Fleet card, main's failing run.
+// A merge and main going green play their sound and post no banner. It needs no browser, so the owner hears the queue while working in anything else.
 // sound.json (sound.mjs) is read every cycle: Mute silences every sound and leaves the notifications, each event's
 // switch turns that event off entirely, and while a Zoom meeting runs here it stays silent too (autoMuteZoom). The
 // first read after a start only takes note, so a restart never sounds a burst. When the board stops answering it keeps
@@ -20,6 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { step } from './herald-events.mjs';
+import { boardUrl, eventUrl, SOUND_ONLY } from './herald-links.mjs';
 import { readSettings, playAfterWarning, cueSeconds, zoomInMeeting, boardConfig, ALERT_LEAD_MS, CUES, STATUS_FILE } from './sound.mjs';
 
 const args = process.argv.slice(2);
@@ -57,13 +60,15 @@ async function readSnapshot() {
 // carries the Forge's icon. Where that app is missing, not allowed yet or fails, it goes out through osascript instead,
 // from Script Editor's identity. Either way the text goes in as arguments, never
 // into a script, so nothing in a title can break out of it.
-const NOTIFIER = path.join(qb.heraldNotifierApp || path.join(paths.stateDir, 'queue-board', 'Forge Herald.app'), 'Contents/MacOS/forge-herald');
+// HERALD_NOTIFIER points a herald at another build of it (install-herald.sh --staging-notifier).
+const NOTIFIER = process.env.HERALD_NOTIFIER || path.join(qb.heraldNotifierApp || path.join(paths.stateDir, 'queue-board', 'Forge Herald.app'), 'Contents/MacOS/forge-herald');
 const run = (file, argv) => new Promise((resolve) => { execFile(file, argv, { timeout: 10_000 }, (err, _out, stderr) => resolve(err ? String(stderr || err.message).trim().split('\n')[0] : null)); });
 let notifierDown = null;
-async function notify(head, body) {
-  if (DRY) return log(`would post: ${head} | ${body}`);
+// The link goes in as a fourth argument, which the notifier opens on a click; through osascript a click opens nothing.
+async function notify(head, body, url = null) {
+  if (DRY) return log(`would post: ${head} | ${body}${url ? ` | opens ${url}` : ''}`);
   if (fs.existsSync(NOTIFIER)) {
-    const failed = await run(NOTIFIER, ['Middle-earth', head, body || head]);
+    const failed = await run(NOTIFIER, ['Middle-earth', head, body || head, ...(url ? [url] : [])]);
     if (!failed) { notifierDown = null; return; }
     if (failed !== notifierDown) log(`Forge Herald could not post, so notifications go through osascript: ${failed}`);
     notifierDown = failed;
@@ -98,6 +103,8 @@ async function playAll(cues, volume, fresh) {
   }
 }
 
+// Where a click on a notification goes: worked out from the latest snapshot's board address and repo.
+let links = { board: boardUrl(null, BASE), here: HOST };
 async function announce(events, settings, silent) {
   const on = events.filter((e) => settings.events[e.kind] !== false);
   if (!on.length) return;
@@ -107,9 +114,12 @@ async function announce(events, settings, silent) {
   // Each call is named by its event and when it came, so the board's push and the status file name it the same.
   const fresh = on.map((e) => ({ id: `${e.key}@${at}`, at, kind: e.kind, cue: e.cue, head: e.head, who: e.who ?? null }));
   calls = [...fresh, ...calls.filter((c) => at - c.at < CALLS_MS)].slice(0, MAX_CALLS);
-  const shown = on.slice(0, MAX_NOTES);
-  for (const e of shown) await notify(e.head, e.body);
-  if (on.length > shown.length) await notify(`And ${on.length - shown.length} more`, on.slice(MAX_NOTES).map((e) => e.head).join('; ').slice(0, 220));
+  const banners = on.filter((e) => !SOUND_ONLY.has(e.kind));
+  const shown = banners.slice(0, MAX_NOTES);
+  for (const e of shown) await notify(e.head, e.body, eventUrl(e, links));
+  if (banners.length > shown.length) {
+    await notify(`And ${banners.length - shown.length} more`, banners.slice(MAX_NOTES).map((e) => e.head).join('; ').slice(0, 220), links.board && `${links.board}#sec-needs`);
+  }
   if (silent) return;
   const cues = [...new Set(on.map((e) => e.cue))].slice(0, MAX_CUES);
   await playAll(cues, settings.volume, fresh);
@@ -142,12 +152,13 @@ async function cycle() {
     if (!downNoticed && now - downSince >= DOWN_NOTICE_MS) {
       downNoticed = true;
       log(`board unreachable since ${new Date(downSince).toISOString()}: ${e.message}`);
-      await notify('The queue board is not answering', `${BASE} has not answered for 5 minutes. The herald keeps trying.`);
+      await notify('The queue board is not answering', `${BASE} has not answered for 5 minutes. The herald keeps trying.`, links.board);
     }
     writeStatus({ boardOk: false, boardDownSince: new Date(downSince).toISOString(), zoom, muted: settings.muted, autoMuted, waiting: null });
     return;
   }
   // Back after a long outage: what changed meanwhile is old news, so start from a fresh baseline and say what waits.
+  links = { board: boardUrl(snap, BASE), here: HOST, repo: snap.board?.repo };
   const back = downNoticed;
   if (back) state = null;
   downSince = null;
@@ -158,7 +169,7 @@ async function cycle() {
   if (first) {
     const n = Object.keys(state.firstSeen).length;
     log(`${back ? 'board is back' : 'first read'}: ${n} waiting on the owner, main ${state.main.status}`);
-    if (back) await notify('The queue board is back', n ? `${n} ${n === 1 ? 'thing waits' : 'things wait'} on you.` : 'Nothing waits on you.');
+    if (back) await notify('The queue board is back', n ? `${n} ${n === 1 ? 'thing waits' : 'things wait'} on you.` : 'Nothing waits on you.', links.board && `${links.board}#sec-needs`);
   }
   writeStatus({ boardOk: true, boardDownSince: null, zoom, muted: settings.muted, autoMuted, waiting: first ? Object.keys(state.firstSeen).length : out.waiting });
   await announce(out.events, settings, silent);

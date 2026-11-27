@@ -1,0 +1,102 @@
+/* fleet.css: the Fleet view's layout. The top strip, a card per machine (a slim realm band, the seats, the slot counts,
+   the health bars, the accounts, the pause state, the worktrees link), then the one accounts table, which becomes a
+   list under 900px. */
+.fv { padding: 18px 24px 40px; display: flex; flex-direction: column; gap: 18px; }
+.fgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 18px; align-items: start; }
+.fcard { position: relative; display: flex; flex-direction: column; min-width: 0; background: var(--raised) var(--grain); border: 1px solid var(--line-2); border-radius: 2px; box-shadow: var(--shadow); scroll-margin-top: 16px; }
+.fcard.down { opacity: .82; }
+.fband { display: flex; align-items: center; gap: 9px; min-height: 30px; padding: 0 14px; background: linear-gradient(90deg, color-mix(in srgb, var(--mc) 30%, var(--raised)), color-mix(in srgb, var(--mc) 8%, var(--raised))); border-bottom: 1px solid color-mix(in srgb, var(--mc) 45%, var(--line-2)); }
+.fband h3 { margin: 0; font: 600 13px/1 var(--display); letter-spacing: .16em; text-transform: uppercase; color: var(--ink); }
+.fband .host { font: italic 14px/1 var(--serif); color: var(--ink-2); }
+.fband .chip { font-size: 11px; }
+.fband .tick { margin-left: auto; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.fsec { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fsec + .fsec { border-top: 1px solid var(--line); }
+.fseats { display: flex; flex-wrap: wrap; gap: 6px; }
+.fseat { width: 44px; height: 52px; display: grid; place-items: end center; padding: 0 0 3px; border: 1px solid var(--line-2); border-radius: 22px 22px 2px 2px; background: radial-gradient(ellipse 75% 38% at 50% 100%, color-mix(in srgb, var(--mc) 30%, transparent), transparent), var(--sunk); box-shadow: inset 0 3px 7px rgb(0 0 0 / .18); position: relative; cursor: pointer; font: inherit; color: inherit; }
+button.fseat:hover { border-color: color-mix(in srgb, var(--mc) 65%, var(--line-2)); }
+.fseat canvas { width: 30px; height: 39px; image-rendering: pixelated; }
+.fseat .gem { position: absolute; right: 1px; bottom: 1px; display: grid; }
+.fseat .gem svg { width: 11px; height: 11px; }
+.fseat.out { border-style: dashed; }
+.fseat.free { cursor: default; border-style: dashed; background: none; box-shadow: none; }
+.fctl { display: grid; grid-template-columns: 76px auto minmax(0, 1fr); align-items: center; gap: 8px 12px; }
+.fctl > span:first-child { font: 600 10.5px/1.2 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.fctl .live { font-size: 12.5px; color: var(--ink-2); min-width: 0; }
+.fctl .live b { color: var(--ink); font-weight: 500; }
+.fctl .live .warn { color: var(--warn); }
+.fctl.facc-row { grid-template-columns: 76px minmax(0, 1fr); }
+.fhealth { gap: 9px; }
+.fhealth .gauge { grid-template-columns: 92px minmax(0, 1fr) auto; }
+.fval { min-width: 28px; font: 600 14px/1 var(--sans); color: var(--ink); text-align: center; font-variant-numeric: tabular-nums; }
+.cnote { font-size: 12px; color: var(--ink-3); }
+.cstate { font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
+.cstate.wait { color: var(--warn); }
+.cstate code { font-size: 11.5px; }
+.letters { display: flex; flex-wrap: wrap; gap: 6px; }
+.letter { display: inline-grid; place-items: center; min-width: 34px; height: 30px; padding: 0 9px; border: 1px solid var(--line-2); border-radius: 6px; color: var(--ink-3); font: 600 13px/1 var(--sans); }
+.letter.on { background: var(--tint); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 50%, var(--line-2)); }
+.fcard .letters { gap: 5px; }
+.fcard .letter { min-width: 28px; height: 28px; padding: 0 6px; }
+.letter.gone { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line-2)); background: var(--bad-tint); }
+.frow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fwt { margin-left: auto; font-size: 12.5px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 7px; }
+.fwt b { color: var(--ink); font-weight: 500; }
+.fwt:hover { text-decoration: none; color: var(--ink); }
+.fwt .chev { width: 11px; height: 11px; }
+/* The top strip: the one worker count and how many machines are paused or offline. */
+.ftop { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 16px; background: var(--raised) var(--grain); border: 1px solid var(--line-2); border-radius: 2px; box-shadow: var(--shadow); }
+.ftop .flow { display: flex; align-items: center; gap: 8px; font: 600 12.5px/1.3 var(--display); letter-spacing: .06em; text-transform: uppercase; }
+.ftop .flow .dot { width: 9px; height: 9px; }
+.ftop .flow.on .dot { background: var(--ok); } .ftop .flow.off .dot { background: var(--warn); }
+.ftop .cnt { font-size: 13px; color: var(--ink-2); }
+.ftop .cnt b { color: var(--ink); font-weight: 600; }
+.ftop .cnt .over { color: var(--warn); font-weight: 500; }
+/* The accounts table. */
+.fsech { display: flex; align-items: center; gap: 10px; margin: 0; font: 600 12px/1 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); scroll-margin-top: 16px; }
+.fsech::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line-2), transparent 85%); }
+.facct { background: var(--raised) var(--grain); border: 1px solid var(--line-2); border-radius: 2px; box-shadow: var(--shadow); overflow-x: auto; }
+.fmodels { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.fmodels label, .fmodels .fmlab { display: flex; align-items: center; gap: 8px; font: 600 10.5px/1.2 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.fmodels .seg button { text-transform: none; letter-spacing: 0; }
+table.fa { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.fa th { text-align: left; font: 600 10.5px/1.2 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); padding: 10px 10px 8px; border-bottom: 1px solid var(--line-2); white-space: nowrap; }
+table.fa td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.fa tr:last-child td { border-bottom: 0; }
+table.fa tr.dim td { color: var(--ink-3); }
+.fa .lab, .facc .lab { font: 700 15px/1 var(--sans); color: var(--ink); margin-right: 8px; }
+.fa .lab.svc, .facc .lab.svc { font-size: 13px; }
+.fa .who { color: var(--ink); }
+.fa .plan, .facc .plan { color: var(--ink-3); }
+.fa .realms { display: flex; gap: 6px; align-items: center; }
+.wk-left { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.wk-left b { font-weight: 600; color: var(--ink); }
+.wk-left .r { color: var(--ink-3); }
+.flag { font-size: 12px; white-space: nowrap; color: var(--ink-3); }
+.flag.bad { color: var(--bad); } .flag.warn { color: var(--warn); }
+table.fa tr.grp td { padding: 14px 10px 6px; font: 600 11.5px/1 var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--ink); border-bottom: 1px solid var(--line-2); }
+.tog.sm { height: 26px; font-size: 12px; }
+.tog.sm::before { width: 22px; height: 13px; background: var(--line-2) radial-gradient(circle at 6.5px 50%, #fff 4.3px, transparent 4.8px); }
+.tog.sm.on::before { background: var(--accent) radial-gradient(circle at 15.5px 50%, #fff 4.3px, transparent 4.8px); }
+.fa .step { height: 26px; } .fa .step button { width: 24px; height: 24px; font-size: 14px; } .fa .step output { min-width: 26px; font-size: 12.5px; }
+.ftable-narrow { display: none; }
+.facc { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; font-size: 13px; }
+.facc.dim .who { color: var(--ink-3); }
+.facc-1 { display: flex; align-items: center; gap: 8px; }
+.facc-1 .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.facc-m { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; }
+.facc-2 { display: flex; flex-wrap: wrap; gap: 8px; }
+.facc-2 .cbtn { margin-left: auto; }
+@media (max-width: 899px), (pointer: coarse) and (max-height: 540px) {
+  .fv { padding: 14px var(--gut, 14px) 24px; }
+  .ftable-wide { display: none; }
+  .ftable-narrow { display: block; }
+  .fctl { grid-template-columns: 70px auto minmax(0, 1fr); }
+  .fctl.facc-row { grid-template-columns: 70px minmax(0, 1fr); }
+  .fcard .letter { min-width: 44px; min-height: 44px; }
+  .fband { flex-wrap: wrap; padding: 6px 14px; }
+  .fwt { min-height: 44px; }
+}
+@media (min-width: 900px) and (max-width: 1500px) {
+  .ftable-wide .hide-mid { display: none; }
+}

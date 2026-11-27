@@ -13,7 +13,7 @@ import { fourMachines, threeMachines, oneMachine } from './fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROBE = fs.readFileSync(path.join(HERE, 'page-probe.js'), 'utf8');
-const VIEWS = ['queue', 'scene', 'map', 'machines', 'worktrees', 'sessions', 'inbox', 'gollum'];
+const VIEWS = ['queue', 'sessions', 'inbox', 'scene', 'map', 'fleet', 'worktrees'];
 const SIZES = [[1100, 900], [1400, 900], [1790, 1260], [2400, 1500], [390, 844]];
 const SHOTS = process.env.PAGE_SHOTS || null;
 const NO_CHROME = chromePath() ? false : 'no headless Chrome found (set CHROME to its path); the page tests did not run';

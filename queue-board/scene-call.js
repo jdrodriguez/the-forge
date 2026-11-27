@@ -9,7 +9,8 @@
 // Each gets a name of its own on the road. The bar over the scene says what the newest call was. Gold is a call waiting on
 // the owner, red is trouble (CI failing, stuck, a machine down, main red), green a merge. A call shows for five minutes, or
 // until the owner clicks the worker, the eagle, the messenger or the bar; the bar, an eagle and a messenger also open what
-// called (the worker's session panel, or the Sessions view). With reduced motion the light holds still and no rings go
+// called (callOpen): the worker's session panel, the Claude app session itself, the machine's Fleet card, main's
+// failing run, or Needs you. With reduced motion the light holds still and no rings go
 // out. The light itself (callPool and callRings, in 32-bit) is scene-call-light.js. Uses scene.js's sc, scStage,
 // scTags, scCanvas, scHead, scHit, SC_GLYPH, scReduced and scFrame, sprites.js's drawFigure, horn.js's 'board-sound'
 // event, session.js's openPanel and page.html's applyView, dur, esc and $.
@@ -57,10 +58,22 @@ function callDismiss(list) {
   try { localStorage.setItem(CALL_GONE, JSON.stringify(keep)); } catch { /* this tab only */ }
   callRedraw();
 }
-// Opens what a call came from: its worker's session panel, or the Sessions view for a Claude app session.
+// Opens what a call came from, the same place a click on the herald's notification goes (herald-links.mjs): a worker's
+// session panel; a Claude app session in the Claude app when it runs on this Mac, its panel on the board otherwise
+// (session.js openAppSession); a machine's Fleet card; main's failing run on GitHub; and Needs you for an ask no
+// worker carries or a reminder. A merge or main going green has nothing to open.
 function callOpen(c) {
-  if (c.who?.id && typeof openPanel === 'function') openPanel(c.who.id);
-  else if (c.who?.session) { history.pushState(null, '', '#sessions'); applyView(true); }
+  const w = c.who;
+  const go = (hash) => { history.pushState(null, '', hash); applyView(true); };
+  if (w?.id && typeof openPanel === 'function') return openPanel(w.id);
+  if (w?.session && typeof openAppSession === 'function') return openAppSession(`app:${w.host}:${w.session}`);
+  if (w?.host) return go(`#fleet/${encodeURIComponent(w.host)}`);
+  if (c.kind === 'mainRed') {
+    const run = /^https:\/\/github\.com\//.test(snap?.main?.run ?? '') ? snap.main.run : null;
+    if (run) window.open(run, '_blank', 'noopener');
+    return;
+  }
+  if (['needs', 'reminder'].includes(c.kind)) { go('#queue'); $('sec-needs')?.scrollIntoView({ block: 'start' }); }
 }
 
 // The live event stream, open while the view is. The browser retries a dropped stream itself; one it gave up on opens

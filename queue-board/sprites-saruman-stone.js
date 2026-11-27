@@ -1,8 +1,8 @@
 // sprites-saruman-stone.js: Saruman's palantír for the Middle-earth view (scene-saruman.js), at 32-bit like his figure
 // (sprites-saruman.js): a ball of dark glass 3.5 units across in the cup of a dark stone pedestal 7 units tall, a capital
 // over a fluted column on a plinth of two blocks, lit from the upper left. Unlit, the glass is near black with a cold
-// glint and a faint rim. Lit, it glows from deep inside in an engine's colour (ART_STONE_TINT, realm-art.js, the same as
-// the Machines view's seeing-stones), brightest at its heart, with two arms of light turning inside it; when both engines
+// glint and a faint rim. Lit, it glows from deep inside in an engine's colour (blue for Codex,
+// amber for Grok), brightest at its heart, with two arms of light turning inside it; when both engines
 // run the arms take the other engine's colour. Its halo and the light it casts on the ground and on Saruman's face, beard,
 // hands and robe are added with the canvas's 'lighter' blend in the colour itself, so a blue light stays blue. Each
 // picture is painted once at SC_RES and copied.
