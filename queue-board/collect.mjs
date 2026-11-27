@@ -128,9 +128,13 @@ function worktreeBranch(ticket) {
 // only as key, a short hash of the pair, which tells the board when two labels (or two machines) hold the same account,
 // such as two labels signed in to one Team seat, drawing on one set of limits.
 const PLANS = { claude_max: 'Max', claude_team: 'Team', claude_pro: 'Pro', claude_enterprise: 'Enterprise' };
-function labels() {
+function foundLabels() {
   const found = fs.readdirSync(HOME).filter((d) => /^\.claude-[a-z]$/.test(d)).map((d) => d.slice(-1));
   if (fs.existsSync(path.join(HOME, '.claude.json'))) found.unshift(PRIMARY);
+  return found;
+}
+function labels() {
+  const found = foundLabels();
   return hostCfg.accounts ? found.filter((l) => hostCfg.accounts.includes(l)) : found;
 }
 function readAccount(label, file) {
@@ -240,6 +244,9 @@ console.log(JSON.stringify({
   adhoc,
   engines,
   accounts,
+  // The account letters this machine has a folder for that its accounts list leaves out, so the Fleet view can offer
+  // to put one on it. Letters only: nothing is read from those folders.
+  spareLabels: hostCfg.accounts ? foundLabels().filter((l) => !hostCfg.accounts.includes(l)) : [],
   watched,
   log,
   errors,
