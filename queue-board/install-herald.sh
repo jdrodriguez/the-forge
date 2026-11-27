@@ -5,6 +5,11 @@
 #   install-herald.sh --base http://board-mac:8787      read the board on another Mac
 #   install-herald.sh --interval 5                      read every 5 seconds (default 20)
 #   install-herald.sh --remove                          stop it and delete its plist and its notifier app
+#   install-herald.sh --staging-notifier                build only "Forge Herald Staging.app" (its own bundle id and
+#                                                       name, in <paths.stateDir>/queue-board-staging), for trying a
+#                                                       notifier change; the installed one and the launchd job are left
+#                                                       alone. HERALD_NOTIFIER=<its forge-herald> makes a herald post
+#                                                       through it.
 # Run it from the checkout that should keep running: the job points at the herald.mjs next to this file.
 # It also builds "Forge Herald.app" (herald-notifier.swift), the small app the herald posts its notifications through
 # so they carry the Forge's icon. macOS asks once whether that app may post; until it is allowed, or on a Mac with no
@@ -30,6 +35,8 @@ STATE_DIR="$(cfg paths.stateDir)"
 STATE_DIR="${STATE_DIR:-$HOME/.agent-queue}"
 APP="$(cfg queueBoard.heraldNotifierApp)"
 APP="${APP:-$STATE_DIR/queue-board/Forge Herald.app}"
+APP_NAME="Forge Herald"
+STAGING=0
 LOG="$STATE_DIR/queue-herald.log"
 BASE="http://127.0.0.1:$(cfg queueBoard.port)"
 BASE="${BASE%:}"
@@ -45,6 +52,12 @@ while [ $# -gt 0 ]; do
       exit 0 ;;
     --base) BASE="$2"; shift 2 ;;
     --interval) INTERVAL="$2"; shift 2 ;;
+    --staging-notifier)
+      STAGING=1
+      APP="$STATE_DIR/queue-board-staging/Forge Herald Staging.app"
+      APP_NAME="Forge Herald Staging"
+      BUNDLE_ID=dev.agent-queue.herald-notifier-staging
+      shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -65,7 +78,7 @@ build_notifier() {
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleName</key><string>Forge Herald</string>
+  <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundleExecutable</key><string>forge-herald</string>
   <key>CFBundleIconFile</key><string>forge</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -84,17 +97,23 @@ PLIST
   local status answer
   status="$("$bin" --status)"
   if [ "$status" = not-asked ]; then
-    echo "macOS is asking whether Forge Herald may post notifications: click Allow on the prompt (waiting up to 90s)"
+    echo "macOS is asking whether $APP_NAME may post notifications: click Allow on the prompt (waiting up to 90s)"
     answer="$(mktemp)"
     open -g -n -W --stdout "$answer" --stderr "$answer" -a "$APP" --args --ask || true
     status="$(tail -1 "$answer")"
     rm -f "$answer"
   fi
   case "$status" in
-    allowed) echo "Forge Herald may post notifications, so they carry the Forge's icon" ;;
-    *) echo "Forge Herald may not post yet ($status), so the herald keeps posting through osascript. Turn it on in System Settings > Notifications > Forge Herald > Allow notifications" ;;
+    allowed) echo "$APP_NAME may post notifications, so they carry the Forge's icon" ;;
+    *) echo "$APP_NAME may not post yet ($status), so the herald keeps posting through osascript. Turn it on in System Settings > Notifications > $APP_NAME > Allow notifications" ;;
   esac
 }
+
+if [ "$STAGING" = 1 ]; then
+  build_notifier
+  echo "try it: \"$APP/Contents/MacOS/forge-herald\" Middle-earth 'A test' 'Click to open the board' $BASE/#sec-needs"
+  exit 0
+fi
 
 mkdir -p "$STATE_DIR" "$(dirname "$DEST")"
 # Escapes a value for the right side of a sed s### command.

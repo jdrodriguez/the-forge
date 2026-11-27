@@ -3,7 +3,8 @@
 // new state and the events to announce, each { kind, cue, head, body, key, who }. kind is one of sound.json's event
 // switches. who says whose call it is, so the Middle-earth view can show who is calling (scene-call.js): { host, id } for
 // a ticket's worker, { host, session } for a Claude app session, { host } for a machine, each with a name to show, or
-// null (main, an ask with no worker).
+// null (main, an ask with no worker). The main-red event also carries its failing run's address (run), and
+// herald-links.mjs works out where a click on each event's notification goes.
 //
 // The facts are grouped in parts, one per source and machine: a part is a map of key to item, or null when this
 // snapshot can't say (the machine never reported, Linear or GitHub failed, its sessions are not scanned yet). A null
@@ -175,7 +176,7 @@ export function step(prev, snap, now, { reminderMinutes = 30 } = {}) {
     const fresh = prev.main.status !== 'red' || prev.main.sha !== mm.sha;
     if (fresh || now - prev.main.hornAt >= HORN_REPEAT_MS) {
       const failing = mm.failing?.length ? ` Failing: ${mm.failing.join(', ')}.` : '';
-      events.push({ kind: 'mainRed', cue: 'main-red', key: `red:${mm.sha}`,
+      events.push({ kind: 'mainRed', cue: 'main-red', key: `red:${mm.sha}`, run: mm.run ?? null,
         head: fresh ? 'Orcs at the gates: main is red' : `Main is still red, ${dur(now - ms(mm.since ?? prev.main.since))}`,
         body: clip(`${mm.title ? `Since ${mm.title}.` : ''}${failing}`, 200) || 'See the board for the failing run.' });
       main = { status: 'red', sha: mm.sha, since: mm.since ?? null, hornAt: now };
