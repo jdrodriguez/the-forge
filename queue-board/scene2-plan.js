@@ -102,9 +102,9 @@ function m2Plan(W, H) {
   plan.edoras = plan.realms[edoras] ?? null;
   m2PlanRiver(plan);
   // Edoras is laid out last, below the realms above it, and no realm may overlap another or run off the map
-  // (scene2-plan-realms.js).
+  // (scene2-plan-realms.js). It keeps its desks in one row while there is room (scene2-rohan.js's m2PlanEdoras).
   plan.realms.forEach((r) => { if (r !== plan.edoras) m2PlanStations(plan, r); });
-  if (plan.edoras) { m2PlanUnder(plan, plan.edoras); m2PlanStations(plan, plan.edoras); }
+  if (plan.edoras) { m2PlanUnder(plan, plan.edoras); m2PlanEdoras(plan, plan.edoras); }
   m2PlanApart(plan);
   // A second Men realm whose stations fall off the map does not fit at this scale (m2Fit then tries a smaller one).
   const second = plan.realms.find((r) => r.kind === 'man' && r !== plan.edoras);
