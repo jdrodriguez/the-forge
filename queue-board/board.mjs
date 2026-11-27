@@ -23,7 +23,7 @@ import { musicList, musicFile, musicEvents, musicAlert, alertPages } from './mus
 import { weatherNow } from './weather.mjs';
 import { extRuns } from './ext-runs.mjs';
 import { hostAllowed, certName, callerOf, boardAddress } from './host-ok.mjs';
-import { dryRefusal } from './dry.mjs';
+import { dryRefusal, dryRun } from './dry.mjs';
 import { loadPlain } from './plain-script.mjs';
 import { createControl } from './control.mjs';
 import { createRunner } from './control-runner.mjs';
@@ -966,6 +966,7 @@ const control = createControl({
   by: `${HUMAN} via the board`,
   team: cfg.linear?.team ?? null,
   snapshot: () => snap,
+  refreshSnapshot: () => { dirty = true; return refresh(); },
   runDispatcher: createRunner({ here: HERE, root: ROOT, machines: MACHINES }),
   onWrite: () => {
     try {
@@ -978,7 +979,8 @@ const control = createControl({
     dirty = true;
   },
 });
-if (!qb.host || qb.host === HERE) control.start();
+// A dry-run board runs no end times either, so a copy started to look sends nothing on its own.
+if (!dryRun() && (!qb.host || qb.host === HERE)) control.start();
 
 function send(res, code, type, body) {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });

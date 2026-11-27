@@ -137,6 +137,45 @@ test('pause runs the dispatcher CLI on that machine with a clean reason, and a t
   assert.equal(b.log().at(-1).kind, 'revert');
 });
 
+test('a timed pause ends only on a fresh reading: offline, it stays paused and is tried again', async () => {
+  const b = box();
+  await b.control.perform({ op: 'pause', host: 'linux-box', value: true, until: new Date(T0 + HOUR).toISOString() });
+  b.snap.machines[2].ok = false;
+  b.clock.t = T0 + HOUR + 1000;
+  await b.control.dueTimers();
+  assert.deepEqual(b.calls.map((c) => c.args[0]), ['pause'], 'no resume while the machine cannot be read');
+  assert.equal(b.control.state().timers.length, 1, 'the end time is still pending');
+  b.snap.machines[2] = { ...b.snap.machines[2], ok: true, paused: `2026-11-19T22:10:03Z ${b.calls[0].args[1]}` };
+  await b.control.dueTimers();
+  assert.deepEqual(b.calls.map((c) => c.args[0]), ['pause', 'resume']);
+});
+
+test('a planted link at a wake request is replaced, never written through', async () => {
+  const b = box();
+  b.snap.machines[2].ok = false;
+  const target = path.join(b.dir, 'elsewhere.txt');
+  fs.writeFileSync(target, 'untouched\n');
+  fs.mkdirSync(path.join(b.shared, 'wake-requests'));
+  fs.symlinkSync(target, path.join(b.shared, 'wake-requests', 'ABC-7064.json'));
+  await b.control.perform({ op: 'wake', ticket: 'ABC-7064' });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'untouched\n');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(b.shared, 'wake-requests', 'ABC-7064.json'), 'utf8')).id, 'ABC-7064');
+});
+
+test('Keep on a burn whose log line cannot be written leaves burnUntil as it was', { skip: process.getuid?.() === 0 && 'root ignores a read-only file' }, async () => {
+  const b = box();
+  const until = new Date(T0 + 3 * HOUR).toISOString();
+  const [e] = await b.control.perform({ op: 'burn', account: 'b', value: true, until });
+  const log = path.join(b.shared, 'control-log.jsonl');
+  fs.chmodSync(log, 0o444);
+  try {
+    await assert.rejects(b.control.perform({ op: 'keep', id: e.id }));
+  } finally {
+    fs.chmodSync(log, 0o644);
+  }
+  assert.equal(b.cfg().burnUntil.b, until);
+});
+
 test('a timed pause leaves alone a machine paused again by hand after it', async () => {
   const b = box();
   await b.control.perform({ op: 'pause', host: 'linux-box', value: true, until: new Date(T0 + HOUR).toISOString() });

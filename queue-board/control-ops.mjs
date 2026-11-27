@@ -182,6 +182,8 @@ export const OPS = {
     guard: (cfg, a, v) => {
       const on = Object.values(cfg.hosts).some((h) => (h.accounts ?? []).includes(a.account) || (h.fallbackAccounts ?? []).includes(a.account));
       if (v && !on) refuse(`account ${a.account} is on no machine's account list already`, 409);
+      const open = (cfg.enabledHosts ?? []).find((n) => !Array.isArray(cfg.hosts?.[n]?.accounts));
+      if (v && open) refuse(`${open} has no account list, so it may use every account; give it one first`, 409);
       if (!v && !cfg.accountsOut?.[a.account]) refuse(`nothing records where account ${a.account} was; add it on a machine's account list`, 409);
     },
     write: (cfg, a, v, ctx) => {

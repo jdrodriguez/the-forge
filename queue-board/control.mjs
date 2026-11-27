@@ -26,8 +26,9 @@ const BOARD_PAUSE = 'from the board';
 
 // configFile: the config the levers write. sharedDir: paths.sharedDir (heartbeats, wake-requests). logFile: the change
 // log. by: who the notes and the log name ("Alex via the board"). team: the Linear team key a ticket ID starts with.
+// refreshSnapshot: builds a fresh snapshot, so a pause's end time reads the machine as it is now.
 export function createControl({ configFile, sharedDir, logFile = path.join(sharedDir, 'control-log.jsonl'), here, by = 'the board', team = null,
-  snapshot = () => null, onWrite = () => {}, runDispatcher, now = () => Date.now() }) {
+  snapshot = () => null, refreshSnapshot = async () => {}, onWrite = () => {}, runDispatcher, now = () => Date.now() }) {
   const dir = sharedDir;
   const BY = by;
   const TICKET = team ? new RegExp(`^${team.replace(/[^A-Za-z0-9]/g, '')}-\\d+$`) : /^[A-Z][A-Z0-9]*-\d+$/;
@@ -115,9 +116,12 @@ export function createControl({ configFile, sharedDir, logFile = path.join(share
     const at = iso();
     const skip = (why) => appendLog(logFile, { id: newId(now()), at, kind: 'skipped', ref: t.id, target: t.target, op: t.op, args: t.args, reason: why });
     if (t.op === 'pause') {
-      if (ctx().paused(t.args.host) === false) return skip('the machine was already running again');
+      // A pause ends only on a fresh reading of the machine: an old one could show it running, or miss a pause by hand.
+      await refreshSnapshot();
       const m = machine(t.args.host);
-      if (m?.ok && !String(m.paused ?? '').replace(/^\S+Z /, '').startsWith(BOARD_PAUSE)) return skip('it was paused again some other way since, so it stays paused');
+      if (!m?.ok) refuse(`could not read ${t.args.host}, so its pause stays until the board can`, 502);
+      if (!m.paused) return skip('the machine was already running again');
+      if (!String(m.paused).replace(/^\S+Z /, '').startsWith(BOARD_PAUSE)) return skip('it was paused again some other way since, so it stays paused');
       await run(t.args.host, ['resume']);
       return appendLog(logFile, { id: newId(now()), at, kind: 'revert', ref: t.id, target: t.target, op: t.op, args: t.args, from: true, to: false, reason });
     }
@@ -188,7 +192,9 @@ export function createControl({ configFile, sharedDir, logFile = path.join(share
     const reqDir = path.join(dir, 'wake-requests');
     fs.mkdirSync(reqDir, { recursive: true });
     const at = iso();
-    fs.writeFileSync(path.join(reqDir, `${b.ticket}.json`), `${JSON.stringify({ id: b.ticket, at, from: here, by: 'the board' })}\n`);
+    const file = path.join(reqDir, `${b.ticket}.json`);
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(file, `${JSON.stringify({ id: b.ticket, at, from: here, by: 'the board' })}\n`, { flag: 'wx' });
     return [appendLog(logFile, { id: newId(now()), at, kind: 'wake', by: BY, target: `wake:${b.ticket}`, ticket: b.ticket, host: w.host,
       says: `${b.ticket} pushed through on ${w.host}: its next tick wakes it over the limit, once` })];
   }
@@ -211,17 +217,23 @@ export function createControl({ configFile, sharedDir, logFile = path.join(share
     if (b.op === 'until' && !until) refuse('until is required');
     if (b.op === 'until' && e.op === 'pause' && !e.to) refuse('only a pause can end by itself');
     const def = OPS[e.op];
-    if (def?.onUntil) {
-      const before = readConfig(configFile);
-      if (!same(def.read(before.cfg, e.args, ctx()), e.to)) refuse('the value has changed since', 409);
-      def.onUntil(before.cfg, e.args, until);
-      appendNote(before.cfg, def.note(e.args), `${stamp(iso())}, ${BY}: ${until ? `the end time of "${e.says}" set to ${stamp(until)}` : `"${e.says}" kept, with no end time`}.`);
-      writeConfig(configFile, before);
-      onWrite(before.cfg);
-    }
     const kind = b.op === 'keep' ? 'keep' : 'until';
-    return [appendLog(logFile, { id: newId(now()), at: iso(), kind, ref: e.id, target: e.target, by: BY,
-      ...(until ? { until, revertTo: timer ? restoreOf(timer) : e.from } : {}) })];
+    const line = { id: newId(now()), at: iso(), kind, ref: e.id, target: e.target, by: BY, ...(until ? { until, revertTo: timer ? restoreOf(timer) : e.from } : {}) };
+    if (!def?.onUntil) return [appendLog(logFile, line)];
+    // A burn keeps its end time in the config too (burnUntil), so the config and the log change together or not at all.
+    const before = readConfig(configFile);
+    if (!same(def.read(before.cfg, e.args, ctx()), e.to)) refuse('the value has changed since', 409);
+    def.onUntil(before.cfg, e.args, until);
+    appendNote(before.cfg, def.note(e.args), `${stamp(iso())}, ${BY}: ${until ? `the end time of "${e.says}" set to ${stamp(until)}` : `"${e.says}" kept, with no end time`}.`);
+    writeConfig(configFile, before);
+    try {
+      appendLog(logFile, line);
+    } catch (err) {
+      restoreConfig(configFile, before);
+      throw err;
+    }
+    onWrite(before.cfg);
+    return [line];
   }
 
   async function perform(body) {

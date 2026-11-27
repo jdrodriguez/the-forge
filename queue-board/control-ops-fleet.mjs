@@ -4,18 +4,19 @@
 // any other key is refused.
 import { getAt, setAt, deleteAt, refuse, show, cleanInt, cleanBool } from './control-config.mjs';
 
-// key path -> range, whether "none" (the key removed) is allowed, and the note it is recorded in.
+// key path -> range, whether "none" (the key removed) is allowed, and the note it is recorded in. A key the dispatcher
+// reads with a fallback when it is unset is nullable, so Undo can put "unset" back.
 export const NUMBERS = {
   maxConcurrent: { min: 0, max: 80, note: ['maxConcurrentNote'] },
   maxDispatchesPerDay: { min: 0, max: 200, nullable: true, note: ['maxDispatchesPerDayNote'], after: 'maxConcurrent' },
   headroomFloorPercent: { min: 0, max: 60, note: ['headroomNote'] },
   workerCap: { min: 1, max: 12, note: ['workerCapNote'] },
-  burnFloorPercent: { min: 0, max: 50, note: ['burnNote'] },
-  fableFloorPercent: { min: 0, max: 60, note: ['fableNote'] },
-  fableMinWeeklyLeftPercent: { min: 0, max: 100, note: ['fableNote'] },
-  'workerReservePercent.max': { min: 0, max: 30, note: ['workerReserveNote'] },
-  'workerReservePercent.team': { min: 0, max: 30, note: ['workerReserveNote'] },
-  'externalBuilders.fallback.maxRounds': { min: 1, max: 10, note: ['externalBuilders', 'fallbackNote'] },
+  burnFloorPercent: { min: 0, max: 50, nullable: true, note: ['burnNote'] },
+  fableFloorPercent: { min: 0, max: 60, nullable: true, note: ['fableNote'] },
+  fableMinWeeklyLeftPercent: { min: 0, max: 100, nullable: true, note: ['fableNote'] },
+  'workerReservePercent.max': { min: 0, max: 30, nullable: true, note: ['workerReserveNote'] },
+  'workerReservePercent.team': { min: 0, max: 30, nullable: true, note: ['workerReserveNote'] },
+  'externalBuilders.fallback.maxRounds': { min: 1, max: 10, nullable: true, note: ['externalBuilders', 'fallbackNote'] },
 };
 // key path -> the note it is recorded in, and the key a new setting goes after.
 export const SWITCHES = {
@@ -29,6 +30,8 @@ export const SIZE_MODELS = ['sonnet', 'opus'];
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const SIZES = ['S', 'M', 'L'];
 export const ENGINES = ['codex', 'grok'];
+// The engines that take queue tickets as the dispatcher reads them: an omitted list means both.
+export const enginesOf = (cfg) => cfg.externalBuilders?.fallback?.engines ?? ENGINES;
 
 const keyOf = (b, table) => {
   if (typeof b.key !== 'string' || !Object.hasOwn(table, b.key)) refuse(`unknown setting ${show(b.key)}`);
@@ -69,8 +72,8 @@ export const FLEET_OPS = {
     },
     value: (b) => cleanBool(b.value),
     target: (a) => `engine:${a.engine}`,
-    read: (cfg, a) => (cfg.externalBuilders?.fallback?.engines ?? []).includes(a.engine),
-    write: (cfg, a, v) => setAt(cfg, ['externalBuilders', 'fallback', 'engines'], ordered(cfg.externalBuilders?.fallback?.engines, a.engine, v, ENGINES)),
+    read: (cfg, a) => enginesOf(cfg).includes(a.engine),
+    write: (cfg, a, v) => setAt(cfg, ['externalBuilders', 'fallback', 'engines'], ordered(enginesOf(cfg), a.engine, v, ENGINES)),
     note: () => ({ at: ['externalBuilders', 'fallback', 'enginesNote'] }),
     says: (a, f, t) => `${a.engine} ${t ? 'takes' : 'takes no'} queue tickets`,
   },

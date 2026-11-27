@@ -14,6 +14,14 @@ import { createHash } from 'node:crypto';
 const sha = (text) => createHash('sha256').update(text).digest('hex');
 export const serialize = (root) => `${JSON.stringify(root, null, 2)}\n`;
 const tmpOf = (file) => path.join(path.dirname(file), `.${path.basename(file)}.board-${process.pid}.tmp`);
+// Writes text to a fresh temp file beside `file` (anything already at that name, a link included, is removed first and
+// the open fails if something appears meanwhile), then renames it over `file`.
+function replaceWith(file, text) {
+  const tmp = tmpOf(file);
+  fs.rmSync(tmp, { force: true });
+  fs.writeFileSync(tmp, text, { flag: 'wx' });
+  fs.renameSync(tmp, file);
+}
 
 // root is the whole file; cfg is its dispatcher section, which the operations change in place.
 export function readConfig(file) {
@@ -34,8 +42,7 @@ export function writeConfig(link, before) {
   if (sha(fs.readFileSync(file, 'utf8')) !== before.hash) {
     throw Object.assign(new Error(`${path.basename(file)} changed while this change was being made (another session or a sync wrote it), so nothing was written. Try again.`), { code: 'CHANGED' });
   }
-  fs.writeFileSync(tmpOf(file), text);
-  fs.renameSync(tmpOf(file), file);
+  replaceWith(file, text);
   return { standard: serialize(JSON.parse(before.text)) === before.text };
 }
 
@@ -44,8 +51,7 @@ export function writeConfig(link, before) {
 export function restoreConfig(link, before) {
   const file = fs.realpathSync(link);
   if (fs.readFileSync(file, 'utf8') !== serialize(before.root)) return;
-  fs.writeFileSync(tmpOf(file), before.text);
-  fs.renameSync(tmpOf(file), file);
+  replaceWith(file, before.text);
 }
 
 // A refusal the page shows as it is: a bad field, an unknown host or account, a value out of range.

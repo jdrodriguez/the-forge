@@ -29,8 +29,8 @@ export function appendLogs(file, entries) {
 // The value a timer puts back. A change from an unset value stores revertTo null, which `??` would skip.
 export const restoreOf = (t) => (Object.hasOwn(t, 'revertTo') ? t.revertTo : t.from);
 
-// The last `max` entries, oldest first. A line a sync tool has only half written, or any other bad line, is skipped.
-export function readLog(file, max = 4000) {
+// The last `max` entries (all by default, so a running timer never ages out), oldest first. A line a sync tool has only half written, or any other bad line, is skipped.
+export function readLog(file, max = Infinity) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');

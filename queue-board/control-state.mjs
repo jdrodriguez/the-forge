@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getAt, EMAIL } from './control-config.mjs';
 import { knownAccounts, drainedOf, fableNow } from './control-ops.mjs';
-import { NUMBERS, SWITCHES, MODELS, SIZE_MODELS, EFFORTS, SIZES, ENGINES } from './control-ops-fleet.mjs';
+import { NUMBERS, SWITCHES, MODELS, SIZE_MODELS, EFFORTS, SIZES, ENGINES, enginesOf } from './control-ops-fleet.mjs';
 import { pendingTimers } from './control-log.mjs';
 
 const readJson = (file) => {
@@ -18,7 +18,12 @@ const readJson = (file) => {
 };
 
 // Every string in v with each email address in it masked, so no reason or log line can carry one to the page.
-export const noEmails = (v) => JSON.parse(JSON.stringify(v ?? null, (k, x) => (typeof x === 'string' ? x.replace(EMAIL, '[email]') : x)));
+const mask = (x) => x.replace(EMAIL, '[email]');
+export const noEmails = (v) => JSON.parse(JSON.stringify(v ?? null, (k, x) => {
+  if (typeof x === 'string') return mask(x);
+  if (x && typeof x === 'object' && !Array.isArray(x)) return Object.fromEntries(Object.entries(x).map(([key, y]) => [mask(key), y]));
+  return x;
+}));
 
 // Every machine's wake queue: from the snapshot (each machine's state, fresh to the minute) and, for a machine the
 // snapshot could not read, from its heartbeat (as of its last tick). Each row says where it came from.
@@ -95,7 +100,7 @@ export function controlState({ cfg, dir, log, snap, ctx, here, ticket }) {
     })),
     numbers: Object.fromEntries(Object.entries(NUMBERS).map(([k, s]) => [k, { value: getAt(cfg, k.split('.')) ?? null, min: s.min, max: s.max, nullable: Boolean(s.nullable) }])),
     switches: Object.fromEntries(Object.keys(SWITCHES).map((k) => [k, getAt(cfg, k.split('.')) === true])),
-    engines: { list: cfg.externalBuilders?.fallback?.engines ?? [], prefer: cfg.externalBuilders?.fallback?.prefer ?? [] },
+    engines: { list: enginesOf(cfg), prefer: cfg.externalBuilders?.fallback?.prefer ?? [] },
     model: { model: cfg.model ?? null, fallback: cfg.modelFallback ?? null, effort: cfg.effort ?? null, bySize: cfg.modelBySize ?? {} },
     choices: { models: MODELS, sizeModels: SIZE_MODELS, efforts: EFFORTS, sizes: SIZES, engines: ENGINES },
     timers: pendingTimers(log).map(keep),

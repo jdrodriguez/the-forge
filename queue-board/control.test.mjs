@@ -8,7 +8,7 @@ import http from 'node:http';
 import { test } from 'node:test';
 import { readConfig, writeConfig } from './control-config.mjs';
 import { createControl } from './control.mjs';
-import { box, refused, T0, HOUR } from './control-box.mjs';
+import { box, overwrite, refused, T0, HOUR } from './control-box.mjs';
 
 // The lines of `b` not in `a`, counting repeats.
 const extra = (a, b) => {
@@ -170,9 +170,43 @@ test('a machine load guard, a worker cap per account, the model and Codex as an 
   assert.equal(b.cfg().workerCapByAccount, undefined);
 });
 
+test('take out refuses while a machine has no account list, since it may use every account', async () => {
+  const b = box();
+  overwrite(b, (cfg) => { delete cfg.hosts.mini.accounts; });
+  await refused(b.control.perform({ op: 'out', account: 'h', value: true }), 409, /mini has no account list/);
+});
+
+test('an omitted engines list reads as both engines, as the dispatcher reads it, and turning one off keeps the other', async () => {
+  const b = box();
+  overwrite(b, (cfg) => { cfg.externalBuilders.fallback = { enabled: true }; });
+  assert.deepEqual(b.control.state().engines.list, ['codex', 'grok']);
+  await b.control.perform({ op: 'engine', engine: 'codex', value: false, expect: true });
+  assert.deepEqual(b.cfg().externalBuilders.fallback.engines, ['grok']);
+});
+
+test('a floor the dispatcher reads with a fallback can be undone back to unset', async () => {
+  const b = box();
+  overwrite(b, (cfg) => { delete cfg.fableFloorPercent; });
+  const [e] = await b.control.perform({ op: 'number', key: 'fableFloorPercent', value: 1, expect: null });
+  await b.control.perform({ op: 'undo', id: e.id });
+  assert.equal(Object.hasOwn(b.cfg(), 'fableFloorPercent'), false);
+});
+
+test('a planted link at the temp file name is never followed', async () => {
+  const b = box();
+  const target = path.join(b.dir, 'elsewhere.txt');
+  fs.writeFileSync(target, 'untouched\n');
+  fs.symlinkSync(target, path.join(b.dir, `.agent-queue.config.json.board-${process.pid}.tmp`));
+  await b.control.perform({ op: 'number', key: 'maxConcurrent', value: 11 });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'untouched\n');
+  assert.ok(fs.lstatSync(b.file).isFile());
+  assert.equal(b.cfg().maxConcurrent, 11);
+});
+
 test('the HTTP route wants its header and a JSON body, and its answer carries no note and no email', async () => {
   const b = box();
   b.snap.machines[2].ok = false;
+  overwrite(b, (cfg) => { cfg.modelBySize = { 'ops@example.com': 'sonnet' }; });
   const server = http.createServer((req, res) => b.control.handle(req, res, (r, code, type, body) => { r.writeHead(code, { 'Content-Type': type }); r.end(body); }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${server.address().port}/api/control`;
