@@ -30,7 +30,7 @@ function m2PlaceTags() {
   for (const p of list) {
     const w = p.el.sw || 30;
     const h = p.el.sh || 6;
-    const clampX = (x) => Math.min(Math.max(x, w / 2 + 1), m2.W - w / 2 - 1);
+    const clampX = (x) => Math.min(Math.max(x, w / 2 + 3), m2.W - w / 2 - 3);
     const y0 = Math.max(h + 1, p.y);
     let best = null;
     for (const [dx, dy] of M2_TAG_TRIES) {

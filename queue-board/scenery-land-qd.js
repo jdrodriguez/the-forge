@@ -253,20 +253,25 @@ function shireSmoke(g, cx, tick, sky) {
   g.globalAlpha = 1;
 }
 
-// The fence at the Shire's right edge: two rails lit along their tops with grain, and posts lit on their left with a
-// rounded cap, a knot and a shadow at the foot.
+// The fence along the back of the Shire's vegetable patch (shirePatch, scenery-farm.js), its posts' feet on the patch's
+// back edge (2026-11-27: it stood on its own off the patch's corner and read as floating): two rails lit along their
+// tops with grain, and posts lit on their left with a rounded cap, a knot and a shadow at the foot.
 function shireFence(g, r) {
-  const right = r.x0 + r.w;
+  const patch = shirePatch(r);
+  if (!patch) return;
+  const [x0, top, x1, foot] = patch.fence;
   const [Sh, L, B, S, D] = qdRamp(PX.wood);
-  for (const y of [GROUND_Y + 3, GROUND_Y + 5]) {
-    [L, B, B, D].forEach((c, k) => pxBox(g, right - 22, y + k / 4, 20, 0.25, c));
-    for (let x = right - 22; x < right - 2; x += 0.25) if (rnd(x * 4 + y) < 0.14) qdDot(g, x, y + (rnd(x * 3) < 0.5 ? 0.25 : 0.5), S);
+  for (const y of [top + 1, top + 3]) {
+    [L, B, B, D].forEach((c, k) => pxBox(g, x0, y + k / 4, x1 - x0, 0.25, c));
+    for (let x = x0; x < x1; x += 0.25) if (rnd(x * 4 + y) < 0.14) qdDot(g, x, y + (rnd(x * 3) < 0.5 ? 0.25 : 0.5), S);
   }
-  for (let x = right - 22; x < right - 2; x += 4) {
-    [L, B, S, D].forEach((c, k) => pxBox(g, x + k / 4, GROUND_Y + 2, 0.25, 5, c));
-    pxBox(g, x + 0.25, GROUND_Y + 1.75, 0.5, 0.25, L);
-    qdDot(g, x + 0.25, GROUND_Y + 2, Sh);
-    qdDot(g, x + 0.5, GROUND_Y + 4.25, D);
-    pxBox(g, x + 1, GROUND_Y + 6.75, 1, 0.25, landSteps('hobbit')[0]);
+  const n = Math.max(2, Math.round((x1 - x0 - 1) / 4));
+  for (let i = 0; i <= n; i += 1) {
+    const x = Math.round((x0 + ((x1 - x0 - 1) * i) / n) * 4) / 4;
+    [L, B, S, D].forEach((c, k) => pxBox(g, x + k / 4, top, 0.25, foot - top, c));
+    pxBox(g, x + 0.25, top - 0.25, 0.5, 0.25, L);
+    qdDot(g, x + 0.25, top, Sh);
+    qdDot(g, x + 0.5, top + 2.25, D);
+    pxBox(g, x + 1, foot - 0.25, 1, 0.25, landSteps('hobbit')[0]);
   }
 }

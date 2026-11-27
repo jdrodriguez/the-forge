@@ -92,7 +92,8 @@ function m2Plan(W, H) {
     r.back = fields ? Math.max(24, Math.min(52, H - 42 - r.y)) : kind === 'man' ? 52 : Math.max(46, Math.min(112, Math.round(r.h * 0.36)));
     r.roadY = r.y + r.back + 8;
     r.f0 = r.roadY + 7;
-    r.ux0 = r.x + 6;
+    // A realm on the map's west edge keeps 4 more units clear of it, so its holes and names never touch the map's border.
+    r.ux0 = r.x + (r.x < 4 ? 10 : 6);
     r.ux1 = r.x + r.w - 6;
     // The fields' one desk row sits closer under its road, so the steading clears the White City above it.
     if (fields) r.row0 = 22;

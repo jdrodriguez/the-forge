@@ -195,7 +195,7 @@ PROP_DRAW.cart = (g, p, st, tick) => {
 
 // The Shire's own gardens, apart from the plots the hobbits work: beds of leafy clumps either side of the round door
 // starred with flowers (petals lit at the top round a centre), wildflowers on the hill, and a vegetable patch of tilled
-// ridges and furrows between the hill and the fence where there is room: cabbages along the back and front rows and
+// ridges and furrows beside the hill, its fence along its back, where there is room (shirePatch): cabbages along the back and front rows and
 // lettuces, a pumpkin or two among them, in the middle (realmProps keeps the same patch clear). parts picks what to
 // draw: 'all', the 'ground' (the beds' earth and the patch's soil, which stand still) or the 'plants'. bend(x) says how
 // many half units the top of the plant at column x leans with the wind (scene-wind.js), -1 to 1, or null to leave that
@@ -251,10 +251,9 @@ function drawGardens(g, r, cx, bend = () => 0, parts = 'all') {
     const top = GROUND_Y + 6 - Math.floor(Math.sqrt(24 * 24 - dx * dx) * 0.62);
     bloom(cx + dx, top + 2 + Math.floor(rnd(cx + i * 29) * (GROUND_Y + 4 - top - 2)), b);
   }
-  const left = cx + 27;
-  const right = r.x0 + r.w - 5;
-  if (right - left < 14) return;
-  const y = GROUND_Y + 10;
+  const patch = shirePatch(r);
+  if (!patch) return;
+  const { left, right, y } = patch;
   if (ground) {
     // Three ridges of tilled soil, each lit along its crown and dark in the furrow below, flecked with clods.
     const band = ['#3d2818', '#8a6440', '#9a7450', PX.soil, PX.soil, PX.soil, '#80593a', PX.soil, PX.soil, '#6a4a2c', PX.soilD, '#3d2818'];

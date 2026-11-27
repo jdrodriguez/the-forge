@@ -138,8 +138,9 @@ function shireSnow(G, tips, oak, rng) {
 
 // Plants the Shire's trees once its other props are placed. Each tree's whole box, crown and all, must clear what
 // realmProps keeps its props off (outs), each station's figure and the name above it, the war fires and their flames,
-// and the smoke over the chimney; and it stands a little apart from the trees already planted. Of the places left, a
-// tree takes the one farthest from the other trees, then away from the hill, then nearer the back.
+// and the smoke over the chimney; and it stands a little apart from the trees already planted. Its foot is on one of
+// the Shire's ground lines (shireRows). Of the places left, a tree takes the one farthest from the other trees, then
+// away from the hill, then nearer the back.
 function shirePlant(r, P, fit, outs, desks) {
   const cx = r.x0 + Math.floor(r.w / 2);
   const keep = [...outs, ...warFires(r).map((f) => [f.x - 5, f.y - 10, f.x + 6, f.y + 3]), [cx + 5, 0, cx + 17, GROUND_Y - 12],
@@ -150,7 +151,7 @@ function shirePlant(r, P, fit, outs, desks) {
     let best = null;
     for (const s of scales) {
       const [w, h] = shireBox(kind, s);
-      for (let base = GROUND_Y + 8; base <= ROAD_Y - 4; base += 1) {
+      for (const base of shireRows()) {
         for (let x = r.x0 + 1; x + w <= r.x0 + r.w - 1; x += 1) {
           if (!boxClear([x, base - h + 1, x + w - 1, base], keep)) continue;
           const mid = x + w / 2;

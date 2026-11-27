@@ -13,10 +13,29 @@ const PEN_W = 28;
 const PEN_H = 13;
 const PEN_POSTS = [0, 9, 18, 27];
 
+// The Shire's ground lines, back to front: the hill's foot, then each row of plots' (scene.js's SC_ROWS; a plot's bed
+// stands on its row), down to the last one above the road. Everything standing on the Shire's grass has its foot on
+// one, so things in a row share one baseline.
+const shireRows = () => [GROUND_Y + 6, ...SC_ROWS.filter((y) => y <= ROAD_Y - 4)];
+// The vegetable patch beside the hill, from cx + 27 to the realm's right edge where there is room: its soil runs 10
+// units down to the first row of plots' foot, with its fence along its back. Null when there is no room.
+function shirePatch(r) {
+  const left = r.x0 + Math.floor(r.w / 2) + 27;
+  const right = r.x0 + r.w - 5;
+  const y = SC_ROWS[0];
+  return right - left < 14 ? null : { left, right, y: y - 9, fence: [left - 1, y - 15, right + 1, y - 9] };
+}
+// The Sentry's lantern posts, whose poles rise from the road into the last row: nothing on the Shire's grass stands in
+// front of one.
+const shirePosts = (r) => sc.stations.filter((s) => s.sentry && s.realm === r).map((s) => [s.x - 4, ROAD_Y - 18, s.x + 7, ROAD_Y + 2]);
+// The pen and the well stand on the last row's line; a pen or well with no room there tries the rows behind it, and
+// the well then the hill's foot, and last the line between the first two rows, where it stood before (a short scene's
+// two rows can leave no other room for it, and the hobbits' rounds need it).
 PROP_MORE.hobbit = (r, P, fit) => {
-  P.pen = fit('pen', PEN_W, PEN_H, FARM_LOW, xsFrom(r.x0 + r.w - PEN_W - 2, r.x0 + 2), 4);
-  const xs = xsFrom(r.x0 + 2, r.x0 + r.w - 15);
-  P.well = fit('well', 13, 16, FARM_LOW, xs, 5) ?? fit('well', 13, 16, PROP_MID, xs, 5);
+  const rows = shireRows().slice(1).reverse();
+  const first = (type, w, h, bases, xs, gap) => { for (const base of bases) { const p = fit(type, w, h, base, xs, gap); if (p) return p; } return null; };
+  P.pen = first('pen', PEN_W, PEN_H, rows, xsFrom(r.x0 + r.w - PEN_W - 2, r.x0 + 2), 4);
+  P.well = first('well', 13, 16, [...rows, GROUND_Y + 6, PROP_MID], xsFrom(r.x0 + 2, r.x0 + r.w - 15), 5);
 };
 
 // The well's colours: shingles (Q to t, O their outline), wood (a to e, A a post's pale top), stone (C to z, m mortar, j
