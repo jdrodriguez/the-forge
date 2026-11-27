@@ -115,7 +115,7 @@ function m2Wander(a) {
 function m2Pose(a) {
   const t = m2.tick + a.seed;
   if (a.moving) return ['walk', hdWalkFrame(t, 2), a.face];
-  const swing = (k) => (m2Reduced.matches ? Math.floor(m2.tick / k) % 2 : hdSwingFrame(t, k));
+  const swing = (k) => (m2Reduced.matches ? 1 : hdSwingFrame(t, k));
   if (a.job?.spot && !a.route?.length) return ['stand', 0, a.job.spot.face ?? 'up'];
   if (m2Busy(a)) return a.road || a.station?.sentry ? ['stand', 0, 'down'] : ['work', swing(a.station?.kind === 'elf' ? 4 : 3), 'down'];
   if (a.mood === 'blocked') return ['ask', Math.floor(t / 4) % 2, 'down'];
