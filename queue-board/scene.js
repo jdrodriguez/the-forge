@@ -81,7 +81,7 @@ function scLayout() {
   plans.forEach((p, i) => {
     const add = Math.floor(extra / plans.length) + (i === plans.length - 1 ? extra % plans.length : 0);
     const w = p.w + add;
-    const left = x0 + Math.floor(add / 2) + p.pad + SC_COL / 2;
+    const left = ereborLeft(p, x0, w, x0 + Math.floor(add / 2) + p.pad + SC_COL / 2);
     const r = { kind: p.kind, title: p.title, m: p.m, x0, w };
     sc.realms.push(r);
     for (let j = 0; j < p.n; j += 1) {

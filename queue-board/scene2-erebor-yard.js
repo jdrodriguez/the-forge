@@ -1,10 +1,11 @@
 // scene2-erebor-yard.js: the dwarves' yard below Erebor's court on the map from above (scene2-erebor.js calls it). A
 // court cut and paved by the dwarves: large dressed flags in courses, each its own shade, lit along its top edge and
-// dark in its joints, with bands of dark stone inlaid with gold runes crossing it between the rows of anvils and down
-// its middle, and pale kerbs round its edge. Mine rails run across its foot to a cart loaded with ore and a heap of it;
-// lamps on iron posts stand along the bands and burn at night; the forge's coal heap, woodpile and quench barrel stand
-// by it, crates by the rails, and the gem rock glitters. Every station and the rows above it where its worker stands
-// stay clear of anything standing; the paving runs under them.
+// dark in its joints, with bands of dark stone inlaid with gold runes crossing it below the last row of anvils and down
+// its middle where no anvil stands, and pale kerbs round its edge. Mine rails run across its foot to a cart loaded with
+// ore and a heap of it; lamps on iron posts stand along the bands and burn at night; the forge's coal heap, woodpile
+// and quench barrel stand by it, crates by the rails, and the gem rock glitters. Every station and the rows above it
+// where its worker stands stay clear of anything standing, and so do the rails and the bands; the paving runs under
+// them.
 
 // The paving, laid before the works so the rails and the forge's things stand on it, leaving the river's bed open.
 function m2EreYardPave(L, E) {
@@ -18,7 +19,7 @@ function m2EreYardPave(L, E) {
     }
   }
   const bands = E.bands;
-  const key = `yard${x1 - x0},${y1 - y0},${E.cx - x0},${bands.map((b) => Math.round(b - y0)).join('.')},${E.riverKey}`;
+  const key = `yard${x1 - x0},${y1 - y0},${E.cx - x0},${bands.map((b) => Math.round(b - y0)).join('.')},${E.spine},${E.riverKey}`;
   if (!m2EreArt.has(key)) m2EreArt.set(key, m2EreYardArt(E, x0, y0, x1 - x0, y1 - y0, bands));
   const art = m2EreArt.get(key);
   L.decals.push((g) => g.drawImage(art, x0, y0, x1 - x0, y1 - y0));
@@ -80,7 +81,7 @@ function m2EreYardArt(E, x0, y0, w, h, bands) {
     }
   };
   for (const b of bands) band(true, b - y0, 0, w);
-  band(false, E.cx - x0, 0, h);
+  if (E.spine) band(false, E.cx - x0, 0, h);
   // Kerbs round the edge.
   for (let a = 0; a < w; a += 4) pxBox(g, a, h - 1, 4, 1, F[(a >> 2) % 2 ? 5 : 4]);
   for (let b = 0; b < h; b += 4) { pxBox(g, 0, b, 1, 4, F[(b >> 2) % 2 ? 5 : 4]); pxBox(g, w - 1, b, 1, 4, F[(b >> 2) % 2 ? 4 : 5]); }
@@ -116,16 +117,11 @@ function m2EreWilds(L, add, E, season) {
         m2EreProp(L, add, 'cart', ex - 4, ry + 2);
         busy.push({ x0: ex - 8, y0: ry - 6, x1: ex, y1: ry + 3 });
       }
+      // Nothing else stands on the rails: down the west side, and along the foot with the rune band above them.
+      busy.push({ x0: E.rails.x - 4, y0: E.rails.y1 - 2, x1: E.rails.x + 4, y1: ry + 3 }, { x0: r.x, y0: Math.min(ry - 2, ...E.bands) - 2, x1: r.x + r.w, y1: E.yardBot + 1 });
     }
   }
-  // A round well-head carved with runes in the open middle, where it stands clear of the anvils.
-  const mids = E.bands.slice(0, -1).map((b, i) => (b + E.bands[i + 1]) / 2 + 3);
-  const wells = [...mids.flatMap((y) => [[E.cx + 12, y], [E.cx - 12, y], [E.cx, y]]), [E.cx + 12, E.yardBot - 10], [E.cx - 14, E.yardBot - 10]];
-  const wat = wells.find(([x, y]) => free(x, y, 5, 3));
-  if (wat) {
-    m2EreWellHead(L, add, wat[0], wat[1]);
-    busy.push({ x0: wat[0] - 5, y0: wat[1] - 7, x1: wat[0] + 5, y1: wat[1] + 2 });
-  }
+  if (E.spine) busy.push({ x0: E.cx - 3, y0: E.courtBot, x1: E.cx + 3, y1: E.yardBot });
   // Lamps on iron posts along the bands, where they stand clear of the anvils.
   const lamps = [];
   for (const by of E.bands) for (const lx of [E.cx, r.x + 6, E.left.x1 - 3, E.right.x0 + 1]) lamps.push([lx, by - 3.5]);
@@ -143,7 +139,7 @@ function m2EreWilds(L, add, E, season) {
     ['wood', fz && [[fz.x - 9, fz.y + 10], [fz.x - 17, fz.y + 10], [fz.x + 2, fz.y + 11]]],
     ['barrel', fz && [[fz.x + 3, fz.y + 10], [fz.x - 3, fz.y + 10], [fz.x - 16, fz.y + 14]]],
     ['crates', E.rails && [[E.rails.x + 9, E.rails.y1 - 12], [E.rails.x + 9, E.rails.y1 + 16], [E.right.x0 + 3, r.block.y1 - 4]]],
-    ['gems', [[E.rails ? E.rails.x + 1 : r.x + 10, r.block.y1 - 2], [r.x + 10, r.y + r.h - 8], [E.right.x0 + 4, r.y + r.h - 10], [r.x + r.w * 0.3, r.block.y1 + 8]]],
+    ['gems', [[E.rails ? E.rails.x + 9 : r.x + 10, r.block.y1 - 10], [E.rails ? E.rails.x + 9 : r.x + 10, r.block.y1 - 30], [E.right.x0 + 5, r.block.y1 - 10]]],
   ];
   for (const [kind, spots] of things) {
     const at = (spots ?? []).find(([x, y]) => free(x, y, 3, 2) && y < r.y + r.h - 2 && m2MatAt(L, x, y) !== M2_MAT.rock);
@@ -155,20 +151,6 @@ function m2EreWilds(L, add, E, season) {
   m2EreChest(L, add, E, busy.filter((b) => !clear.includes(b)));
 }
 
-// A round well-head at (x, y): a ring of dressed stone with a band of gold runes round it and dark water within.
-function m2EreWellHead(L, add, x, y) {
-  m2Shadow(L, x + 1.5, y + 0.5, 4.5, 1.4, 0.8);
-  const G = M2_ERE_GATE;
-  const o = m2Thing(add, x - 4.5, y - 6, 9, 6.5, y + 0.5, (g) => m2Raster(g, 0, 0, 36, 26, (px, py) => {
-    const [u, v] = [(px + 0.5 - 18) / 18, (py + 0.5 - 7) / 7];
-    const top = u * u + v * v < 1;
-    if (top) return u * u + v * v < 0.45 ? (py < 6 ? '#0e1c2a' : '#1e3a52') : G[u < 0 ? 5 : 4];
-    if (Math.abs(u) > 1 || py < 7 || py > 25 - (1 - Math.sqrt(Math.max(0, 1 - u * u))) * 4) return null;
-    if (py > 12 && py < 17) return (px % 6 < 2 && (px + py) % 3 !== 0) ? '#e2b043' : '#3a3f4a';
-    return py === 12 || py === 17 ? G[1] : G[u < -0.4 ? 4 : u < 0.4 ? 3 : 2];
-  }));
-  o.foot = [x - 4.5, y - 2.5, x + 4.5, y + 0.5];
-}
 // A lamp on an iron post at (x, y): a post with a cross-arm and a lantern of glass hung from it, lit at night.
 function m2EreLamp(L, add, x, y) {
   const I = M2_ERE_IRON;

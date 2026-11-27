@@ -192,7 +192,9 @@ function m2PlanStations(plan, r) {
   const cols = Math.max(1, Math.min(r.n, Math.floor((room - fw) / need) + 1, Math.ceil(r.n / Math.max(1, Math.ceil(r.n / 3)))));
   const rows = Math.max(1, Math.ceil(r.n / cols));
   // Rows stagger by half a column where there is room for it; a narrow region packs its desks in straight columns.
-  const stagger = rows > 1 && cols > 1 && (room - fw) / (cols - 1) >= need * 1.6;
+  // Erebor's anvils stand on one grid in even columns (2026-11-27: staggered, they lined up with nothing and the west
+  // column met the mine's rails).
+  const stagger = r.kind !== 'dwarf' && rows > 1 && cols > 1 && (room - fw) / (cols - 1) >= need * 1.6;
   const step = cols > 1 ? Math.min(need + 22, (room - fw - (stagger ? need / 2 : 0)) / (cols - 1)) : 0;
   const blockW = (cols - 1) * step + (stagger ? step / 2 : 0);
   const left = Math.round((r.ux0 + r.ux1) / 2 - blockW / 2);

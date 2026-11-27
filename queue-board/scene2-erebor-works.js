@@ -14,8 +14,10 @@ function m2EreWorks(L, add, E, season) {
   const fx = Math.max(r.x + 30, Math.round(cx - E.fw / 2 - 11));
   const fy = Math.round(E.courtBot - 5);
   m2EreForge(L, add, fx, fy, E);
-  // The mine's mouth in the western spur and the rails down the west side to the ore heap.
-  const mx = Math.round(Math.max(r.x + 7, (E.left.x0 + E.left.x1) / 2 - 1));
+  // The mine's mouth in the western spur and the rails down the west side to the ore heap, hugging the yard's west kerb
+  // so the strip between them and the anvils holds the yard's things (2026-11-27: the rails ran through that strip and
+  // the armor stand and gem rock stood on them).
+  const mx = r.x + 7;
   const my = Math.round(E.foot(mx));
   const end = Math.min(r.y + r.h - 30, E.courtBot + 30);
   m2EreAdit(L, add, mx, my);
@@ -25,12 +27,13 @@ function m2EreWorks(L, add, E, season) {
   E.spots.push({ x: mx - 6, y: my + 6, face: 'right', job: 'ore' }, { x: mx + 7, y: end + 5, face: 'up', job: 'cart' });
   E.rails = { x: mx, y0: my, y1: end };
   E.keep.push({ x0: mx - 5, y0: my - 10, x1: mx + 5, y1: end + 2 }, { x0: mx, y0: end - 5, x1: mx + 12, y1: end + 8 });
-  const ay = end + 22;
-  if (ay + 4 < r.y + r.h - 2) {
-    m2EreArmor(L, add, mx - 1, ay);
+  // The armor stand east of the rails, where the strip before the anvils is wide enough for it, its smith in front.
+  const [ax, ay] = [mx + 10, end + 22];
+  if (ay + 4 < r.y + r.h - 2 && ax + 9 <= r.block.x0 + 2) {
+    m2EreArmor(L, add, ax, ay);
     // The stand's pieces are drawn as many as are hung (scene2-stock-art.js's m2sArmor).
-    E.spots.push({ x: mx + 9, y: ay + 1, face: 'left', job: 'armor', stand: { x: mx - 1, y: ay } });
-    E.keep.push({ x0: mx - 8, y0: ay - 16, x1: mx + 14, y1: ay + 4 });
+    E.spots.push({ x: ax + 2, y: ay + 5, face: 'up', job: 'armor', stand: { x: ax, y: ay } });
+    E.keep.push({ x0: ax - 7, y0: ay - 16, x1: ax + 10, y1: ay + 7 });
   }
 }
 

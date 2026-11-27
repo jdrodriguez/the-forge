@@ -31,10 +31,14 @@ function m2Erebor(L, r, plan, season, add) {
   const E = m2EreLayout(r);
   E.spots = [];
   E.keep = [r.block, { x0: r.block.x0, y0: r.block.y0 - 28, x1: r.block.x1, y1: r.block.y0 }];
-  // The yard's foot, and the rows where its rune bands cross it: between the rows of anvils and below the last.
+  // The yard's foot, and where its rune bands cross it: below the last row of anvils, and down its middle when no
+  // column of anvils stands there. A row of dwarves with their names fills all but a few units of the 46 between rows,
+  // so a band between them or along the court's front ran under their feet and through their bodies (2026-11-27).
   E.yardBot = r.y + r.h - 3;
-  const rows = [...new Set(plan.stations.filter((s) => s.realm === r).map((s) => s.y))].sort((a, b) => a - b);
-  E.bands = [E.courtBot + 3, ...rows.slice(1).map((y, i) => (y + rows[i]) / 2 + 4), ...(rows.length ? [rows.at(-1) + 5] : [])].filter((y) => y < E.yardBot - 6).map(Math.round);
+  const mine = plan.stations.filter((s) => s.realm === r);
+  const rows = [...new Set(mine.map((s) => s.y))].sort((a, b) => a - b);
+  E.bands = (rows.length ? [rows.at(-1) + 5] : []).filter((y) => y < E.yardBot - 6).map(Math.round);
+  E.spine = mine.every((s) => Math.abs(s.x - E.cx) > 10);
   m2EreRiverRoute(E, plan);
   m2EreCourt(L, add, E);
   m2EreMountain(L, E, season);

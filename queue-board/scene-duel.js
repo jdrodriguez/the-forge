@@ -52,6 +52,10 @@ function fightClear(a, x, y, kind, f, loose = false) {
   for (const s of sc.stations) {
     if (s.realm === r && boxHits([s.x - 8, s.y - 6, s.x + 8, s.y + 1], me)) return false;
   }
+  // Nor on a worker standing still, at its anvil or at work (2026-11-27: a duel's orc stood in Fili).
+  for (const b of sc.actors.values()) {
+    if (b !== a && b.realm === r && !b.mounted && !b.moving && !b.foe && boxHits([b.x - 4, b.y - figureTop(b.kind) + 1, b.x + 4, b.y], me)) return false;
+  }
   for (const o of sc.fights ?? []) {
     if (o.f === f) continue;
     if ((Math.abs(o.a.x - x) < 8 && Math.abs(o.a.y - y) < 5) || (Math.abs(o.f.x - x) < 8 && Math.abs(o.f.y - y) < 5)) return false;

@@ -161,6 +161,8 @@ function realmProps(r) {
       const spots = [-1, 1].map((side) => ({ side, sx: side < 0 ? x - gap : x + w - 1 + gap }))
         .filter(({ sx }) => sx - 4 >= r.x0 && sx + 4 <= r.x0 + r.w && boxClear([sx - 3, base - 12, sx + 3, base + 1], desks))
         .map(({ side, sx }) => ({ x: sx, y: base + 1, face: -side, room: Math.min(99, ...back.map((bx) => Math.abs(sx - bx))) }))
+        // Erebor's back row stands under its wall, so a spot there must clear its dwarves (2026-11-27: Bofur mined in Kili).
+        .filter((sp) => r.kind !== 'dwarf' || base > PROP_MID || sp.room >= 9)
         .sort((p, q) => q.room - p.room).slice(0, both ? 2 : 1);
       if (spots.length && (!best || spots[0].room > best.spots[0].room)) best = { x, spots };
       if (best?.spots[0].room >= 9) break;

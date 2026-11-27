@@ -78,11 +78,20 @@ function orcMuster() {
   for (let i = have(null); i < SWARM_ROAD; i += 1) spawn(null, i);
 }
 
-// Somewhere for a running orc to go: its realm's ground, or the road.
+// Somewhere for a running orc to go: its realm's ground clear of the stations with their workers and names, the workers
+// where they are and the other orcs' places, or the road when a few tries find none (2026-11-27: an orc stopped on a
+// dwarf at his anvil).
 function orcSpot(o) {
   const r = sc.realms.find((x) => x.m.host === o.host);
   if (!r) return { x: 6 + Math.random() * (sc.W - 12), y: orcRoadY() };
-  return { x: r.x0 + 6 + Math.random() * (r.w - 12), y: GROUND_Y + 8 + Math.random() * (ROAD_Y - GROUND_Y - 10) };
+  const taken = [...sc.stations.filter((s) => s.realm === r && !s.sentry).map((s) => [s.x - 10, s.y - 30, s.x + 10, s.y + 3]),
+    ...[...sc.actors.values()].filter((a) => a.realm === r).map((a) => [a.x - 8, a.y - 22, a.x + 8, a.y + 2]),
+    ...orcs.swarm.filter((x) => x !== o).map((x) => x.target ?? x).map((p) => [p.x - 8, p.y - 22, p.x + 8, p.y + 2])];
+  for (let k = 0; k < 12; k += 1) {
+    const p = { x: r.x0 + 6 + Math.random() * (r.w - 12), y: GROUND_Y + 8 + Math.random() * (ROAD_Y - GROUND_Y - 10) };
+    if (!taken.some((b) => boxHits(b, [p.x - 4, p.y - 20, p.x + 4, p.y]))) return p;
+  }
+  return { x: r.x0 + 6 + Math.random() * (r.w - 12), y: orcRoadY() };
 }
 // Moves an orc toward p at speed v (a worker walks at 0.7); with reduced motion it is simply there. False once arrived.
 function orcRun(o, v, p) {
