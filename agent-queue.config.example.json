@@ -444,7 +444,7 @@
 
   "queueBoard": {
     "host": "main-mac",
-    "hostNote": "The short hostname (hostname -s) of the machine that runs the board. One board covers every queue machine. hourly-check.mjs reads the board on loopback there and by this name elsewhere. null means the machine the script runs on.",
+    "hostNote": "The short hostname (hostname -s) of the machine that runs the board. One board covers every queue machine. hourly-check.mjs reads the board on loopback there and by this name elsewhere. null means the machine the script runs on. The Fleet view's end times run only in the board on that machine, so one process writes the config.",
     "port": 8787,
     "portNote": "The board's port. The QUEUE_BOARD_PORT environment variable wins over it.",
     "bind": ["127.0.0.1"],
@@ -488,6 +488,8 @@
     "reviewChecksNote": "Optional regex source for checks that belong to the review besides github.reviewCheck, such as a job that runs or re-requests it, e.g. \"^(request-review|claude-review\\\\b)\". The board leaves them out of a PR's CI counts. null leaves out only github.reviewCheck.",
     "reviewNotStartedTitles": ["^Re-review not requested", "^Review not run", "^CI not green"],
     "reviewNotStartedTitlesNote": "Regex sources for the titles a failed github.reviewCheck carries when no review has run on the head yet. Such a failure shows as a missing review instead of a failing one. [] counts every failure as failing.",
+    "controlLog": null,
+    "controlLogNote": "The Fleet view's change log: one JSON line per change made with its levers, and the end times still to come. null means <paths.sharedDir>/control-log.jsonl. Keep it on the board's machine or in the shared folder, never in the repo. queue-board/levers.md has the rest.",
     "soundFile": null,
     "soundFileNote": "The sound settings file (mute, volume, per-event switches, music volume). null means <paths.sharedDir>/queue-board/sound.json, so Mute reaches every Mac. A missing file reads as the defaults.",
     "heraldStatusFile": null,
