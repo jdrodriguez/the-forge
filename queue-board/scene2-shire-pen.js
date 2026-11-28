@@ -104,10 +104,10 @@ function m2ShirePen(L, add, x, y, w, h, season, host) {
   const sty = Math.min(14, w * 0.3);
   const back = m2Thing(add, x - 0.5, y - 12, w + 1, 12.5, y + 0.25, (g) => {
     m2ShireRails(g, 0.5, 12, w);
-    m2Wall(g, 1.5, 6, sty, 6, M2_PAL.wood, 'timber');
+    const eave = m2Roof(g, 0.5, 0, sty + 2, 1.5, 4.5, M2_PAL.thatch, 1.25);
+    m2Wall(g, 1.5, eave, sty, 12 - eave, M2_PAL.wood, 'timber');
     pxBox(g, 1.5 + sty / 2 - 2, 8, 4, 4, '#1a1410');
     pxBox(g, 1.5 + sty / 2 - 2, 11.5, 4, 0.5, '#d8b860');
-    m2Roof(g, 0.5, 0, sty + 2, 1.5, 4.5, M2_PAL.thatch, 1.25);
   });
   back.foot = [x, y - 2, x + w, y + h];
   // The side fences, a post at a time so each stands at its own depth, with the rails running back to the last post.

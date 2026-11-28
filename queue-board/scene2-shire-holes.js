@@ -129,8 +129,9 @@ function m2ShireHole(g, H, P, o) {
   });
   if (o.porch) {
     const pw = d + 5;
-    m2Roof(g, dx - pw / 2, floorY - art.h - 2.75, pw, 1, 2.5, M2_PAL.thatch, 0.75);
-    for (const sx of [dx - pw / 2 + 0.5, dx + pw / 2 - 1.25]) { pxBox(g, sx, floorY - art.h + 0.5, 0.75, art.h - 0.5, M2_PAL.wood[2]); pxBox(g, sx, floorY - art.h + 0.5, 0.25, art.h - 0.5, M2_PAL.wood[4]); }
+    const eave = m2Roof(g, dx - pw / 2, floorY - art.h - 2.75, pw, 1, 2.5, M2_PAL.thatch, 0.75);
+    // The posts reach half a unit up into the eave, so the porch roof rests on them.
+    for (const sx of [dx - pw / 2 + 0.5, dx + pw / 2 - 1.25]) { pxBox(g, sx, eave - 0.5, 0.75, floorY - eave + 0.5, M2_PAL.wood[2]); pxBox(g, sx, eave - 0.5, 0.25, floorY - eave + 0.5, M2_PAL.wood[4]); }
   }
   lights.push({ x: dx, y: floorY - 0.5, r: 4 });
   // Tufts of grass and flowers where the face meets the turf at its sides.

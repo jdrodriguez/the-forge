@@ -104,8 +104,8 @@ function m2ShireMill(L, add, mx, mw, mz) {
   const panes = [];
   m2Shadow(L, mx + mw / 2 + 2, mz, mw / 2 + 2, 2.5, 0.8);
   const o = m2Thing(add, mx, mz - roofH - wallH + 0.5, mw, roofH + wallH, mz, (g) => {
-    m2Wall(g, 0.5, roofH - 0.5, mw - 1, wallH, M2_PAL.stone, 'stone');
-    m2Roof(g, 0, 0, mw, 2.25, 6.5, M2_PAL.thatch, 2);
+    const eave = m2Roof(g, 0, 0, mw, 2.25, 6.5, M2_PAL.thatch, 2);
+    m2Wall(g, 0.5, eave, mw - 1, roofH - 0.5 + wallH - eave, M2_PAL.stone, 'stone');
     pxBox(g, 3, roofH + 1.5, 4, wallH - 2, M2_PAL.wood[1]);
     pxBox(g, 3.25, roofH + 1.75, 3.5, wallH - 2.25, M2_PAL.wood[3]);
     pxBox(g, 3.25, roofH + 1.75, 0.5, wallH - 2.25, M2_PAL.wood[4]);

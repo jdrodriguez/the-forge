@@ -164,11 +164,12 @@ function m2EdoHall(L, add, D) {
   m2Shadow(L, hx + 4, hallZ + 0.5, hw / 2 + 3, 3, 0.8);
   const panes = [];
   const o = m2Thing(add, x0 - 1, y0 - 3, hw + 2, h + 3.5, hallZ + 0.5, (g) => {
-    m2Wall(g, 1, far + near + 1, hw, wall, M2_EDO_TIMBER, 'timber');
-    for (let x = 4; x < hw - 2; x += 7) pxBox(g, 1 + x, far + near + 1, 0.75, wall, M2_EDO_GOLD[2]);
-    pxBox(g, 1, far + near + 3, hw, 0.75, '#2f7230');
+    const eave = m2Roof(g, 1, 3, hw, far, near, M2_EDO_GOLD, 0);
+    const foot = far + near + 1 + wall;
+    m2Wall(g, 1, eave, hw, foot - eave, M2_EDO_TIMBER, 'timber');
+    for (let x = 4; x < hw - 2; x += 7) pxBox(g, 1 + x, eave, 0.75, foot - eave, M2_EDO_GOLD[2]);
+    pxBox(g, 1, eave, hw, 0.5, '#2f7230');
     for (const dx of [6, 13, hw - 16, hw - 9]) panes.push(m2Window(g, 1 + dx, far + near + 4.5, 2.5, 4, M2_EDO_TIMBER, 'square'));
-    m2Roof(g, 1, 3, hw, far, near, M2_EDO_GOLD, 0);
     // Gold glints in the thatch, the sheen the Riders saw from far off.
     m2Raster(g, 1, 3 + far + 1, hw * 4, near * 4 - 4, (px, py) => ((px * 7 + py * 13) % 37 === 0 && py % 6 > 1 ? '#fff6c0' : null));
     // The crossed horse-head boards at each end of the ridge.
@@ -235,10 +236,10 @@ function m2EdoHouses(L, add, D, season) {
         const w = 9 + ((dx + row) % 3);
         m2Shadow(L, x + 2, by + 0.5, w / 2 + 1, 1.2, 0.8);
         const o = m2Thing(add, x - w / 2, by - 10, w, 10.5, by + 0.5, (g) => {
-          m2Wall(g, 0.25, 5.5, w - 0.5, 5, T, 'timber');
+          const eave = m2Roof(g, 0, 0, w, 1, 4, M2_PAL.thatch, 1.5);
+          m2Wall(g, 0.25, eave, w - 0.5, 10.5 - eave, T, 'timber');
           m2Raster(g, w / 2 - 1, 7, 8, 14, (px, py) => (px === 0 || px === 7 || py === 0 ? T[0] : '#2a1810'));
           m2Raster(g, w - 3.5, 7, 6, 6, (px, py) => (px === 0 || px === 5 || py === 0 || py === 5 ? T[1] : '#3d5268'));
-          m2Roof(g, 0, 0, w, 1, 4, M2_PAL.thatch, 1.5);
           pxBox(g, 1, 1, 0.75, 1.5, T[1]);
         });
         o.foot = [x - w / 2, by - 2.5, x + w / 2, by + 0.5];

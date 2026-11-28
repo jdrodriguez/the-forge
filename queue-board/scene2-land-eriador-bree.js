@@ -19,11 +19,11 @@ function m2EriPonyArt(season) {
       pxBox(g, x, 0, 0.75, 4, '#84462e');
       pxBox(g, x - 0.25, 0, 2.5, 0.75, '#2a1610');
     }
-    m2Roof(g, 0, 3, 22, 2.5, 7, M2_ERI_SLATE, 2);
+    const eave = m2Roof(g, 0, 3, 22, 2.5, 7, M2_ERI_SLATE, 2);
     if (season === 'winter') m2Raster(g, 0.5, 3, 84, 12, (px, py) => (py < 10 - (px % 5 === 0 ? 2 : 0) && px > 6 && px < 78 ? (py < 3 ? '#ffffff' : '#dfe8f0') : null));
     const panes = [];
     // Two framed floors, the upper one jettied out over the lower.
-    for (const [y, h] of [[12.75, 6.5], [19.25, 6.5]]) {
+    for (const [y, h] of [[eave, 6.5], [eave + 6.5, 6.5]]) {
       m2Wall(g, 0.25, y, 21.5, h, W, 'plaster');
       for (let x = 0.25; x <= 21.75; x += 4.3) pxBox(g, Math.min(x, 21.25), y, 0.5, h, M2_ERI_BEAM);
       pxBox(g, 0.25, y, 21.5, 0.5, M2_ERI_BEAM);
@@ -81,9 +81,9 @@ function m2EriHouse(L, add, x, y, w, roof, wall, seed) {
   const art = m2EriCanvas(`house${w},${roof},${wall},${seed % 3}`, w, near + wh + 6, (g) => {
     pxBox(g, w * 0.7, 0, 1.5, 3, '#5a4a40');
     pxBox(g, w * 0.7, 0, 0.5, 3, '#7a6a5c');
-    m2Roof(g, 0, 2, w, 2, near, P, 0.75);
-    m2Wall(g, 0.5, 5 + near, w - 1, wh, WP, wall === 'stone' ? 'stone' : 'plaster');
-    if (wall !== 'stone') for (let bx = 0.5; bx < w; bx += 3) pxBox(g, Math.min(bx, w - 1), 5 + near, 0.5, wh, M2_ERI_BEAM);
+    const eave = m2Roof(g, 0, 2, w, 2, near, P, 0.75);
+    m2Wall(g, 0.5, eave, w - 1, 5 + near + wh - eave, WP, wall === 'stone' ? 'stone' : 'plaster');
+    if (wall !== 'stone') for (let bx = 0.5; bx < w; bx += 3) pxBox(g, Math.min(bx, w - 1), eave, 0.5, 5 + near + wh - eave, M2_ERI_BEAM);
     const dx = seed % 2 ? w * 0.22 : w * 0.62;
     pxBox(g, dx - 0.25, 5 + near + wh - 8.25, 3.5, 8.25, WP[0]);
     pxBox(g, dx, 5 + near + wh - 8, 3, 8, M2_PAL.wood[2]);

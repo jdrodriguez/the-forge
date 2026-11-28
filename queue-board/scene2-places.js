@@ -12,8 +12,8 @@ function m2Cottage(L, add, x, y, w, roof, wall, kind = 'plaster') {
   let pane = null;
   m2Shadow(L, x + 2, y + 0.3, w / 2 + 1.5, 1.6, 0.8);
   m2Thing(add, x - w / 2, y - h, w, h, y, (g) => {
-    m2Roof(g, 0, 0, w, 2, near, roof, Math.min(3, w / 4));
-    m2Wall(g, 0.5, 3 + near, w - 1, wh, wall, kind);
+    const eave = m2Roof(g, 0, 0, w, 2, near, roof, Math.min(3, w / 4));
+    m2Wall(g, 0.5, eave, w - 1, h - eave, wall, kind);
     pxBox(g, w * 0.3, h - 3, 1.75, 3, M2_PAL.wood[1]);
     pane = m2Window(g, w * 0.6, 3 + near + 1.25, 2, 2, wall, 'square');
   });

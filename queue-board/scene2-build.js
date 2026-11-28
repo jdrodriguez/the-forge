@@ -50,9 +50,15 @@ function m2Thing(add, x, y, w, h, z, paint) {
   return o;
 }
 
+// The row just under the eave of a roof m2Roof paints at y with these slopes: a wall hung under the roof starts there,
+// and a post holding the roof up reaches above it (pass 5, 2026-11-27: walls started at y + far + near + 1, three
+// quarters of a unit under the eave, and every such roof floated).
+function m2RoofEave(y, far, near) {
+  return y + (Math.ceil((far + near) * 4) + 1) / 4;
+}
 // A hipped roof w units wide whose far slope is far units tall over the ridge and near slope near units under it,
 // the hips cut in by hip units at the ridge: shingles in courses with staggered joints, the ridge capped, the eave's
-// edge dark, the left hip lit and the right one shaded.
+// edge dark, the left hip lit and the right one shaded. Returns m2RoofEave, where the wall under it starts.
 function m2Roof(g, x, y, w, far, near, P, hip = 0) {
   const [W, F, N] = [w * 4, far * 4, near * 4];
   const ridge = F;
@@ -74,23 +80,7 @@ function m2Roof(g, x, y, w, far, near, P, hip = 0) {
     if (py >= F + N - 2) k = 1;
     return P[k];
   });
-}
-// A cone roof (a tower's or the pavilion's) of radius r units round cx, h units from its tip to its eave, which bulges
-// down by r/3 in front: lit on its left, courses across it, a gold finial on its tip.
-function m2Cone(g, cx, y, r, h, P) {
-  const [R, Hp, B] = [r * 4, h * 4, Math.round((r / 3) * 4)];
-  m2Raster(g, cx - r, y, R * 2, Hp + B + 1, (px, py) => {
-    const dx = (px + 0.5 - R) / R;
-    const half = Math.min(1, py / Hp);
-    const bottom = Hp + B * Math.sqrt(Math.max(0, 1 - dx * dx));
-    if (Math.abs(dx) > half || py > bottom) return null;
-    if (py >= bottom - 1 || Math.abs(dx) > half - 0.06) return P[0];
-    const lit = dx / Math.max(0.05, half);
-    let k = lit < -0.55 ? 5 : lit < -0.1 ? 4 : lit < 0.45 ? 3 : 2;
-    if ((py % 7 === 0 && py > 4) || py >= bottom - 3) k = Math.max(1, k - 1);
-    return P[k];
-  });
-  m2Raster(g, cx - 0.5, y - 2.5, 4, 11, (px, py) => (py < 4 ? (Math.abs(px - 1.5) + Math.abs(py - 1.5) < 2.2 ? M2_PAL.gold[py < 2 && px < 2 ? 4 : 2] : null) : px === 1 || px === 2 ? M2_PAL.gold[px === 1 ? 3 : 1] : null));
+  return m2RoofEave(y, far, near);
 }
 // A wall's south face w by h units: plaster with a stone plinth and a lit band under the eave, coursed stone, or timber
 // boards; the left edge lit and the right edge shaded.
