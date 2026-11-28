@@ -79,11 +79,11 @@ function m2LakeTown(L, plan, season, add) {
 // The Master's hall, 10 by 16 units: a steep roof with a carved gable over a timber front, a broad door and a window.
 function m2LakeHall(g, season) {
   const R = season === 'winter' ? M2_SHINGLE.map((c, i) => (i > 1 ? hdMix(c, '#eef4f8', 0.6) : c)) : M2_SHINGLE;
-  m2Roof(g, 0, 0.5, 10, 2, 6.5, R, 0);
+  const eave = m2Roof(g, 0, 0.5, 10, 2, 6.5, R, 0);
   m2Raster(g, 3, 0, 16, 14, (px, py) => (Math.abs(px + 0.5 - 8) <= py * 0.6 && py < 13 ? (Math.abs(px + 0.5 - 8) > py * 0.6 - 1.2 ? M2_PAL.gold[1] : M2_PAL.wood[px < 8 ? 3 : 2]) : null));
   pxBox(g, 4.75, 0, 0.5, 1, M2_PAL.gold[2]);
-  m2Wall(g, 0.5, 9.25, 9, 6.75, M2_PAL.wood, 'timber');
-  pxBox(g, 0.5, 9.25, 9, 0.5, M2_PAL.wood[0]);
+  m2Wall(g, 0.5, eave, 9, 16 - eave, M2_PAL.wood, 'timber');
+  pxBox(g, 0.5, eave, 9, 0.5, M2_PAL.wood[0]);
   pxBox(g, 2, 12, 3, 4, M2_PAL.wood[0]);
   pxBox(g, 2.25, 12.25, 1.25, 3.75, M2_PAL.wood[2]);
   pxBox(g, 3.75, 12.25, 1, 3.75, M2_PAL.wood[1]);

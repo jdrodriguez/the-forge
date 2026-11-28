@@ -59,11 +59,12 @@ function m2EdoStables(L, add, D, season) {
   m2Shadow(L, x0 + sw / 2 + 2, sy + 0.5, sw / 2 + 1, 2, 0.8);
   const T = M2_EDO_TIMBER;
   const o = m2Thing(add, x0, sy - 15, sw, 15.5, sy + 0.5, (g) => {
-    m2Wall(g, 0, 7, sw, 8.5, T, 'timber');
+    const eave = m2Roof(g, 0, 0, sw, 2, 7, M2_EDO_GOLD, 1);
+    m2Wall(g, 0, eave, sw, 15.5 - eave, T, 'timber');
+    // Each stall's half door under the eave, its open top dark.
     for (let x = 1.5; x < sw - 5; x += 6) {
-      m2Raster(g, x, 9, 18, 26, (px, py) => (py < 14 ? (px === 0 || px === 17 ? T[0] : '#140c0a') : px === 0 || px === 17 || py === 14 ? T[0] : T[px % 6 === 0 ? 2 : 3]));
+      m2Raster(g, x, eave, 18, (15.5 - eave) * 4, (px, py) => (py < 13 ? (px === 0 || px === 17 ? T[0] : '#140c0a') : px === 0 || px === 17 || py === 13 ? T[0] : T[px % 6 === 0 ? 2 : 3]));
     }
-    m2Roof(g, 0, 0, sw, 2, 7, M2_EDO_GOLD, 1);
   });
   o.foot = [x0, sy - 3, x0 + sw, sy + 0.5];
   // A horse's head over the second stall's half door.

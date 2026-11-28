@@ -54,6 +54,9 @@ function m2RivPavilion(L, add, x, y) {
   m2Blob(L, x, y, 12, 5, M2_MAT.terrace, { seed: 5 });
   m2Shadow(L, x + 3, y + 1.5, 12, 4, 0.8);
   const ring = (k) => [x + Math.cos((k / 8) * Math.PI * 2) * 10, y + Math.sin((k / 8) * Math.PI * 2) * 4];
+  // Every pillar rises into the dome's lip wherever it stands under it (pass 5, 2026-11-27: at one height for all, the
+  // rim stopped short of the side and front pillars). The dome's top is at y - 32.
+  const pillarTop = (px) => y - 32 + m2RivDomeRim(13, 10, Math.abs(px - x) + 0.75) - 0.75;
   const back = m2Thing(add, x - 12, y - 25, 24, 21.5, y - 3.5, (g) => {
     m2RivRaster(g, 8, 12, 32, 28, (px, py) => {
       if (py < 2 || py > 25) return py === 0 || py === 27 ? M2_PAL.wood[1] : M2_PAL.wood[py < 2 ? 4 : 2];
@@ -61,12 +64,12 @@ function m2RivPavilion(L, add, x, y) {
       if (py % 8 < 2) return M2_PAL.wood[1];
       return py % 8 < 6 ? ['#efe6c8', '#d8c89a', '#c9a96a'][Math.floor(px / 3) % 3] : M2_PAL.wood[0];
     });
-    for (const k of [4, 6, 8]) { const [px, py] = ring(k); m2Pillar(g, px - x + 12, 21.5 + py - y + 3.5 - 0.5, 19, P); }
+    for (const k of [4, 6, 8]) { const [px, py] = ring(k); m2Pillar(g, px - x + 12, 24.5 + py - y, py - 0.5 - pillarTop(px), P); }
     m2RivHarp(g, 5, 7);
   });
   back.foot = [x - 5, y - 5, x + 5, y - 3.5];
   const front = m2Thing(add, x - 13, y - 34, 26, 39, y + 4.5, (g) => {
-    for (const k of [0, 1, 2, 3, 7]) { const [px, py] = ring(k); if (py >= y - 1) m2Pillar(g, px - x + 13, 34 + py - y, 21, P); }
+    for (const k of [0, 1, 2, 3, 7]) { const [px, py] = ring(k); if (py >= y - 1) m2Pillar(g, px - x + 13, 34 + py - y, py - pillarTop(px), P); }
     m2RivDome(g, 13, 2, 13, 10, M2_PAL.elfRoof);
   });
   front.foot = [x - 11, y + 2, x + 11, y + 4.5];
@@ -101,8 +104,9 @@ function m2RivHealHouse(L, add, x, y, season) {
   const P = M2_PAL.elfWall;
   const panes = [];
   const o = m2Thing(add, x0 - 1, y - wh - 15, W + 2, wh + 15.5, y, (g) => {
+    const top = m2RivRoofTop(2, 2, 11, 3.5);
+    m2Wall(g, 1, top, W, 15 + wh - top, P);
     m2RivRoof(g, 0, 2, W + 2, 2, 11, M2_PAL.elfRoof, 3.5);
-    m2Wall(g, 1, 15, W, wh, P);
     panes.push(m2Window(g, 4, 15 + 5, 5, 5, P, 'round'), m2Window(g, W - 7, 15 + 4, 3.5, 9, P, 'arch'));
     m2RivRaster(g, W / 2 + 1 - 3.5, 15 + wh - 15, 28, 60, (px, py) => {
       const [ax, ay] = [px + 0.5 - 14, py + 0.5];
@@ -190,6 +194,12 @@ function m2RivBridge(L, add, x0, x1, y) {
   return { x: (x0 + x1) / 2, y: y + 0.5, face: 'down', job: 'bridge' };
 }
 
+// How far under its tip the eave of an m2RivDome of radius r and height h is, u units off its middle: its lowest pixel
+// row's foot, deepest in front and rising toward the sides.
+function m2RivDomeRim(r, h, u) {
+  const d = Math.min(1, Math.abs(u) / r);
+  return h + (6 * Math.sqrt(1 - d * d) - 3 * d * d) / 4;
+}
 // The pavilion's roof: a low cone of radius r round cx whose sides sweep out to a flared eave, h from its tip to the
 // eave, lit on the left, with ribs running down from a gold tip and a dark lip along the eave.
 function m2RivDome(g, cx, y, r, h, P) {
@@ -198,7 +208,7 @@ function m2RivDome(g, cx, y, r, h, P) {
     const dx = (px + 0.5 - R) / R;
     const t = Math.min(1, py / Hp);
     const half = 0.06 + 0.94 * Math.pow(t, 1.45);
-    const bottom = Hp + 6 * Math.sqrt(Math.max(0, 1 - dx * dx)) - 3 * dx * dx;
+    const bottom = m2RivDomeRim(r, h, (px + 0.5 - R) / 4) * 4;
     if (Math.abs(dx) > half || py > bottom) return null;
     if (py >= bottom - 1.5) return py >= bottom - 0.5 ? P[0] : P[2];
     if (Math.abs(dx) > half - 0.05) return P[0];

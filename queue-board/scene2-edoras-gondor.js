@@ -47,8 +47,8 @@ function m2EdoGondor(L, r, plan, season, add) {
   m2Shadow(L, hx0 + hw / 2 + 3, hz + 0.5, hw / 2 + 2, 2.4, 0.8);
   const panes = [];
   const house = m2Thing(add, hx0, hz - 23, hw, 23.5, hz + 0.5, (g) => {
-    m2Wall(g, 0, 11, hw, 12.5, W, 'plaster');
-    m2Roof(g, 0, 0, hw, 2, 9, M2_EDO_SLATE, 3);
+    const eave = m2Roof(g, 0, 0, hw, 2, 9, M2_EDO_SLATE, 3);
+    m2Wall(g, 0, eave, hw, 23.5 - eave, W, 'plaster');
     pxBox(g, hw - 7, 0, 2.5, 4, W[2]);
     for (const dx of [3, hw - 7]) {
       panes.push(m2Window(g, dx, 14, 3, 4, W, 'square'));
@@ -65,8 +65,8 @@ function m2EdoGondor(L, r, plan, season, add) {
     const bz = hz + 6;
     m2Shadow(L, bx + bw / 2 + 2, bz + 0.5, bw / 2 + 1, 2, 0.8);
     const barn = m2Thing(add, bx, bz - 18, bw, 18.5, bz + 0.5, (g) => {
-      m2Wall(g, 0, 9, bw, 9.5, W, 'stone');
-      m2Roof(g, 0, 0, bw, 2, 7, M2_PAL.thatch, 1);
+      const eave = m2Roof(g, 0, 0, bw, 2, 7, M2_PAL.thatch, 1);
+      m2Wall(g, 0, eave, bw, 18.5 - eave, W, 'stone');
       m2Raster(g, bw / 2 - 3, 11, 24, 30, (px, py) => (px === 0 || px === 23 || py === 0 ? M2_PAL.wood[0] : M2_PAL.wood[(px + py) % 8 === 0 ? 1 : px < 12 ? 3 : 2]));
     });
     barn.foot = [bx, bz - 3, bx + bw, bz + 0.5];

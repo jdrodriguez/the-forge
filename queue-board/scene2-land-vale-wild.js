@@ -110,9 +110,9 @@ function m2RhosHut(g, season) {
 }
 // The bird table: a tray with a little roof on a post, 6 by 10.5 units.
 function m2RhosTable(g) {
-  m2Roof(g, 0.5, 0, 5, 0.5, 1.5, M2_PAL.wood, 0.5);
-  pxBox(g, 1, 2.25, 0.5, 2.5, M2_PAL.wood[2]);
-  pxBox(g, 4.5, 2.25, 0.5, 2.5, M2_PAL.wood[2]);
+  const eave = m2Roof(g, 0.5, 0, 5, 0.5, 1.5, M2_PAL.wood, 0.5);
+  pxBox(g, 1, eave, 0.5, 4.75 - eave, M2_PAL.wood[2]);
+  pxBox(g, 4.5, eave, 0.5, 4.75 - eave, M2_PAL.wood[2]);
   pxBox(g, 0.25, 4.5, 5.5, 1, M2_PAL.wood[3]);
   pxBox(g, 0.25, 4.5, 5.5, 0.25, M2_PAL.wood[5]);
   pxBox(g, 0.25, 5.25, 5.5, 0.25, M2_PAL.wood[0]);

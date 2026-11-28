@@ -62,20 +62,20 @@ function m2Beorn(L, plan, season, add) {
 // porch's shade, the tree-trunk pillars, the plank wall, two shuttered windows and the great arched door.
 function m2BeornHall(g, season) {
   const roof = season === 'winter' ? M2_THATCH.map((c, i) => (i > 1 ? hdMix(c, '#eef4f8', 0.55) : c)) : M2_THATCH;
-  m2Roof(g, 0, 1, 36, 3, 15, roof, 3);
+  const eave = m2Roof(g, 0, 1, 36, 3, 15, roof, 3);
   for (const ex of [3, 31]) m2Raster(g, ex, 0, 8, 8, (px, py) => (Math.abs(px - py) < 1 || Math.abs(7 - px - py) < 1) && py < 6 ? M2_LOGS[px < 4 ? 4 : 2] : null);
   pxBox(g, 16.5, 2, 3, 2.5, M2_LOGS[1]);
   pxBox(g, 16.5, 2, 3, 0.75, M2_LOGS[4]);
   pxBox(g, 17.25, 3, 1.5, 1.25, '#1a1008');
   // The wall of laid logs, each rounded (lit along its top, dark under), their ends showing at the corners.
-  m2Raster(g, 1, 19.25, 136, 80, (px, py) => {
+  m2Raster(g, 1, eave, 136, 80, (px, py) => {
     const r = py % 10;
     let k = r === 0 ? 0 : r < 3 ? 4 : r < 7 ? 3 : r < 9 ? 2 : 1;
     if (px < 3 || px > 132) return (r > 1 && r < 8) ? M2_LOGS[px < 3 ? 5 : 3] : M2_LOGS[0];
     if (m2Hash(px >> 3, py >> 2, 60) < 0.08 && r > 2 && r < 8) k -= 1;
     return M2_LOGS[Math.max(0, k)];
   });
-  pxBox(g, 1, 19.25, 34, 2.25, M2_LOGS[0]);
+  pxBox(g, 1, eave, 34, 2.25, M2_LOGS[0]);
   pxBox(g, 1.25, 21.5, 33.5, 0.75, '#1a0e08');
   pxBox(g, 1, 38.5, 34, 1.75, M2_PAL.stone[2]);
   pxBox(g, 1, 38.5, 34, 0.5, M2_PAL.stone[4]);
@@ -112,8 +112,8 @@ function m2BeornHall(g, season) {
 // The byre, 15 by 19 units: a lean-to of boards under thatch, two stalls with half-doors.
 function m2BeornByre(g, season) {
   const roof = season === 'winter' ? M2_THATCH.map((c, i) => (i > 1 ? hdMix(c, '#eef4f8', 0.55) : c)) : M2_THATCH;
-  m2Roof(g, 0, 0, 15, 2, 6, roof, 1.5);
-  m2Wall(g, 0.5, 8.25, 14, 11, M2_LOGS, 'timber');
+  const eave = m2Roof(g, 0, 0, 15, 2, 6, roof, 1.5);
+  m2Wall(g, 0.5, eave, 14, 11, M2_LOGS, 'timber');
   for (const sx of [1.5, 8]) {
     pxBox(g, sx, 10, 5.5, 9, '#140c06');
     pxBox(g, sx, 14.5, 5.5, 4.5, M2_PAL.wood[3]);

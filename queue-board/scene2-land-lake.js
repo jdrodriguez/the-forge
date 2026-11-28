@@ -18,8 +18,8 @@ function m2TownHouse(add, L, x, z, w, roof, wall, kind, season, lights = true) {
   const key = `house${w},${roof[2]},${wall[2]},${kind},${snow}`;
   m2Shadow(L, x + 2, z + 0.3, w / 2 + 1.5, 1.6, 0.8);
   m2ValeThing(add, key, x - w / 2, z - h, w, h, z, (g) => {
-    m2Roof(g, 0, 0, w, 2, near, snow ? roof.map((c, i) => (i > 1 ? hdMix(c, '#eef4f8', 0.6) : c)) : roof, Math.min(2, w / 6));
-    m2Wall(g, 0.5, 3 + near, w - 1, wh, wall, kind);
+    const eave = m2Roof(g, 0, 0, w, 2, near, snow ? roof.map((c, i) => (i > 1 ? hdMix(c, '#eef4f8', 0.6) : c)) : roof, Math.min(2, w / 6));
+    m2Wall(g, 0.5, eave, w - 1, h - eave, wall, kind);
     pxBox(g, w * 0.25, h - wh * 0.62, 2, wh * 0.62, M2_PAL.wood[1]);
     pxBox(g, w * 0.25, h - wh * 0.62, 0.5, wh * 0.62, M2_PAL.wood[3]);
     m2Window(g, w * 0.62, 3 + near + 1.5, 2.5, 2.5, wall, 'square');
@@ -66,13 +66,16 @@ function m2Dale(L, plan, season, add) {
   m2Stroke(L, [[rvx - 4.5, street], [rvx + 4.5, street]], 2.4, M2_MAT.terrace, { aux: () => 60 });
   m2Parapets(add, rvx - 4.5, street, rvx + 4.5, street, 2);
   plan.places.daleGate = { x: cx - 3, y: wallZ + 1 };
-  // The houses, back row first, either side of the river and the tower.
-  const houses = [[-26, y0, 13, M2_RED], [-13, y0 - 1, 12, M2_SLATE], [19, y0 - 1, 12, M2_RED], [30, y0 + 1, 10, M2_SLATE],
-    [-27, y1, 12, M2_SLATE], [-15, y1 + 1, 12, M2_RED], [19, y1, 13, M2_SLATE], [30, y1 + 2, 9, M2_RED]];
-  // Only the front row's end houses smoke: the back row's smoke rose through the yard's rails (2026-11-27).
+  // The houses, back row first, either side of the river and the tower. The rows stand only 6 to 9 units apart (the
+  // yard's crest above, the town wall below), less than a house is tall, so each back house stands in the gap between
+  // two front ones and shows its wall, door and window there (pass 5, 2026-11-27: with the rows in line, a back house
+  // showed only its roof, stacked on the front house's roof).
+  const houses = [[-20.5, y0, 11, M2_SLATE], [24, y0, 10, M2_RED],
+    [-29, y1, 10, M2_RED], [-12, y1 + 1, 10, M2_SLATE], [16.5, y1, 9, M2_SLATE], [31, y1 + 1, 8, M2_RED]];
+  // Only two front-row houses smoke: the back row's smoke rose through the yard's rails (2026-11-27).
   houses.forEach(([dx, z, w, roof], i) => {
     const hs = m2TownHouse(add, L, cx + dx, z, w, roof, M2_PAL.stone, 'stone', season);
-    if (i > 3 && (dx === -27 || dx === 19)) m2Smoke(add, hs.chimney[0], hs.chimney[1], dx + 40);
+    if (dx === -29 || dx === 16.5) m2Smoke(add, hs.chimney[0], hs.chimney[1], dx + 40);
   });
   // The bell tower on the square, between the front row's houses.
   m2Shadow(L, cx + 1.5, y1, 5, 1.6, 0.8);

@@ -8,6 +8,13 @@
 // a lawn terrace (paving only along the walls and the walk to the door), held by a wall of blocks hung with ivy, edged
 // with low hedges, flower beds and two short balustrades by the steps. Windows and arches light up at night.
 
+// Where the wall under an m2RivRoof at y with these slopes starts: as high as the eave's swept-up tips, so the roof
+// covers the wall's top along its whole width and its corners show wall, never ground (pass 5, 2026-11-27: walls that
+// started under the eave's middle showed grass under the swept corners, and the roofs looked to float). The wall is
+// drawn first and the roof over it.
+function m2RivRoofTop(y, far, near, sweep) {
+  return y + far + near - sweep;
+}
 // A hipped roof w units wide, far units over the ridge and near units down to the eave, its hips curving in and its
 // eave sweeping up toward the corners by sweep units: lit far slope, slate courses that follow the eave, a lit left hip
 // and a shaded right one, a dark eave, and gold finials at the ridge's ends.
@@ -110,16 +117,18 @@ function m2RivArcade(g, x, y, w, h, n, P) {
 function m2RivWing(add, x, base, w, wh, near, arches, foot) {
   const P = M2_PAL.elfWall;
   const panes = [];
-  // The wall's top sits one unit under the roof's eave, which is drawn over it, so the roof rests on its wall (pass 2,
-  // 2026-11-27: a five-unit gap made the roofs float).
+  // The wall's face shows from one unit under the roof's middle eave, and it runs on up under the roof to its swept
+  // tips (m2RivRoofTop), so the roof rests on its wall all along (pass 2, 2026-11-27: a five-unit gap made the roofs float).
   const H = wh + near + 1;
+  const sweep = Math.min(4, near * 0.5);
   const o = m2Thing(add, x - 2, base - H, w + 4, H + 0.5, base, (g) => {
     const wy = H - wh;
-    m2Wall(g, 2, wy, w, wh, P);
+    const top = m2RivRoofTop(0, 2, near, sweep);
+    m2Wall(g, 2, top, w, H - top, P);
     const n = Math.max(2, Math.round(w / 6.5));
     if (arches) panes.push(...m2RivArcade(g, 3.5, wy + 2.5, w - 3, wh - 3, n, P));
     else for (let i = 0; i < n; i += 1) panes.push(m2Window(g, 2 + (i + 0.5) * (w / n) - 1.5, wy + 3, 3, wh - 6, P, 'arch'));
-    m2RivRoof(g, 0, 0, w + 4, 2, near, M2_PAL.elfRoof, Math.min(4, near * 0.5));
+    m2RivRoof(g, 0, 0, w + 4, 2, near, M2_PAL.elfRoof, sweep);
     pxBox(g, 2, wy + 1.5, w, 0.5, M2_PAL.gold[2]);
   });
   o.foot = foot;
@@ -162,7 +171,8 @@ function m2RivHouse(L, add, { hx, room, base, wallY, season }) {
   const HH = hh + near + 2;
   const ho = m2Thing(add, hallX - 2, hb - HH, hw + 4, HH + 0.5, hb, (g) => {
     const wy = HH - hh;
-    m2Wall(g, 2, wy, hw, hh, P);
+    const top = m2RivRoofTop(0, 3, near, 4.5);
+    m2Wall(g, 2, top, hw, HH - top, P);
     pxBox(g, 2, wy + 1.5, hw, 0.75, M2_PAL.gold[2]);
     panes.push(...m2RivArcade(g, 3, wy + 2.5, hw - 2, 9, Math.max(3, Math.round(hw / 6)), P).map((p) => ({ ...p, ox: hallX - 2, oy: hb - HH })));
     m2RivRail(g, 2, wy + 9, hw, P);
